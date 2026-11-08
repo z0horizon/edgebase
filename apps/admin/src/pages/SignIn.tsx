@@ -1,4 +1,3 @@
-import { BellRing } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,9 +50,6 @@ export function SignIn({
     <main className="grid min-h-screen place-items-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <span className="mb-2 grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground">
-            <BellRing className="size-5" />
-          </span>
           <CardTitle className="text-xl">EdgeBase admin</CardTitle>
           <CardDescription>
             {step === "password"

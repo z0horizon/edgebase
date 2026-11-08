@@ -68,12 +68,7 @@ export function App() {
   return (
     <div className="min-h-screen bg-background md:grid md:grid-cols-[240px_1fr]">
       <aside className="flex flex-col gap-1 border-b bg-muted/40 p-3 md:sticky md:top-0 md:h-screen md:border-r md:border-b-0 md:p-4">
-        <div className="flex items-center gap-2 px-2 pb-4 font-semibold tracking-tight">
-          <span className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
-            <BellRing className="size-4" />
-          </span>
-          EdgeBase
-        </div>
+        <div className="px-2 pb-4 font-semibold tracking-tight">EdgeBase</div>
         <nav className="flex gap-1 overflow-x-auto md:flex-col" aria-label="Sections">
           {(Object.keys(VIEWS) as View[]).map((key) => {
             const { label, icon: Icon } = VIEWS[key];

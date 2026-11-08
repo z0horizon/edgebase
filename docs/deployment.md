@@ -61,7 +61,8 @@ template changes (bindings, crons) always reach production. Never edit the gener
 
 `pnpm run deploy` also builds the admin page (`apps/admin/`, React + shadcn/ui) into `apps/server/public/admin`; it
 is served at `<BASE_URL>/admin/`. Locally, run `pnpm --filter @edgebase/admin build` once so `pnpm dev` serves it, or
-`pnpm dev` and `pnpm admin:dev` together for live reload at `http://localhost:5173/admin/`.
+`pnpm admin:dev`, which starts the Worker and the page together, for live reload at
+`http://localhost:5173/admin/`.
 
 The first admin is set in D1; after that, admins grant the role through
 `POST /api/auth/admin/set-role`:

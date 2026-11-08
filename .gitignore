@@ -8,3 +8,4 @@ docs/superpowers/
 wrangler.production.jsonc
 # Built by `pnpm deploy` from apps/admin/.
 apps/server/public/admin/
+.DS_Store
