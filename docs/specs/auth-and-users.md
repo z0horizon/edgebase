@@ -19,7 +19,8 @@ user routes answer `503`.
 1. Email sign-up sends a verification email; signing in before verifying answers `403`
    (`requireEmailVerification`). Password reset mails a link. Mail is sent with `ctx.waitUntil`
    so the response does not wait for delivery (`src/auth/auth.ts`, `src/mail.ts`).
-2. Google, Apple and GitHub are configured as social providers. Native apps sign in to Google and
+2. Google, Apple and GitHub are social providers, each turned on only when both its client ID
+   and secret are set (`configuredProviders`); an unset provider answers `404` like an unknown one. Native apps sign in to Google and
    Apple with the platform SDK's ID token through `POST /api/auth/sign-in/social` with
    `{ provider, idToken }`. Google always shows the account picker (`prompt=select_account`).
 3. GitHub on native: Expo uses `@better-auth/expo`. Flutter keeps a random `verifier`

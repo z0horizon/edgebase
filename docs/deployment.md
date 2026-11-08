@@ -33,7 +33,8 @@ Secrets (`npx wrangler secret put <NAME>`):
 | `FCM_SERVICE_ACCOUNT` | Firebase console → Service accounts → generate key; the JSON on one line |
 | `PUSH_API_KEY` | `openssl rand -base64 32`; give it to your servers |
 
-OAuth redirect URIs: `<BASE_URL>/api/auth/callback/<google|apple|github>`.
+OAuth redirect URIs: `<BASE_URL>/api/auth/callback/<google|apple|github>`. A provider whose ID or
+secret is unset is simply off, so you can deploy with email sign-in only and add providers later.
 
 Missing `BETTER_AUTH_SECRET` makes all auth routes answer `503`; missing `PUSH_API_KEY` or
 `FCM_SERVICE_ACCOUNT` does the same for `/v1/push`.

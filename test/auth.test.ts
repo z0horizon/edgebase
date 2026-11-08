@@ -152,3 +152,36 @@ it.each(["/api/auth/send-verification-email", "/v1/auth/app-exchange"])(
   // send-verification-email takes about 0.5 s per call under local workerd.
   20_000,
 );
+
+describe("social providers", () => {
+  const social = (provider: string, bindings: Env) =>
+    call(
+      "/api/auth/sign-in/social",
+      json(
+        { provider, callbackURL: "https://web.test/" },
+        { headers: { "cf-connecting-ip": freshIp() } },
+      ),
+      bindings,
+    );
+
+  it("a provider with credentials starts its OAuth flow", async () => {
+    const res = await social("github", env);
+    expect(res.status).toBe(200);
+    expect((await res.json<{ url: string }>()).url).toContain("github.com");
+  });
+
+  it("a provider without credentials is turned off instead of breaking sign-in", async () => {
+    const bindings = { ...env, GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" };
+    // An unconfigured provider must look absent (404), not crash the endpoint (500).
+    expect((await social("github", bindings)).status).toBe(404);
+    const signUp = await call(
+      "/api/auth/sign-up/email",
+      json(
+        { email: "no-github@x.io", password: PASSWORD, name: "N" },
+        { headers: { "cf-connecting-ip": freshIp() } },
+      ),
+      bindings,
+    );
+    expect(signUp.status).toBe(200);
+  });
+});
