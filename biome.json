@@ -1,0 +1,39 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": ["**", "!**/worker-configuration.d.ts", "!**/*.md", "!**/pnpm-lock.yaml"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "linter": {
+    "rules": {
+      "recommended": true,
+      "complexity": { "useLiteralKeys": "off" },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noConsole": { "level": "error", "options": { "allow": ["error", "warn", "info"] } }
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useImportType": "error",
+        "useExportType": "error",
+        "noParameterAssign": "error"
+      },
+      "correctness": { "noUnusedImports": "error", "noUnusedVariables": "error" }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts", "**/test/**"],
+      "linter": { "rules": { "style": { "noNonNullAssertion": "off" } } }
+    }
+  ]
+}

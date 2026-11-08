@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "edgebase",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Every authenticated request reads its session from D1; running near the database cuts that round trip.
+  "placement": { "mode": "smart" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "edgebase-db",
+      "database_id": "local",
+      "migrations_dir": "migrations"
+    },
+    {
+      "binding": "INBOX_DB",
+      "database_name": "edgebase-inbox",
+      "database_id": "local-inbox",
+      "migrations_dir": "migrations-inbox"
+    }
+  ],
+  "ratelimits": [
+    { "name": "AUTH_RL", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "PUSH_QUEUE", "queue": "edgebase-push" },
+      { "binding": "PUSH_DLQ", "queue": "edgebase-push-dlq" }
+    ],
+    "consumers": [
+      {
+        "queue": "edgebase-push",
+        "max_batch_size": 10,
+        "max_retries": 3,
+        "dead_letter_queue": "edgebase-push-dlq"
+      }
+    ]
+  },
+  "send_email": [{ "name": "MAIL" }],
+  // Every minute: dispatch due scheduled pushes. Daily: retention cleanup.
+  "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
+  "vars": {
+    "BASE_URL": "http://localhost:8787",
+    "TRUSTED_ORIGINS": "http://localhost:3000,edgebase://,https://appleid.apple.com",
+    "APP_SCHEME": "edgebase",
+    "INBOX_TTL_DAYS": "30",
+    "MAIL_FROM": "no-reply@example.com"
+  }
+}

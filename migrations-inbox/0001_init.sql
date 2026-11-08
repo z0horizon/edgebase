@@ -1,0 +1,1 @@
+-- inbox_item, broadcast and inbox_state tables arrive with the schema task.

@@ -1,0 +1,1 @@
+-- Better Auth, device and scheduled_push tables arrive with the schema task.
