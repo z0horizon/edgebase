@@ -140,6 +140,7 @@ describe("secretsPayload", () => {
     assert.equal(payload.GITHUB_CLIENT_ID, "gh");
     assert.equal(payload.GOOGLE_CLIENT_ID, null);
     assert.equal(payload.FCM_SERVICE_ACCOUNT, null);
+    assert.equal(payload.TURNSTILE_SECRET_KEY, null);
     assert.equal(payload.BASE_URL, undefined);
   });
 

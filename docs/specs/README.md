@@ -7,7 +7,7 @@ Keep a spec true to the code: change it in the same commit as the behaviour it d
 
 | Spec | Covers |
 |---|---|
-| [auth-and-users.md](auth-and-users.md) | sign-in methods, sessions, rate limit, native OAuth, account deletion |
+| [auth-and-users.md](auth-and-users.md) | sign-in methods, sessions, rate limit, captcha, native OAuth, account deletion |
 | [push.md](push.md) | devices, send API, delivery and retry, topics, scheduling |
 | [inbox.md](inbox.md) | personal and broadcast items, cursor paging, read state |
 | [data-retention.md](data-retention.md) | TTLs, cleanup cron, capacity |

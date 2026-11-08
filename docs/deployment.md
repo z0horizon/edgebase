@@ -37,6 +37,7 @@ Fill in the optional keys of `.env.production`, then `pnpm bootstrap` again:
 | `APPLE_CLIENT_ID`, `APPLE_APP_BUNDLE_IDENTIFIER` | Apple Developer: Services ID and the app's bundle ID |
 | `APPLE_CLIENT_SECRET` | `node scripts/apple-secret.mjs <teamId> <keyId> <servicesId> AuthKey.p8` |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub OAuth app |
+| `TURNSTILE_SECRET_KEY` | Cloudflare dashboard → Turnstile → add a widget (free); its secret key. Turn it on when sign-up or reset emails are abused; the apps must then send the widget's token (see [api.md](api.md#authentication)) |
 | `FCM_SERVICE_ACCOUNT_FILE` | Firebase console → Service accounts → generate key; the path to the JSON file |
 
 OAuth redirect URIs: `<BASE_URL>/api/auth/callback/<google|apple|github>`. A provider whose ID or

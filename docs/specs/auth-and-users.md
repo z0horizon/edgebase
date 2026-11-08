@@ -49,3 +49,8 @@ user routes answer `503`.
    `http(s)://` entry of `TRUSTED_ORIGINS`; `set-auth-token` is exposed to them (`src/app.ts`).
 9. Email sign-ups still unverified after 7 days are deleted by the cleanup cron, unless the user
    also has a social account (see data-retention).
+10. When `TURNSTILE_SECRET_KEY` is set, `sign-up/email`, `request-password-reset` and
+    `send-verification-email` need an `x-captcha-response` header holding a Cloudflare Turnstile
+    token: missing answers `400`, rejected by Turnstile answers `403` (Better Auth `captcha`
+    plugin, `src/auth/auth.ts`). Unset, these routes need no token. The per-IP limit of rule 5 stops
+    one machine; Turnstile stops many machines sending emails to random addresses.

@@ -10,4 +10,6 @@ GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 # The Firebase service account key JSON, on one line.
 FCM_SERVICE_ACCOUNT=
+# Optional: Cloudflare Turnstile secret; when set, sign-up and email-sending routes need a token.
+TURNSTILE_SECRET_KEY=
 PUSH_API_KEY=

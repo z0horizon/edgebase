@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { base64url, sha256 } from "../src/http";
 import { authed, call, freshIp, json, PASSWORD, signUpVerified } from "./helpers";
 
@@ -199,5 +199,51 @@ describe("social providers", () => {
       bindings,
     );
     expect(signUp.status).toBe(200);
+  });
+});
+
+describe("captcha (Cloudflare Turnstile)", () => {
+  const withKey = { ...env, TURNSTILE_SECRET_KEY: "turnstile-secret" } as Env;
+  const stubTurnstile = (success: boolean) => {
+    const original = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("https://challenges.cloudflare.com/")) return Response.json({ success });
+      return original(input, init);
+    });
+  };
+  const post = (path: string, body: unknown, bindings: Env, token?: string) =>
+    call(
+      path,
+      json(body, {
+        headers: { "cf-connecting-ip": freshIp(), ...(token && { "x-captcha-response": token }) },
+      }),
+      bindings,
+    );
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["/api/auth/sign-up/email", { email: "cap1@x.io", password: PASSWORD, name: "c" }],
+    ["/api/auth/request-password-reset", { email: "cap2@x.io" }],
+    ["/api/auth/send-verification-email", { email: "cap3@x.io" }],
+  ])("%s refuses a request without a Turnstile token once the key is set", async (path, body) => {
+    expect((await post(path, body, withKey)).status).toBe(400);
+  });
+
+  it("a token Turnstile accepts lets sign-up through", async () => {
+    stubTurnstile(true);
+    const body = { email: "cap-ok@x.io", password: PASSWORD, name: "c" };
+    expect((await post("/api/auth/sign-up/email", body, withKey, "good")).status).toBe(200);
+  });
+
+  it("a token Turnstile rejects is refused", async () => {
+    stubTurnstile(false);
+    const body = { email: "cap-bad@x.io", password: PASSWORD, name: "c" };
+    expect((await post("/api/auth/sign-up/email", body, withKey, "bad")).status).toBe(403);
+  });
+
+  it("without the key, sign-up needs no token", async () => {
+    const body = { email: "cap-off@x.io", password: PASSWORD, name: "c" };
+    expect((await post("/api/auth/sign-up/email", body, env)).status).toBe(200);
   });
 });

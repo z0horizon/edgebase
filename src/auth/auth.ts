@@ -1,6 +1,6 @@
 import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
-import { bearer, oneTimeToken } from "better-auth/plugins";
+import { bearer, captcha, oneTimeToken } from "better-auth/plugins";
 import { deleteUserInbox } from "../inbox/queries";
 import { sendMail } from "../mail";
 
@@ -68,7 +68,22 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
         afterDelete: async (user) => deleteUserInbox(env.INBOX_DB, user.id),
       },
     },
-    plugins: [bearer(), oneTimeToken({ disableClientRequest: true, storeToken: "hashed" }), expo()],
+    plugins: [
+      bearer(),
+      oneTimeToken({ disableClientRequest: true, storeToken: "hashed" }),
+      expo(),
+      // Off until a key is set: the per-IP rate limit covers one machine, Turnstile covers botnets
+      // sending sign-up and reset emails to random addresses.
+      ...(has(env.TURNSTILE_SECRET_KEY)
+        ? [
+            captcha({
+              provider: "cloudflare-turnstile",
+              secretKey: env.TURNSTILE_SECRET_KEY,
+              endpoints: ["/sign-up/email", "/request-password-reset", "/send-verification-email"],
+            }),
+          ]
+        : []),
+    ],
   });
 }
 

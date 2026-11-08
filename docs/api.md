@@ -4,6 +4,10 @@
 
 - **Users**: a Better Auth session, either the session cookie (web) or `Authorization: Bearer <token>` (mobile).
 - **Servers**: `X-API-Key: <PUSH_API_KEY>` on `/v1/push`.
+- **Captcha** (only when `TURNSTILE_SECRET_KEY` is set): `X-Captcha-Response: <Turnstile token>` on
+  `POST /api/auth/sign-up/email`, `/api/auth/request-password-reset` and
+  `/api/auth/send-verification-email`. Missing answers `400`, rejected answers `403`. Mobile apps
+  get the token by rendering the Turnstile widget in a WebView, since Turnstile has no native SDK.
 
 ## Errors and status codes
 
@@ -61,7 +65,7 @@ Body `{ "token": ott, "verifier": string (43–128 chars) }` → `200 { "token":
 ## CORS
 
 Browsers from an `http(s)://` origin listed in `TRUSTED_ORIGINS` get CORS with credentials,
-methods `GET POST PUT DELETE OPTIONS`, headers `content-type, authorization`, and the
+methods `GET POST PUT DELETE OPTIONS`, headers `content-type, authorization, x-captcha-response`, and the
 `set-auth-token` response header exposed. Other origins get no CORS headers.
 
 ## Devices

@@ -25,6 +25,7 @@ export const SECRET_KEYS = [
   "APPLE_APP_BUNDLE_IDENTIFIER",
   "GITHUB_CLIENT_ID",
   "GITHUB_CLIENT_SECRET",
+  "TURNSTILE_SECRET_KEY",
 ];
 
 export const parseEnvFile = (text) => parseEnv(text);
