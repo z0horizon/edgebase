@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { decodeCursor, jsonError, parseBody } from "../http";
@@ -10,13 +10,20 @@ const CursorSchema = v.object({
   i: v.pipe(v.number(), v.integer()),
 });
 const ReadSchema = v.object({ ids: v.pipe(v.array(v.string()), v.maxLength(100)) });
+const LimitSchema = v.optional(
+  v.pipe(v.string(), v.regex(/^\d{1,3}$/), v.transform(Number), v.minValue(1), v.maxValue(100)),
+  "20",
+);
 
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
-
-function parseLimit(raw: string | undefined): number {
-  const n = Number.parseInt(raw ?? "", 10);
-  return Number.isNaN(n) ? DEFAULT_LIMIT : Math.min(Math.max(n, 1), MAX_LIMIT);
+function inboxQuery(c: Context<AppEnv>) {
+  const user = c.get("user");
+  return {
+    userId: user.id,
+    userCreatedAt: user.createdAt.getTime(),
+    marketingOptIn: user.marketingOptIn === true,
+    now: Date.now(),
+    ttlDays: Number(c.env.INBOX_TTL_DAYS),
+  };
 }
 
 /** Row id of a personal item id (`p_<n>`); broadcasts and anything else give null. */
@@ -33,29 +40,14 @@ export const inboxRoutes = new Hono<AppEnv>()
       cursor = decodeCursor(raw, CursorSchema);
       if (!cursor) return jsonError(400, "invalid_cursor", "cursor is not valid");
     }
-    const user = c.get("user");
+    const limit = v.safeParse(LimitSchema, c.req.query("limit"));
+    if (!limit.success) return jsonError(400, "invalid_limit", "limit must be an integer 1-100");
     return c.json(
-      await listInbox(c.env.INBOX_DB, {
-        userId: user.id,
-        userCreatedAt: user.createdAt.getTime(),
-        marketingOptIn: user.marketingOptIn === true,
-        cursor,
-        limit: parseLimit(c.req.query("limit")),
-        now: Date.now(),
-        ttlDays: Number(c.env.INBOX_TTL_DAYS),
-      }),
+      await listInbox(c.env.INBOX_DB, { ...inboxQuery(c), cursor, limit: limit.output }),
     );
   })
   .get("/unread-count", async (c) => {
-    const user = c.get("user");
-    const count = await unreadCount(c.env.INBOX_DB, {
-      userId: user.id,
-      userCreatedAt: user.createdAt.getTime(),
-      marketingOptIn: user.marketingOptIn === true,
-      now: Date.now(),
-      ttlDays: Number(c.env.INBOX_TTL_DAYS),
-    });
-    return c.json({ count });
+    return c.json({ count: await unreadCount(c.env.INBOX_DB, inboxQuery(c)) });
   })
   .post("/read", async (c) => {
     const body = await parseBody(c, ReadSchema);

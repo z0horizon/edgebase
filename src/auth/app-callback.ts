@@ -1,20 +1,17 @@
 import type { Context } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
-import { base64url, jsonError, parseBody } from "../http";
+import { base64url, jsonError, parseBody, sha256 } from "../http";
 import { createAuth } from "./auth";
 
 const HANDOFF_TTL_MS = 3 * 60_000;
+const FRESH_SESSION_MS = 5 * 60_000;
 // RFC 7636: a 43-128 char verifier; its challenge is the base64url SHA-256 (43 chars).
 const ChallengeSchema = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{43}$/));
 const ExchangeSchema = v.object({
   token: v.pipe(v.string(), v.minLength(1), v.maxLength(512)),
   verifier: v.pipe(v.string(), v.regex(/^[A-Za-z0-9._~-]{43,128}$/)),
 });
-
-async function sha256(text: string): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
-}
 
 const handoffId = async (token: string) => `app-handoff:${base64url(await sha256(token))}`;
 
@@ -29,10 +26,15 @@ export async function appCallback(c: Context<AppEnv>): Promise<Response> {
   const challenge = v.safeParse(ChallengeSchema, c.req.query("challenge"));
   if (!challenge.success) return fail("invalid_challenge");
   const auth = createAuth(c.env, c.executionCtx);
-  if (!(await auth.api.getSession({ headers: c.req.raw.headers }))) return fail("unauthorized");
-  const { token } = await auth.api.generateOneTimeToken({ headers: c.req.raw.headers });
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
   const now = Date.now();
-  // Stored in Better Auth's verification table so the daily expiry cleanup covers it.
+  // The browser keeps its session cookie after sign-in; without this, any app could open this URL
+  // later with its own challenge and receive a token for that leftover session.
+  if (!session || now - session.session.createdAt.getTime() > FRESH_SESSION_MS) {
+    return fail("unauthorized");
+  }
+  const { token } = await auth.api.generateOneTimeToken({ headers: c.req.raw.headers });
+  // Stored in Better Auth's verification table so the scheduled expiry cleanup covers it.
   await c.env.DB.prepare(
     `INSERT INTO verification (id, identifier, value, expiresAt, createdAt, updatedAt)
      VALUES (?, ?, ?, ?, ?, ?)`,

@@ -134,14 +134,21 @@ describe("inbox routes", () => {
     },
   );
 
-  it.each([
-    ["0", 1],
-    ["500", 100],
-    ["abc", 20],
-  ])("limit=%s returns at most %i items", async (limit, expected) => {
-    const { userId, token } = await signUpVerified(`lim-${limit}@x.io`);
-    await insertPersonal(env.INBOX_DB, Array(120).fill(userId), p("same"), Date.now());
+  it.each(["0", "101", "abc", "1.5"])("limit=%s answers 400", async (limit) => {
+    const { token } = await signUpVerified(`badlim-${limit}@x.io`);
     const res = await call(`/v1/inbox?limit=${limit}`, authed(token));
+    expect(res.status).toBe(400);
+    expect((await res.json<{ error: { code: string } }>()).error.code).toBe("invalid_limit");
+  });
+
+  it.each([
+    ["?limit=1", 1],
+    ["?limit=100", 100],
+    ["", 20],
+  ])("'%s' returns at most %i items", async (query, expected) => {
+    const { userId, token } = await signUpVerified(`lim${query.length}@x.io`);
+    await insertPersonal(env.INBOX_DB, Array(120).fill(userId), p("same"), Date.now());
+    const res = await call(`/v1/inbox${query}`, authed(token));
     expect((await res.json<{ items: unknown[] }>()).items).toHaveLength(expected);
   });
 

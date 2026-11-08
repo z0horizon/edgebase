@@ -6,6 +6,16 @@ import { fakeQueue, seedUser, signUpVerified } from "./helpers";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 8);
+const iso = (ms: number) => new Date(ms).toISOString();
+/** `n` inbox rows for `userId`, all stamped `createdAt`. */
+const seedInbox = (userId: string, n: number, createdAt: number) =>
+  env.INBOX_DB.prepare(
+    `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ?)
+     INSERT INTO inbox_item (user_id, title, body, category, created_at)
+     SELECT ?, 't', 'b', 'transactional', ? FROM n`,
+  )
+    .bind(n, userId, createdAt)
+    .run();
 const count = (db: D1Database, sql: string, ...params: unknown[]) =>
   db
     .prepare(sql)
@@ -14,13 +24,7 @@ const count = (db: D1Database, sql: string, ...params: unknown[]) =>
 
 describe("runCleanup", () => {
   it("removes all 5001 expired inbox rows and keeps fresh ones", async () => {
-    await env.INBOX_DB.prepare(
-      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 5001)
-       INSERT INTO inbox_item (user_id, title, body, category, created_at)
-       SELECT 'old', 't', 'b', 'transactional', ? FROM n`,
-    )
-      .bind(NOW - 31 * DAY)
-      .run();
+    await seedInbox("old", 5001, NOW - 31 * DAY);
     for (let i = 0; i < 3; i++) {
       await env.INBOX_DB.prepare(
         "INSERT INTO inbox_item (user_id, title, body, category, created_at) VALUES ('fresh', 't', 'b', 'transactional', ?)",
@@ -37,7 +41,6 @@ describe("runCleanup", () => {
 
   it("removes expired broadcasts, sessions, verifications and stale devices; keeps live ones", async () => {
     const u = await seedUser();
-    const iso = (ms: number) => new Date(ms).toISOString();
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO session (id, expiresAt, token, createdAt, updatedAt, userId) VALUES ('s-old', ?, 'tok-old', ?, ?, ?), ('s-live', ?, 'tok-live', ?, ?, ?)",
@@ -79,13 +82,7 @@ describe("runCleanup", () => {
 
 describe("runCleanup bounds", () => {
   it("does not scan fresh rows when nothing has expired", async () => {
-    await env.INBOX_DB.prepare(
-      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 2000)
-       INSERT INTO inbox_item (user_id, title, body, category, created_at)
-       SELECT 'fresh-many', 't', 'b', 'transactional', ? FROM n`,
-    )
-      .bind(NOW)
-      .run();
+    await seedInbox("fresh-many", 2000, NOW);
     const u = await seedUser();
     await env.DB.prepare(
       `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 2000)
@@ -99,13 +96,7 @@ describe("runCleanup bounds", () => {
   });
 
   it("reports an incomplete run when the time budget runs out", async () => {
-    await env.INBOX_DB.prepare(
-      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 5001)
-       INSERT INTO inbox_item (user_id, title, body, category, created_at)
-       SELECT 'old-2', 't', 'b', 'transactional', ? FROM n`,
-    )
-      .bind(NOW - 40 * DAY)
-      .run();
+    await seedInbox("old-2", 5001, NOW - 40 * DAY);
     // Far enough ahead that every inbox row in this file has expired: well over one chunk.
     const later = NOW + 100 * DAY;
     const report = await runCleanup(env, later, 0);
@@ -115,7 +106,6 @@ describe("runCleanup bounds", () => {
   });
 
   it("removes week-old unverified email sign-ups but keeps verified and social users", async () => {
-    const iso = (ms: number) => new Date(ms).toISOString();
     const user = (id: string, verified: number, createdAt: number) =>
       env.DB.prepare(
         "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",

@@ -6,7 +6,6 @@ type UserTargets = Exclude<PushQueueMessage, { kind: "topic" }>;
 const CONCURRENCY = 20;
 const MAX_ATTEMPTS = 5;
 const MAX_DELAY_SEC = 3600;
-const IDS_PER_QUERY = 90;
 
 async function mapLimit<T, R>(
   items: T[],
@@ -48,13 +47,10 @@ async function targetsOf(db: D1Database, message: UserTargets): Promise<PushTarg
 }
 
 async function deleteTokens(db: D1Database, tokens: string[]): Promise<void> {
-  for (let i = 0; i < tokens.length; i += IDS_PER_QUERY) {
-    const part = tokens.slice(i, i + IDS_PER_QUERY);
-    await db
-      .prepare(`DELETE FROM device WHERE token IN (${part.map(() => "?").join(", ")})`)
-      .bind(...part)
-      .run();
-  }
+  await db
+    .prepare("DELETE FROM device WHERE token IN (SELECT value FROM json_each(?))")
+    .bind(JSON.stringify(tokens))
+    .run();
 }
 
 /** Retries go out as new messages so already-delivered tokens are never sent twice. */

@@ -53,7 +53,7 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).
 // User routes take a session; /v1/push takes the server API key instead.
 // app-callback checks its own session so it can redirect failures back to the app.
 for (const path of ["/v1/me", "/v1/devices/*", "/v1/inbox/*"]) {
-  app.use(path, requireUser);
+  app.use(path, requireAuthConfig, requireUser);
 }
 app.use("/v1/push", requireApiKey);
 app.route("/v1/push", pushRoutes);

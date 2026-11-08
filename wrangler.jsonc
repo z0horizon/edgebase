@@ -44,7 +44,7 @@
   "triggers": { "crons": ["* * * * *", "17 * * * *"] },
   "vars": {
     "BASE_URL": "http://localhost:8787",
-    "TRUSTED_ORIGINS": "http://localhost:3000,edgebase://,https://appleid.apple.com",
+    "TRUSTED_ORIGINS": "edgebase://,https://appleid.apple.com",
     "APP_SCHEME": "edgebase",
     "INBOX_TTL_DAYS": "30",
     "MAIL_FROM": "no-reply@example.com"

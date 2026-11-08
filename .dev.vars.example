@@ -1,3 +1,5 @@
+# Local dev only: trusts a web app on localhost, which production must not.
+TRUSTED_ORIGINS=http://localhost:3000,edgebase://,https://appleid.apple.com
 BETTER_AUTH_SECRET=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=

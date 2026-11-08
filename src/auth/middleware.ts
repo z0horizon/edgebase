@@ -1,18 +1,18 @@
 import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../app";
-import { jsonError } from "../http";
+import { jsonError, sha256 } from "../http";
 import { createAuth } from "./auth";
-
-const notConfigured = () => jsonError(503, "not_configured", "Sign-in is not configured");
 
 /** Blocks every auth route while the auth secret is unset, instead of running with a blank key. */
 export const requireAuthConfig: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (!c.env.BETTER_AUTH_SECRET?.trim()) return notConfigured();
+  if (!c.env.BETTER_AUTH_SECRET?.trim()) {
+    return jsonError(503, "not_configured", "Sign-in is not configured");
+  }
   await next();
 };
 
+/** Use after requireAuthConfig. */
 export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (!c.env.BETTER_AUTH_SECRET?.trim()) return notConfigured();
   const session = await createAuth(c.env, c.executionCtx).api.getSession({
     headers: c.req.raw.headers,
   });
@@ -28,10 +28,6 @@ export const authRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   await next();
 };
-
-async function sha256(text: string): Promise<ArrayBuffer> {
-  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-}
 
 /** Server-to-server key for sending pushes; digests make the compare constant-time at equal length. */
 export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {

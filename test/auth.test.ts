@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { base64url, sha256 } from "../src/http";
 import { authed, call, freshIp, json, PASSWORD, signUpVerified } from "./helpers";
 
 /**
@@ -67,13 +68,7 @@ describe("auth", () => {
 
   describe("native app hand-off", () => {
     const VERIFIER = "v".repeat(43);
-    const challengeOf = async (verifier: string) => {
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-      return btoa(String.fromCharCode(...new Uint8Array(digest)))
-        .replaceAll("+", "-")
-        .replaceAll("/", "_")
-        .replace(/=+$/, "");
-    };
+    const challengeOf = async (verifier: string) => base64url(await sha256(verifier));
     const handOff = async (email: string) => {
       const user = await signUpVerified(email);
       const challenge = await challengeOf(VERIFIER);
@@ -113,6 +108,27 @@ describe("auth", () => {
       const res = await call(`/v1/auth/app-callback${query}`, init);
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toBe(`edgebase://auth?error=${error}`);
+    });
+
+    it("an expired hand-off token is refused even with the right verifier", async () => {
+      const { ott } = await handOff("expired@x.io");
+      await env.DB.prepare(
+        "UPDATE verification SET expiresAt = ? WHERE identifier LIKE 'app-handoff:%'",
+      )
+        .bind(new Date(Date.now() - 1000).toISOString())
+        .run();
+      expect((await exchange(ott, VERIFIER)).status).toBe(401);
+    });
+
+    it("app-callback refuses a session that was not just created", async () => {
+      const { userId, token } = await signUpVerified("stale@x.io");
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+      await env.DB.prepare("UPDATE session SET createdAt = ? WHERE userId = ?")
+        .bind(tenMinutesAgo, userId)
+        .run();
+      const challenge = await challengeOf(VERIFIER);
+      const res = await call(`/v1/auth/app-callback?challenge=${challenge}`, authed(token));
+      expect(res.headers.get("location")).toBe("edgebase://auth?error=unauthorized");
     });
 
     it("Better Auth's own one-time-token verify is not reachable", async () => {

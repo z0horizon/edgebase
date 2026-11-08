@@ -12,7 +12,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `invalid_body`, `invalid_cursor` | input failed validation |
+| 400 | `invalid_body`, `invalid_cursor`, `invalid_limit` | input failed validation |
 | 401 | `unauthorized` | no valid session or API key |
 | 404 | `not_found` | unknown route or resource |
 | 429 | `rate_limited` | auth rate limit hit |
@@ -50,7 +50,8 @@ Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `mark
 Use as the `callbackURL` of a browser OAuth flow started from a native app, with
 `c = base64url(SHA-256(verifier))` (43 chars) for a random `verifier` the app keeps. Answers `302`
 to `<APP_SCHEME>://auth?token=<ott>`. Failures also redirect to the app:
-`<APP_SCHEME>://auth?error=invalid_challenge` or `<APP_SCHEME>://auth?error=unauthorized`.
+`<APP_SCHEME>://auth?error=invalid_challenge` or `<APP_SCHEME>://auth?error=unauthorized` (no session, or
+the session was created more than 5 minutes ago).
 
 ### `POST /v1/auth/app-exchange`
 Body `{ "token": ott, "verifier": string (43–128 chars) }` → `200 { "token": <bearer>, "user": {...} }`.
@@ -102,7 +103,7 @@ or `marketing`. `data` values must be strings. `inbox` and `sendAt` are optional
 → `{ "items": InboxEntry[], "nextCursor": string | null }`. `InboxEntry` is
 `{ id, kind: "personal" | "broadcast", title, body, data, category, read, createdAt }`.
 Pass `nextCursor` back as `cursor` for the next page. `limit` 1–100, default 20. `400 invalid_cursor`
-for a cursor this API did not issue.
+for a cursor this API did not issue; `400 invalid_limit` for a `limit` outside 1–100.
 
 ### `GET /v1/inbox/unread-count`
 → `{ "count": number }`.

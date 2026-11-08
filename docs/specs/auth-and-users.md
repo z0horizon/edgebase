@@ -31,7 +31,8 @@ user routes answer `503`.
    `POST /v1/auth/app-exchange { token, verifier }` for `{ token: <bearer>, user }`
    (`src/auth/app-callback.ts`). Another app that claims the URL scheme gets a token it cannot
    redeem, and a hand-off started by someone else fails the real app's verifier. Failures
-   redirect to `<APP_SCHEME>://auth?error=invalid_challenge` or `?error=unauthorized` (no session),
+   redirect to `<APP_SCHEME>://auth?error=invalid_challenge` or `?error=unauthorized` (no session, or a
+   session older than 5 minutes, so a browser's leftover session cannot be handed to another app),
    so the waiting app always hears back. A token is spent
    by its first redemption attempt, right or wrong. Better Auth's own
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.

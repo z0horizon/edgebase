@@ -31,6 +31,10 @@ export function base64url(bytes: Uint8Array): string {
     .replace(/=+$/, "");
 }
 
+export async function sha256(text: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+}
+
 export function encodeCursor(value: unknown): string {
   return base64url(new TextEncoder().encode(JSON.stringify(value)));
 }

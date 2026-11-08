@@ -23,10 +23,10 @@ const PayloadEntries = {
   category: CategorySchema,
 };
 
-export const PushPayloadSchema = v.object(PayloadEntries);
+const PushPayloadSchema = v.object(PayloadEntries);
 export type PushPayload = v.InferOutput<typeof PushPayloadSchema>;
 
-export const PushTargetSchema = v.union([
+const PushTargetSchema = v.union([
   v.object({
     userIds: v.pipe(v.array(v.pipe(v.string(), v.minLength(1))), v.minLength(1), v.maxLength(500)),
   }),
@@ -46,7 +46,6 @@ export const PushRequestSchema = v.object({
   ...PushDispatchSchema.entries,
   sendAt: v.optional(v.pipe(v.string(), v.isoTimestamp())),
 });
-export type PushRequest = v.InferOutput<typeof PushRequestSchema>;
 
 /** A device token together with the user it belonged to when the push was addressed. */
 export type PushTarget = { token: string; userId: string };

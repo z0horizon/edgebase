@@ -10,7 +10,7 @@ type ChunkResult = { deleted: number; sizeAfter: number; rowsRead: number; compl
  * Runs `sql` (a DELETE limited to CHUNK rows by a sub-select, without RETURNING) until a run deletes fewer than CHUNK
  * rows or the deadline passes. Short chunks keep D1's single writer free for live traffic.
  */
-export async function deleteInChunks(
+async function deleteInChunks(
   db: D1Database,
   sql: string,
   params: unknown[],
@@ -34,7 +34,7 @@ export async function deleteInChunks(
   }
 }
 
-export type CleanupReport = {
+type CleanupReport = {
   inbox: number;
   broadcast: number;
   session: number;

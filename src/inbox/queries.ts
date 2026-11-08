@@ -49,7 +49,7 @@ const DAY_MS = 86_400_000;
 const PERSONAL = 1;
 const BROADCAST = 0;
 
-export type InboxEntry = {
+type InboxEntry = {
   id: string;
   kind: "personal" | "broadcast";
   title: string;

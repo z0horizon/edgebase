@@ -72,5 +72,5 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
   });
 }
 
-export type Auth = ReturnType<typeof createAuth>;
+type Auth = ReturnType<typeof createAuth>;
 export type SessionUser = Auth["$Infer"]["Session"]["user"];
