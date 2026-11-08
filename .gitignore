@@ -6,3 +6,5 @@ docs/superpowers/
 .superpowers/
 .env.production
 wrangler.production.jsonc
+# Built by `pnpm admin:build` from admin/.
+public/admin/

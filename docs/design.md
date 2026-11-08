@@ -13,6 +13,7 @@ push delivery, and `scheduled` for crons (`src/index.ts`).
                         ├─ /v1/opens, /v1/topics/*  open reports, web topics      src/push/stats.ts, topics.ts (user)
                         ├─ /v1/push           send, schedule, stats               src/push/routes.ts (API key)
                         ├─ /v1/templates/*    push templates                      src/push/templates.ts (API key)
+                        ├─ /admin/            admin page (static assets)          admin/ → public/admin (admin session)
                         ├─ queue consumer     FCM HTTP v1, retry, DLQ             src/push/consumer.ts
                         └─ scheduled          * * * * *  due scheduled pushes     src/jobs/scheduled.ts
                                               17 * * * * retention cleanup        src/jobs/cleanup.ts
@@ -27,6 +28,8 @@ push delivery, and `scheduled` for crons (`src/index.ts`).
 | `PUSH_QUEUE` | Queue `edgebase-push` | push messages (producer and consumer) |
 | `PUSH_DLQ` | Queue `edgebase-push-dlq` | pushes that failed 5 attempts |
 | `AUTH_RL` | Rate limiting | 10 auth attempts / 60 s per IP |
+| `TOPIC_RL` | Rate limiting | 20 web topic changes / 60 s per user |
+| Static assets (no binding) | Static assets `public/` | the `/admin` page, built from `admin/`, served before the Worker runs |
 | `MAIL` | Email Sending | verification and password-reset mail |
 
 ## Why it is shaped this way

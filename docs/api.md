@@ -4,6 +4,9 @@
 
 - **Users**: a Better Auth session, either the session cookie (web) or `Authorization: Bearer <token>` (mobile).
 - **Servers**: `X-API-Key: <PUSH_API_KEY>` on `/v1/push`, `/v1/push/*` and `/v1/templates/*`.
+  Without that header, these routes also take the session of a user with `role = "admin"` whose
+  request carries the Worker's own `Origin` (`BASE_URL`), or no `Origin` on a `GET`; this is what
+  the `/admin` page uses.
 - **Captcha** (only when `TURNSTILE_SECRET_KEY` is set): `X-Captcha-Response: <Turnstile token>` on
   `POST /api/auth/sign-up/email`, `/api/auth/request-password-reset` and
   `/api/auth/send-verification-email`. Missing answers `400`, rejected answers `403`. Mobile apps
@@ -41,8 +44,11 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | POST | `/v1/inbox/read-all` | user | mark everything read |
 | DELETE | `/v1/inbox/{id}` | user | delete a personal item |
 | POST | `/v1/push` | API key | send or schedule a push |
+| GET | `/v1/push` | API key | stats of the last 50 pushes, newest first |
 | GET | `/v1/push/{id}` | API key | delivery and open stats of a push |
+| GET | `/v1/templates` | API key | every template (at most 500) |
 | PUT / GET / DELETE | `/v1/templates/{name}` | API key | manage a push template |
+| GET | `/admin/` | admin (in the page) | admin web page, static assets |
 | POST | `/v1/opens` | user | report that the user opened a push |
 | POST | `/v1/topics/{topic}/subscribe`, `/unsubscribe` | user | add or remove a device token on a topic (web) |
 | GET | `/v1/auth/app-callback` | user (cookie) | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
@@ -125,8 +131,14 @@ Answers:
 - `400` on invalid input (also an unknown template or a missing var), `401` on a wrong key,
   `409`/`422` on idempotency conflicts, `503` when push is not configured.
 
+### `GET /v1/push`
+→ `{ "pushes": [{ id, category, users, sent, failed, opened, sendAt }] }`, the last 50.
+
 ### `GET /v1/push/{id}`
 → `{ id, category, users, sent, failed, opened, sendAt }`; `404` when unknown or older than 90 days.
+
+### `GET /v1/templates`
+→ `{ "templates": [{ name, title, body, data?, category?, translations?, updatedAt }] }` by name.
 
 ### `PUT /v1/templates/{name}`
 Body `{ title, body, data?, category?, translations? }` → `204`. `409 limit_reached` past 500

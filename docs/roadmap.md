@@ -14,7 +14,9 @@
 - Idempotency keys on `POST /v1/push`.
 - Push stats (users, sent, failed, unique opens), templates, localized notifications.
 - Web topic subscription through the Instance ID API.
+- Admin web page at `/admin` (users, roles, bans, sending pushes, templates, push stats).
 
 ## Next
 
+- Audit log of admin actions and pushes sent.
 - Sharding `INBOX_DB` by user hash; archiving old inbox rows to R2.

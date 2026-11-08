@@ -56,6 +56,10 @@ pnpm db:migrate:remote        # after pulling new migrations
 Both regenerate `wrangler.production.jsonc` from `wrangler.jsonc` and `.env.production` first, so
 template changes (bindings, crons) always reach production. Never edit the generated file.
 
+`pnpm run deploy` also builds the admin page (`admin/`, React + shadcn/ui) into `public/admin`; it
+is served at `<BASE_URL>/admin/`. Locally, run `pnpm admin:build` once so `pnpm dev` serves it, or
+`pnpm dev` and `pnpm admin:dev` together for live reload at `http://localhost:5173/admin/`.
+
 The first admin is set in D1; after that, admins grant the role through
 `POST /api/auth/admin/set-role`:
 

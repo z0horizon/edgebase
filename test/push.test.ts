@@ -274,3 +274,42 @@ describe("push stats", () => {
     expect((await call("/v1/push/1", {}, { ...env, FCM_SERVICE_ACCOUNT: SA })).status).toBe(401);
   });
 });
+
+describe("admin session on server routes (the /admin page)", () => {
+  const bindings = () => ({ ...env, FCM_SERVICE_ACCOUNT: SA });
+  const asAdmin = async (email: string, admin: boolean) => {
+    const { userId, token } = await signUpVerified(email);
+    if (admin)
+      await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+    return token;
+  };
+
+  it("an admin from the Worker's own origin lists pushes and templates", async () => {
+    const token = await asAdmin("page-admin@x.io", true);
+    const own = { origin: "https://api.test" };
+    expect((await call("/v1/push", authed(token, { headers: own }), bindings())).status).toBe(200);
+    const res = await call("/v1/templates", authed(token), bindings());
+    expect(await res.json()).toMatchObject({ templates: expect.any(Array) });
+  });
+
+  it("refuses a non-admin, and an admin's session sent from another origin", async () => {
+    const user = await asAdmin("page-user@x.io", false);
+    expect((await call("/v1/push", authed(user), bindings())).status).toBe(401);
+    const admin = await asAdmin("page-admin-2@x.io", true);
+    const foreign = authed(
+      admin,
+      json({ ...base, to: { topic: "all" } }, { headers: { origin: "https://evil.test" } }),
+    );
+    expect((await call("/v1/push", foreign, bindings())).status).toBe(401);
+  });
+
+  it("refuses an admin's write that carries no Origin", async () => {
+    const admin = await asAdmin("page-admin-3@x.io", true);
+    const res = await call(
+      "/v1/push",
+      authed(admin, json({ ...base, to: { topic: "all" } })),
+      bindings(),
+    );
+    expect(res.status).toBe(401);
+  });
+});

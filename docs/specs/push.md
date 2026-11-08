@@ -132,7 +132,8 @@ Web apps cannot subscribe from the Firebase JS SDK, so they call
 (`src/push/topics.ts`). The token must be a device the caller registered (`404` otherwise). The
 Worker calls the Instance ID API (`iid.googleapis.com/iid/v1:batchAdd` / `:batchRemove`) with the
 service account's OAuth2 token and `access_token_auth: true`; legacy server keys are not used,
-since Google refuses them. Calls share the per-IP auth limit. A non-2xx answer or a per-token error answers `502 upstream_error`;
+since Google refuses them. A user may make 20 topic changes a minute
+(`TOPIC_RL`, keyed by user id, apart from the sign-in limit); over it answers `429 rate_limited`. A non-2xx answer or a per-token error answers `502 upstream_error`;
 without `FCM_SERVICE_ACCOUNT` the route answers `503`. Any platform's token works, though native
 apps should keep using the SDK.
 

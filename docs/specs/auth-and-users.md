@@ -44,8 +44,8 @@ user routes answer `503`.
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.
 4. Sessions last 30 days and are extended at most once a day (`updateAge`), so an active session
    costs about one D1 write per day. There is no cookie cache and no secondary storage.
-5. Sign-in, sign-up, password-reset, resend-verification, two-factor, organization invite-member,
-   web topic and app-exchange requests are limited
+5. Sign-in, sign-up, password-reset, resend-verification, two-factor, organization invite-member
+   and app-exchange requests are limited
    to 10 per minute per `cf-connecting-ip` through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`src/auth/middleware.ts`). Better Auth's own limiter is disabled.
 6. `POST /api/auth/delete-user` and admin `remove-user` delete the user; `session`, `account`,
@@ -66,7 +66,10 @@ user routes answer `503`.
     `0004` have null, treated the same); `admin` reaches `/api/auth/admin/*` (list, create, remove,
     ban, set role, impersonate, revoke sessions).
     Banning deletes the user's sessions, so the next request answers `401`. The first admin is set
-    in D1 (see deployment.md).
+    in D1 (see deployment.md). The `/admin` page (`admin/`) signs admins in with email, password
+    and TOTP, manages users through these routes, and sends pushes and edits templates with the
+    admin session (see api.md, Authentication). It is served with a CSP that allows only its own
+    scripts, and renders user data as text.
 12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;
     social sign-in is not challenged. `POST /api/auth/two-factor/enable { password }` returns the
     TOTP URI (issuer: the `BASE_URL` host) and backup codes; 2FA is on once a code is confirmed

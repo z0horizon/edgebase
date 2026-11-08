@@ -1,7 +1,15 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetFcmCacheForTests } from "../src/push/fcm";
-import { authed, call, json, makeServiceAccount, signUpVerified } from "./helpers";
+import {
+  authed,
+  call,
+  freshIp,
+  json,
+  makeServiceAccount,
+  PASSWORD,
+  signUpVerified,
+} from "./helpers";
 
 let SA = "";
 beforeAll(async () => {
@@ -78,5 +86,31 @@ describe("web topic subscription", () => {
     expect((await topic(token, "bad%20topic!/subscribe", { token: "t" })).status).toBe(400);
     const unset = { ...env, FCM_SERVICE_ACCOUNT: "" };
     expect((await topic(token, "news/subscribe", { token: "t" }, unset)).status).toBe(503);
+  });
+
+  it("is limited per user and leaves the IP's sign-in budget alone", async () => {
+    const { userId, token } = await signUpVerified("topic-rl@x.io");
+    await env.DB.prepare("INSERT INTO device VALUES ('web-rl', ?, 'web', 0)").bind(userId).run();
+    stubGoogle();
+    const ip = { "cf-connecting-ip": freshIp() };
+    let limited = false;
+    // The window may reset mid-test, so allow twice the limit.
+    for (let i = 0; i < 41 && !limited; i++) {
+      const res = await call(
+        "/v1/topics/news/subscribe",
+        authed(token, json({ token: "web-rl" }, { headers: ip })),
+        {
+          ...env,
+          FCM_SERVICE_ACCOUNT: SA,
+        },
+      );
+      limited = res.status === 429;
+    }
+    expect(limited).toBe(true);
+    const signIn = await call(
+      "/api/auth/sign-in/email",
+      json({ email: "topic-rl@x.io", password: PASSWORD }, { headers: ip }),
+    );
+    expect(signIn.status).toBe(200);
   });
 });

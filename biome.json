@@ -2,8 +2,16 @@
   "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["**", "!**/worker-configuration.d.ts", "!**/*.md", "!**/pnpm-lock.yaml"]
+    "includes": [
+      "**",
+      "!**/worker-configuration.d.ts",
+      "!**/*.md",
+      "!**/pnpm-lock.yaml",
+      "!admin/src/components/ui",
+      "!public/admin"
+    ]
   },
+  "css": { "parser": { "tailwindDirectives": true } },
   "formatter": {
     "indentStyle": "space",
     "indentWidth": 2,

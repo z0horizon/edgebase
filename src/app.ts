@@ -2,7 +2,13 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { appCallback, appExchange } from "./auth/app-callback";
 import { createAuth, type SessionUser } from "./auth/auth";
-import { authRateLimit, requireApiKey, requireAuthConfig, requireUser } from "./auth/middleware";
+import {
+  authRateLimit,
+  requireApiKey,
+  requireAuthConfig,
+  requireUser,
+  topicRateLimit,
+} from "./auth/middleware";
 import { jsonError } from "./http";
 import { inboxRoutes } from "./inbox/routes";
 import { deviceRoutes } from "./push/devices";
@@ -48,8 +54,6 @@ app.on(
     "/api/auth/two-factor/*",
     // Sends mail to any address, with text the inviter chooses.
     "/api/auth/organization/invite-member",
-    // Each call is one Instance ID request against the project's quota.
-    "/v1/topics/*",
     "/v1/auth/app-exchange",
   ],
   authRateLimit,
@@ -63,6 +67,8 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).
 for (const path of ["/v1/me", "/v1/devices/*", "/v1/inbox/*", "/v1/opens", "/v1/topics/*"]) {
   app.use(path, requireAuthConfig, requireUser);
 }
+// Each topic change is one Instance ID request against the project's quota.
+app.use("/v1/topics/*", topicRateLimit);
 for (const path of ["/v1/push/*", "/v1/templates/*"]) app.use(path, requireApiKey);
 app.route("/v1/push", pushRoutes);
 app.route("/v1/templates", templateRoutes);

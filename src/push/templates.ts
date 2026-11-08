@@ -77,6 +77,19 @@ export async function resolvePush(
 }
 
 export const templateRoutes = new Hono<AppEnv>()
+  .get("/", async (c) => {
+    // Bounded by MAX_TEMPLATES, so one page holds them all.
+    const rows = await c.env.DB.prepare(
+      "SELECT name, content, updated_at FROM push_template ORDER BY name",
+    ).all<{ name: string; content: string; updated_at: number }>();
+    return c.json({
+      templates: rows.results.map((r) => ({
+        name: r.name,
+        ...(JSON.parse(r.content) as Template),
+        updatedAt: r.updated_at,
+      })),
+    });
+  })
   .put("/:name", async (c) => {
     const name = c.req.param("name");
     if (!v.is(TemplateNameSchema, name)) {

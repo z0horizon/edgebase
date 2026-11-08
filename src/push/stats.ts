@@ -43,28 +43,23 @@ export async function deleteUserOpens(db: D1Database, userId: string): Promise<v
   await db.prepare("DELETE FROM push_open WHERE user_id = ?").bind(userId).run();
 }
 
+const STATS_COLUMNS = `id, category, users, sent, failed, send_at AS sendAt,
+  (SELECT count(*) FROM push_open WHERE push_id = push_stats.id) AS opened`;
+
 /** Server routes under /v1/push (API key). */
-export const statsRoutes = new Hono<AppEnv>().get("/:id{[0-9]+}", async (c) => {
-  const id = Number(c.req.param("id"));
-  const row = await c.env.DB.prepare(
-    `SELECT id, category, users, sent, failed, send_at,
-       (SELECT count(*) FROM push_open WHERE push_id = ?1) AS opened
-     FROM push_stats WHERE id = ?1`,
-  )
-    .bind(id)
-    .first<{
-      id: number;
-      category: Category;
-      users: number;
-      sent: number;
-      failed: number;
-      send_at: number;
-      opened: number;
-    }>();
-  if (!row) return jsonError(404, "not_found", "No such push");
-  const { send_at, ...stats } = row;
-  return c.json({ ...stats, sendAt: send_at });
-});
+export const statsRoutes = new Hono<AppEnv>()
+  .get("/", async (c) => {
+    const rows = await c.env.DB.prepare(
+      `SELECT ${STATS_COLUMNS} FROM push_stats ORDER BY id DESC LIMIT 50`,
+    ).all();
+    return c.json({ pushes: rows.results });
+  })
+  .get("/:id{[0-9]+}", async (c) => {
+    const row = await c.env.DB.prepare(`SELECT ${STATS_COLUMNS} FROM push_stats WHERE id = ?`)
+      .bind(Number(c.req.param("id")))
+      .first();
+    return row ? c.json(row) : jsonError(404, "not_found", "No such push");
+  });
 
 const OpenSchema = v.object({ pushId: v.pipe(v.string(), v.regex(/^\d{1,15}$/)) });
 
