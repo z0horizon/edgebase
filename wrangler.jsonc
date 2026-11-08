@@ -32,15 +32,16 @@
     "consumers": [
       {
         "queue": "edgebase-push",
-        "max_batch_size": 10,
+        // One message can fan out to 500 FCM requests; one per invocation stays under the subrequest limit.
+        "max_batch_size": 1,
         "max_retries": 3,
         "dead_letter_queue": "edgebase-push-dlq"
       }
     ]
   },
   "send_email": [{ "name": "MAIL" }],
-  // Every minute: dispatch due scheduled pushes. Daily: retention cleanup.
-  "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
+  // Every minute: dispatch due scheduled pushes. Hourly: retention cleanup in small budgets.
+  "triggers": { "crons": ["* * * * *", "17 * * * *"] },
   "vars": {
     "BASE_URL": "http://localhost:8787",
     "TRUSTED_ORIGINS": "http://localhost:3000,edgebase://,https://appleid.apple.com",

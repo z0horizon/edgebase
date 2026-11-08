@@ -131,6 +131,11 @@ export async function sendFcm(access: FcmAccess, message: FcmMessage): Promise<S
   const body = await res.json<FcmErrorBody>().catch((): FcmErrorBody => ({}));
   const code = body.error?.details?.find((d) => d.errorCode)?.errorCode ?? body.error?.status ?? "";
   if (res.status === 404 || DEAD_CODES.has(code)) return { kind: "dead" };
+  if (code === "UNAUTHENTICATED") {
+    // Our access token was rejected (e.g. the service account key was rotated): forget it.
+    for (const [key, cached] of cache) if (cached.token === access.token) cache.delete(key);
+    return { kind: "retry", retryAfterSec: null };
+  }
   if (res.status === 429 || res.status >= 500 || RETRY_CODES.has(code)) {
     const retryAfter = Number(res.headers.get("retry-after"));
     return { kind: "retry", retryAfterSec: retryAfter > 0 ? retryAfter : null };

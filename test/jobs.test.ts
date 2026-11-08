@@ -77,6 +77,76 @@ describe("runCleanup", () => {
   });
 });
 
+describe("runCleanup bounds", () => {
+  it("does not scan fresh rows when nothing has expired", async () => {
+    await env.INBOX_DB.prepare(
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 2000)
+       INSERT INTO inbox_item (user_id, title, body, category, created_at)
+       SELECT 'fresh-many', 't', 'b', 'transactional', ? FROM n`,
+    )
+      .bind(NOW)
+      .run();
+    const u = await seedUser();
+    await env.DB.prepare(
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 2000)
+       INSERT INTO device (token, user_id, platform, updated_at) SELECT 'fresh-' || x, ?, 'ios', ? FROM n`,
+    )
+      .bind(u, NOW)
+      .run();
+    const report = await runCleanup(env, NOW);
+    expect(report.inbox + report.device).toBe(0);
+    expect(report.rowsRead).toBeLessThan(200);
+  });
+
+  it("reports an incomplete run when the time budget runs out", async () => {
+    await env.INBOX_DB.prepare(
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 5001)
+       INSERT INTO inbox_item (user_id, title, body, category, created_at)
+       SELECT 'old-2', 't', 'b', 'transactional', ? FROM n`,
+    )
+      .bind(NOW - 40 * DAY)
+      .run();
+    // Far enough ahead that every inbox row in this file has expired: well over one chunk.
+    const later = NOW + 100 * DAY;
+    const report = await runCleanup(env, later, 0);
+    expect(report.complete).toBe(false);
+    expect(report.inbox).toBe(5000);
+    expect((await runCleanup(env, later)).complete).toBe(true);
+  });
+
+  it("removes week-old unverified email sign-ups but keeps verified and social users", async () => {
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const user = (id: string, verified: number, createdAt: number) =>
+      env.DB.prepare(
+        "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind(id, id, `${id}@x.io`, verified, iso(createdAt), iso(createdAt));
+    const account = (userId: string, provider: string) =>
+      env.DB.prepare(
+        "INSERT INTO account (id, accountId, providerId, userId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind(`${userId}-${provider}`, userId, provider, userId, iso(NOW), iso(NOW));
+    await env.DB.batch([
+      user("stale-unverified", 0, NOW - 8 * DAY),
+      account("stale-unverified", "credential"),
+      user("recent-unverified", 0, NOW - 6 * DAY),
+      account("recent-unverified", "credential"),
+      user("old-verified", 1, NOW - 30 * DAY),
+      account("old-verified", "credential"),
+      user("github-unverified", 0, NOW - 30 * DAY),
+      account("github-unverified", "github"),
+    ]);
+    const report = await runCleanup(env, NOW);
+    expect(report.unverifiedUsers).toBe(1);
+    const left = await env.DB.prepare(
+      "SELECT id FROM user WHERE id IN ('stale-unverified', 'recent-unverified', 'old-verified', 'github-unverified') ORDER BY id",
+    ).all<{ id: string }>();
+    expect(left.results.map((r) => r.id)).toEqual([
+      "github-unverified",
+      "old-verified",
+      "recent-unverified",
+    ]);
+  });
+});
+
 describe("enqueueDuePushes", () => {
   const request = (topic: string) =>
     JSON.stringify({ to: { topic }, title: "t", body: "b", category: "transactional" });

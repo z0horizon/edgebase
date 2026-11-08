@@ -1,10 +1,13 @@
 const CHUNK = 5000;
 const DAY_MS = 86_400_000;
 const DEVICE_STALE_DAYS = 60;
+const UNVERIFIED_SIGNUP_DAYS = 7;
 const BUDGET_MS = 20_000;
 
+type ChunkResult = { deleted: number; sizeAfter: number; rowsRead: number; complete: boolean };
+
 /**
- * Runs `sql` (a DELETE limited to CHUNK rows by a sub-select) until a run deletes fewer than CHUNK
+ * Runs `sql` (a DELETE limited to CHUNK rows by a sub-select, without RETURNING) until a run deletes fewer than CHUNK
  * rows or the deadline passes. Short chunks keep D1's single writer free for live traffic.
  */
 export async function deleteInChunks(
@@ -12,19 +15,23 @@ export async function deleteInChunks(
   sql: string,
   params: unknown[],
   deadline: number,
-): Promise<{ deleted: number; sizeAfter: number }> {
-  let deleted = 0;
-  let sizeAfter = 0;
+): Promise<ChunkResult> {
+  const out: ChunkResult = { deleted: 0, sizeAfter: 0, rowsRead: 0, complete: false };
   for (;;) {
+    // Counted from RETURNING: D1's meta.changes also counts rows removed by ON DELETE CASCADE.
     const result = await db
-      .prepare(sql)
+      .prepare(`${sql} RETURNING 1`)
       .bind(...params)
-      .run();
-    deleted += result.meta.changes;
-    sizeAfter = result.meta.size_after;
-    if (result.meta.changes < CHUNK || Date.now() >= deadline) break;
+      .all();
+    out.deleted += result.results.length;
+    out.sizeAfter = result.meta.size_after;
+    out.rowsRead += result.meta.rows_read;
+    if (result.results.length < CHUNK) {
+      out.complete = true;
+      return out;
+    }
+    if (Date.now() >= deadline) return out;
   }
-  return { deleted, sizeAfter };
 }
 
 export type CleanupReport = {
@@ -33,20 +40,35 @@ export type CleanupReport = {
   session: number;
   verification: number;
   device: number;
+  unverifiedUsers: number;
+  rowsRead: number;
+  /** False when the time budget ran out; the rest is deleted on the next run. */
+  complete: boolean;
   dbBytes: number;
   inboxBytes: number;
 };
 
-export async function runCleanup(env: Env, now: number): Promise<CleanupReport> {
-  const deadline = Date.now() + BUDGET_MS;
+// Rowids grow with time, so everything below the first fresh rowid is expired. Finding that
+// rowid stops at the first fresh row, so neither query walks the fresh part of the table.
+const byRowid = (table: string) =>
+  `DELETE FROM ${table} WHERE id IN (
+     SELECT id FROM ${table}
+     WHERE id < COALESCE((SELECT id FROM ${table} WHERE created_at >= ?1 ORDER BY id LIMIT 1), 9223372036854775807)
+       AND created_at < ?1
+     ORDER BY id LIMIT ${CHUNK})`;
+
+const expired = (table: string) =>
+  `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE expiresAt < ? LIMIT ${CHUNK})`;
+
+export async function runCleanup(
+  env: Env,
+  now: number,
+  budgetMs = BUDGET_MS,
+): Promise<CleanupReport> {
+  const deadline = Date.now() + budgetMs;
   const inboxCutoff = now - Number(env.INBOX_TTL_DAYS) * DAY_MS;
   // Better Auth stores dates as ISO 8601 text, which sorts like the instant it encodes.
-  const nowIso = new Date(now).toISOString();
-  // Rowids grow with time, so ORDER BY id reaches the expired rows first.
-  const byRowid = (table: string) =>
-    `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE created_at < ? ORDER BY id LIMIT ${CHUNK})`;
-  const expired = (table: string) =>
-    `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE expiresAt < ? LIMIT ${CHUNK})`;
+  const iso = (ms: number) => new Date(ms).toISOString();
 
   const inbox = await deleteInChunks(env.INBOX_DB, byRowid("inbox_item"), [inboxCutoff], deadline);
   const broadcast = await deleteInChunks(
@@ -55,24 +77,44 @@ export async function runCleanup(env: Env, now: number): Promise<CleanupReport> 
     [inboxCutoff],
     deadline,
   );
-  const session = await deleteInChunks(env.DB, expired("session"), [nowIso], deadline);
-  const verification = await deleteInChunks(env.DB, expired("verification"), [nowIso], deadline);
+  const session = await deleteInChunks(env.DB, expired("session"), [iso(now)], deadline);
+  const verification = await deleteInChunks(env.DB, expired("verification"), [iso(now)], deadline);
   const device = await deleteInChunks(
     env.DB,
     `DELETE FROM device WHERE token IN (SELECT token FROM device WHERE updated_at < ? LIMIT ${CHUNK})`,
     [now - DEVICE_STALE_DAYS * DAY_MS],
     deadline,
   );
+  // Email sign-ups never verified; users with any social account are kept, since a provider may
+  // report its email unverified while the sign-in itself is real.
+  const unverified = await deleteInChunks(
+    env.DB,
+    `DELETE FROM user WHERE id IN (
+       SELECT u.id FROM user u WHERE u.emailVerified = 0 AND u.createdAt < ?
+         AND NOT EXISTS (SELECT 1 FROM account a WHERE a.userId = u.id AND a.providerId <> 'credential')
+       LIMIT ${CHUNK})`,
+    [iso(now - UNVERIFIED_SIGNUP_DAYS * DAY_MS)],
+    deadline,
+  );
 
+  const all = [inbox, broadcast, session, verification, device, unverified];
   const report: CleanupReport = {
     inbox: inbox.deleted,
     broadcast: broadcast.deleted,
     session: session.deleted,
     verification: verification.deleted,
     device: device.deleted,
-    dbBytes: device.sizeAfter,
+    unverifiedUsers: unverified.deleted,
+    rowsRead: all.reduce((sum, r) => sum + r.rowsRead, 0),
+    complete: all.every((r) => r.complete),
+    dbBytes: unverified.sizeAfter,
     inboxBytes: broadcast.sizeAfter,
   };
-  console.info("cleanup", JSON.stringify(report));
+  if (report.complete) console.info("cleanup", JSON.stringify(report));
+  else
+    console.warn(
+      "cleanup ran out of time; the rest waits for the next run",
+      JSON.stringify(report),
+    );
   return report;
 }

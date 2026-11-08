@@ -13,7 +13,7 @@ push delivery, and `scheduled` for crons (`src/index.ts`).
                         ├─ /v1/push           send or schedule                    src/push/routes.ts (API key)
                         ├─ queue consumer     FCM HTTP v1, retry, DLQ             src/push/consumer.ts
                         └─ scheduled          * * * * *  due scheduled pushes     src/jobs/scheduled.ts
-                                              17 3 * * * retention cleanup        src/jobs/cleanup.ts
+                                              17 * * * * retention cleanup        src/jobs/cleanup.ts
 ```
 
 ## Bindings

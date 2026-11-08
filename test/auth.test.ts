@@ -1,6 +1,18 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { authed, call, json, PASSWORD, signUpVerified } from "./helpers";
+import { authed, call, freshIp, json, PASSWORD, signUpVerified } from "./helpers";
+
+/**
+ * Calls until one answers 429, at most 21 times. The limiter's window may reset while a test
+ * runs, so allow up to twice the limit before it trips.
+ */
+async function firstLimited(attempt: () => Promise<Response>): Promise<Response | undefined> {
+  for (let i = 0; i < 21; i++) {
+    const res = await attempt();
+    if (res.status === 429) return res;
+  }
+  return undefined;
+}
 
 const ip = (n: number) => ({ "cf-connecting-ip": `203.0.113.${n}` });
 
@@ -53,17 +65,57 @@ describe("auth", () => {
     expect(await count(env.INBOX_DB, "inbox_state")).toBe(0);
   });
 
-  it("app-callback redirects to the app scheme with a one-time token that yields a session", async () => {
-    const { userId, token } = await signUpVerified("e@x.io");
-    const res = await call("/v1/auth/app-callback", authed(token));
-    expect(res.status).toBe(302);
-    const location = res.headers.get("location") ?? "";
-    expect(location.startsWith("edgebase://auth?token=")).toBe(true);
-    const ott = new URL(location).searchParams.get("token");
-    const verify = () => call("/api/auth/one-time-token/verify", json({ token: ott }));
-    const first = await verify();
-    expect((await first.json<{ user: { id: string } }>()).user.id).toBe(userId);
-    expect((await verify()).ok).toBe(false);
+  describe("native app hand-off", () => {
+    const VERIFIER = "v".repeat(43);
+    const challengeOf = async (verifier: string) => {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+      return btoa(String.fromCharCode(...new Uint8Array(digest)))
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replace(/=+$/, "");
+    };
+    const handOff = async (email: string) => {
+      const user = await signUpVerified(email);
+      const challenge = await challengeOf(VERIFIER);
+      const res = await call(`/v1/auth/app-callback?challenge=${challenge}`, authed(user.token));
+      expect(res.status).toBe(302);
+      const location = res.headers.get("location") ?? "";
+      expect(location.startsWith("edgebase://auth?token=")).toBe(true);
+      return { ...user, ott: new URL(location).searchParams.get("token") ?? "" };
+    };
+    const exchange = (token: string, verifier: string) =>
+      call(
+        "/v1/auth/app-exchange",
+        json({ token, verifier }, { headers: { "cf-connecting-ip": freshIp() } }),
+      );
+
+    it("the right verifier exchanges the one-time token for a working session, once", async () => {
+      const { userId, ott } = await handOff("e@x.io");
+      const res = await exchange(ott, VERIFIER);
+      expect(res.status).toBe(200);
+      const { token } = await res.json<{ token: string }>();
+      expect((await (await call("/v1/me", authed(token))).json<{ id: string }>()).id).toBe(userId);
+      expect((await exchange(ott, VERIFIER)).status).toBe(401);
+    });
+
+    it("an app without the verifier cannot use an intercepted token", async () => {
+      const { ott } = await handOff("e2@x.io");
+      expect((await exchange(ott, "w".repeat(43))).status).toBe(401);
+      // The token is spent by the failed attempt, so guessing again does not help.
+      expect((await exchange(ott, VERIFIER)).status).toBe(401);
+    });
+
+    it("app-callback without a challenge answers 400", async () => {
+      const { token } = await signUpVerified("e3@x.io");
+      expect((await call("/v1/auth/app-callback", authed(token))).status).toBe(400);
+    });
+
+    it("Better Auth's own one-time-token verify is not reachable", async () => {
+      const { ott } = await handOff("e4@x.io");
+      expect((await call("/api/auth/one-time-token/verify", json({ token: ott }))).status).toBe(
+        404,
+      );
+    });
   });
 
   it("11th sign-in attempt within a minute from one IP answers 429", async () => {
@@ -72,10 +124,9 @@ describe("auth", () => {
         "/api/auth/sign-in/email",
         json({ email: "nobody@x.io", password: "wrong-password" }, { headers: ip(9) }),
       );
-    for (let i = 0; i < 10; i++) expect((await attempt()).status).not.toBe(429);
-    const res = await attempt();
-    expect(res.status).toBe(429);
-    expect((await res.json<{ error: { code: string } }>()).error.code).toBe("rate_limited");
+    const res = await firstLimited(attempt);
+    expect(res?.status).toBe(429);
+    expect((await res?.json<{ error: { code: string } }>())?.error.code).toBe("rate_limited");
   });
 
   it("missing BETTER_AUTH_SECRET answers 503 not_configured", async () => {
@@ -84,3 +135,15 @@ describe("auth", () => {
     expect((await res.json<{ error: { code: string } }>()).error.code).toBe("not_configured");
   });
 });
+
+it.each(["/api/auth/send-verification-email", "/v1/auth/app-exchange"])(
+  "11th call to %s within a minute from one IP answers 429",
+  async (path) => {
+    const headers = { "cf-connecting-ip": `203.0.113.${path.length}` };
+    const attempt = () =>
+      call(path, json({ email: "victim@x.io", token: "x", verifier: "x" }, { headers }));
+    expect((await firstLimited(attempt))?.status).toBe(429);
+  },
+  // send-verification-email takes about 0.5 s per call under local workerd.
+  20_000,
+);

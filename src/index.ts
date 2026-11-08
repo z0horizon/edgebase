@@ -10,6 +10,6 @@ export default {
   async scheduled(controller, env, ctx) {
     // Must match the crons in wrangler.jsonc.
     if (controller.cron === "* * * * *") ctx.waitUntil(enqueueDuePushes(env, Date.now()));
-    if (controller.cron === "17 3 * * *") ctx.waitUntil(runCleanup(env, Date.now()));
+    if (controller.cron === "17 * * * *") ctx.waitUntil(runCleanup(env, Date.now()));
   },
 } satisfies ExportedHandler<Env>;

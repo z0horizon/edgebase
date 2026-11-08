@@ -1,8 +1,9 @@
 # Data Retention
 
-Every table that grows has a rule that bounds it. A daily cron (`17 3 * * *`) runs
-`runCleanup` (`src/jobs/cleanup.ts`); it logs a JSON report with rows deleted per table and both
-databases' sizes (`meta.size_after`), so growth toward D1's 10 GB limit is visible in Workers logs.
+Every table that grows has a rule that bounds it. An hourly cron (`17 * * * *`) runs
+`runCleanup` (`src/jobs/cleanup.ts`) with a 20 s budget; it logs a JSON report with rows deleted
+per table, rows read, whether it finished (`complete`), and both databases' sizes
+(`meta.size_after`). An unfinished run is logged with `console.warn` and continues next hour.
 
 ## Rules
 
@@ -12,15 +13,19 @@ databases' sizes (`meta.size_after`), so growth toward D1's 10 GB limit is visib
 | `broadcast` | `INBOX_DB` | same as `inbox_item` | rowid order |
 | `session` | `DB` | `expiresAt` < now (ISO text compare) | `session_expiresAt` |
 | `verification` | `DB` | `expiresAt` < now | `verification_expiresAt` |
-| `device` | `DB` | `updated_at` older than 60 days | none (daily scan) |
+| `device` | `DB` | `updated_at` older than 60 days | `device_updated_at` |
+| `user` (+ cascades) | `DB` | email unverified and created more than 7 days ago, with no social account | `user_unverified_createdAt` (partial) |
 | `scheduled_push` | `DB` | when dispatched (minute cron) | `scheduled_push_send_at` |
 | `inbox_state` | `INBOX_DB` | when the user is deleted | primary key |
 
 1. Deletes run in chunks of 5000 rows (`deleteInChunks`) until a chunk deletes fewer than 5000
-   or 20 s have passed; the rest waits for the next day. Short chunks keep D1's single writer
+   or the 20 s budget is spent; the rest waits for the next hour. Deleted rows are counted from
+   `RETURNING`, since D1's `meta.changes` also counts cascaded rows. Short chunks keep D1's single writer
    free for live traffic.
-2. Inbox and broadcast rowids grow with time, so `ORDER BY id` meets the expired rows first and
-   each chunk reads about as many rows as it deletes.
+2. Inbox and broadcast rowids grow with time, so every row below the first fresh rowid is
+   expired. Each chunk looks up that rowid (stopping at the first fresh row) and deletes only
+   below it, so cleanup never walks the fresh part of the table. A row written with a clock far
+   behind its neighbours is deleted late, never early.
 3. Inbox reads apply the same TTL, so rows past it are hidden even before the cron removes them.
 4. Devices refresh at least every 7 days while the app is used (push rule 1), so 60 days without
    a refresh means the app is gone.

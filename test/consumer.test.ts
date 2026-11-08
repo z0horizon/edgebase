@@ -84,26 +84,43 @@ describe("handlePushBatch", () => {
   });
 
   it("503 on one of three tokens re-enqueues only that token with a delay", async () => {
+    const u = await seedUser();
+    for (const t of ["t1", "t2", "t3"]) await addDevice(t, u);
     stubFcm({ t2: fcmError(503, "UNAVAILABLE") });
-    const { queued, result } = await run({
-      kind: "tokens",
-      tokens: ["t1", "t2", "t3"],
-      payload,
-      attempt: 0,
-    });
+    const { queued, result } = await run({ kind: "users", userIds: [u], payload, attempt: 0 });
     expect(queued).toEqual([
-      { body: { kind: "tokens", tokens: ["t2"], payload, attempt: 1 }, delaySeconds: 30 },
+      {
+        body: { kind: "tokens", targets: [{ token: "t2", userId: u }], payload, attempt: 1 },
+        delaySeconds: 30,
+      },
     ]);
     expect(result.explicitAcks).toEqual(["m1"]);
   });
 
   it("the fifth failed attempt goes to the DLQ, not the queue", async () => {
+    const u = await seedUser();
+    await addDevice("t9", u);
     stubFcm({ t9: fcmError(503, "UNAVAILABLE") });
-    const { queued, dead } = await run({ kind: "tokens", tokens: ["t9"], payload, attempt: 4 });
+    const targets = [{ token: "t9", userId: u }];
+    const { queued, dead } = await run({ kind: "tokens", targets, payload, attempt: 4 });
     expect(queued).toEqual([]);
     expect(dead).toEqual([
-      { body: { kind: "tokens", tokens: ["t9"], payload, attempt: 5 }, delaySeconds: undefined },
+      { body: { kind: "tokens", targets, payload, attempt: 5 }, delaySeconds: undefined },
     ]);
+  });
+
+  it("a retry skips tokens removed or moved to another user since enqueue", async () => {
+    const [a, b] = [await seedUser(), await seedUser()];
+    await addDevice("stays", a);
+    await addDevice("moved", b);
+    const asked = stubFcm();
+    const targets = [
+      { token: "stays", userId: a },
+      { token: "moved", userId: a },
+      { token: "removed", userId: a },
+    ];
+    await run({ kind: "tokens", targets, payload, attempt: 1 });
+    expect(asked).toEqual(["stays"]);
   });
 
   it("a topic message is sent once to the topic", async () => {

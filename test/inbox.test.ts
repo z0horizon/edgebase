@@ -148,3 +148,10 @@ describe("inbox routes", () => {
     expect((await call(`/v1/inbox/${id}`, authed(a.token, { method: "DELETE" }))).status).toBe(404);
   });
 });
+
+it("POST /v1/inbox/read accepts the documented maximum of 100 ids", async () => {
+  const { token } = await signUpVerified("read-100@x.io");
+  const ids = Array.from({ length: 100 }, (_, i) => `p_${i + 1}`);
+  const res = await call("/v1/inbox/read", authed(token, json({ ids })));
+  expect(res.status).toBe(204);
+});

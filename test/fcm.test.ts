@@ -98,6 +98,7 @@ describe("sendFcm", () => {
     [503, "UNAVAILABLE", "retry"],
     [400, "INVALID_ARGUMENT", "drop"],
     [401, "THIRD_PARTY_AUTH_ERROR", "drop"],
+    [401, "UNAUTHENTICATED", "retry"],
   ])("FCM %i %s → %s", async (status, code, kind) => {
     stubGoogle(() => fcmError(status, code));
     expect((await sendFcm(access, message)).kind).toBe(kind);
@@ -110,6 +111,18 @@ describe("sendFcm", () => {
     const [input, init] = vi.mocked(fetch).mock.calls[0] ?? [];
     expect(String(input)).toBe("https://fcm.googleapis.com/v1/projects/demo-project/messages:send");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer at");
+  });
+
+  it("UNAUTHENTICATED drops the cached access token so the next call mints a new one", async () => {
+    let fcmStatus = 401;
+    const exchanges = stubGoogle(() =>
+      fcmStatus === 401 ? fcmError(401, "UNAUTHENTICATED") : Response.json({ name: "m" }),
+    );
+    const first = await getAccessToken(SA, NOW);
+    expect((await sendFcm(first, message)).kind).toBe("retry");
+    fcmStatus = 200;
+    expect((await getAccessToken(SA, NOW)).token).toBe("at-2");
+    expect(exchanges).toHaveLength(2);
   });
 
   it("reads Retry-After seconds", async () => {

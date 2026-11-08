@@ -160,12 +160,13 @@ export async function markRead(
   now: number,
 ): Promise<void> {
   if (ids.length === 0) return;
+  // One JSON parameter instead of one per id keeps this under D1's 100 bound parameters.
   await db
     .prepare(
       `UPDATE inbox_item SET read_at = ? WHERE user_id = ? AND read_at IS NULL
-       AND id IN (${ids.map(() => "?").join(", ")})`,
+       AND id IN (SELECT value FROM json_each(?))`,
     )
-    .bind(now, userId, ...ids)
+    .bind(now, userId, JSON.stringify(ids))
     .run();
 }
 

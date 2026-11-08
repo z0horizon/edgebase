@@ -1,5 +1,7 @@
 import { buildFcmMessage, type FcmAccess, getAccessToken, type SendResult, sendFcm } from "./fcm";
-import type { PushPayload, PushQueueMessage } from "./types";
+import type { PushPayload, PushQueueMessage, PushTarget } from "./types";
+
+type UserTargets = Exclude<PushQueueMessage, { kind: "topic" }>;
 
 const CONCURRENCY = 20;
 const MAX_ATTEMPTS = 5;
@@ -23,12 +25,26 @@ async function mapLimit<T, R>(
   return out;
 }
 
-async function tokensOf(db: D1Database, userIds: string[]): Promise<string[]> {
+/**
+ * The current device rows behind a message. Retries re-check ownership, so a token that was
+ * removed or moved to another user while the retry waited never gets the old user's push.
+ */
+async function targetsOf(db: D1Database, message: UserTargets): Promise<PushTarget[]> {
+  if (message.kind === "users") {
+    const rows = await db
+      .prepare(
+        `SELECT token, user_id FROM device WHERE user_id IN (SELECT value FROM json_each(?))`,
+      )
+      .bind(JSON.stringify(message.userIds))
+      .all<{ token: string; user_id: string }>();
+    return rows.results.map((r) => ({ token: r.token, userId: r.user_id }));
+  }
   const rows = await db
-    .prepare(`SELECT token FROM device WHERE user_id IN (${userIds.map(() => "?").join(", ")})`)
-    .bind(...userIds)
-    .all<{ token: string }>();
-  return rows.results.map((r) => r.token);
+    .prepare(`SELECT token, user_id FROM device WHERE token IN (SELECT value FROM json_each(?))`)
+    .bind(JSON.stringify(message.targets.map((t) => t.token)))
+    .all<{ token: string; user_id: string }>();
+  const owner = new Map(rows.results.map((r) => [r.token, r.user_id]));
+  return message.targets.filter((t) => owner.get(t.token) === t.userId);
 }
 
 async function deleteTokens(db: D1Database, tokens: string[]): Promise<void> {
@@ -72,33 +88,32 @@ async function handleMessage(
     return;
   }
 
-  const tokens =
-    message.kind === "users" ? await tokensOf(env.DB, message.userIds) : message.tokens;
-  if (tokens.length === 0) return;
+  const targets = await targetsOf(env.DB, message);
+  if (targets.length === 0) return;
   const payload: PushPayload = message.payload;
   const token = await access();
-  const results = await mapLimit(tokens, CONCURRENCY, (t) =>
-    sendFcm(token, buildFcmMessage(payload, { token: t })),
+  const results = await mapLimit(targets, CONCURRENCY, (t) =>
+    sendFcm(token, buildFcmMessage(payload, { token: t.token })),
   );
 
   const dead: string[] = [];
-  const retry: string[] = [];
+  const retry: PushTarget[] = [];
   let retryAfterSec: number | null = null;
   results.forEach((result, i) => {
-    const t = tokens[i] as string;
-    if (result.kind === "dead") dead.push(t);
+    const t = targets[i] as PushTarget;
+    if (result.kind === "dead") dead.push(t.token);
     if (result.kind === "retry") {
       retry.push(t);
       if (result.retryAfterSec !== null)
         retryAfterSec = Math.max(retryAfterSec ?? 0, result.retryAfterSec);
     }
-    logDrop(result, t);
+    logDrop(result, t.token);
   });
   if (dead.length > 0) await deleteTokens(env.DB, dead);
   if (retry.length > 0) {
     await retryLater(
       env,
-      { kind: "tokens", tokens: retry, payload, attempt: message.attempt },
+      { kind: "tokens", targets: retry, payload, attempt: message.attempt },
       retryAfterSec,
     );
   }

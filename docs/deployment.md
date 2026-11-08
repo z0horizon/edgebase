@@ -49,8 +49,9 @@ pnpm run deploy
 
 - **Apple client secret** expires after 6 months: rerun `scripts/apple-secret.mjs` and
   `wrangler secret put APPLE_CLIENT_SECRET` before then.
-- **Watch the cleanup log** (`cleanup {...}` daily): `dbBytes` and `inboxBytes` approaching 10 GB
-  means it is time for the mitigations in [cost.md](cost.md).
+- **Watch the cleanup log** (`cleanup {...}` hourly): `dbBytes` and `inboxBytes` approaching 10 GB
+  means it is time for the mitigations in [cost.md](cost.md); repeated "ran out of time" warnings
+  mean deletes are falling behind writes.
 - **DLQ** `edgebase-push-dlq` has no consumer; inspect it in the dashboard when pushes go missing.
 
 ## Clients
@@ -58,5 +59,7 @@ pnpm run deploy
 - Web: `better-auth/client` with cookies; FCM web token from the Firebase JS SDK, then `PUT /v1/devices`.
 - Expo: `@better-auth/expo` client; Google/Apple ID token sign-in; FCM token via React Native Firebase.
 - Flutter: REST with `Authorization: Bearer` (token from the `set-auth-token` header on sign-in);
-  GitHub via browser OAuth with `callbackURL = <BASE_URL>/v1/auth/app-callback`.
+  GitHub via browser OAuth with `callbackURL = <BASE_URL>/v1/auth/app-callback?challenge=<c>`, then
+  `POST /v1/auth/app-exchange { token, verifier }` (see [api.md](api.md)).
+- Web on another origin: list it in `TRUSTED_ORIGINS`; CORS with credentials is then allowed.
 - Android apps create two notification channels: `default` and `promotions`.

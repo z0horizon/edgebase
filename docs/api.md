@@ -35,6 +35,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | DELETE | `/v1/inbox/{id}` | user | delete a personal item |
 | POST | `/v1/push` | API key | send or schedule a push |
 | GET | `/v1/auth/app-callback` | user | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
+| POST | `/v1/auth/app-exchange` | none | redeem a hand-off token with its verifier for a bearer token |
 
 ## Auth & users
 
@@ -45,10 +46,21 @@ Better Auth's endpoints are documented at https://www.better-auth.com/docs; see
 Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `marketingOptIn`,
 `createdAt`, `updatedAt`. `401` without a session.
 
-### `GET /v1/auth/app-callback`
-Use as the `callbackURL` of a browser OAuth flow started from a native app. Answers `302` to
-`<APP_SCHEME>://auth?token=<ott>`; exchange `ott` once at `POST /api/auth/one-time-token/verify`
-with `{ "token": ott }` for a session.
+### `GET /v1/auth/app-callback?challenge=<c>`
+Use as the `callbackURL` of a browser OAuth flow started from a native app, with
+`c = base64url(SHA-256(verifier))` (43 chars) for a random `verifier` the app keeps. Answers `302`
+to `<APP_SCHEME>://auth?token=<ott>`; `400 invalid_challenge` without a valid challenge.
+
+### `POST /v1/auth/app-exchange`
+Body `{ "token": ott, "verifier": string (43–128 chars) }` → `200 { "token": <bearer>, "user": {...} }`.
+`401` when the token is unknown, expired, already tried, or the verifier does not match.
+`/api/auth/one-time-token/verify` is disabled (`404`).
+
+## CORS
+
+Browsers from an `http(s)://` origin listed in `TRUSTED_ORIGINS` get CORS with credentials,
+methods `GET POST PUT DELETE OPTIONS`, headers `content-type, authorization`, and the
+`set-auth-token` response header exposed. Other origins get no CORS headers.
 
 ## Devices
 

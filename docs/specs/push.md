@@ -55,8 +55,15 @@ FCM and retries per token.
    other client errors are logged and dropped without deleting, since they usually mean a bad
    payload or credentials, not a dead token.
 4. `429`, `5xx`, `UNAVAILABLE`, `INTERNAL`, `QUOTA_EXCEEDED` and network errors are retried by
-   enqueueing a new message holding only the failed tokens, delayed by `Retry-After` or
+   enqueueing a new message holding only the failed `{ token, userId }` pairs, delayed by `Retry-After` or
    `30 s × 2^attempt` (capped at 1 h). The fifth failed attempt goes to `PUSH_DLQ` instead.
+   Before a retry is sent, each token is checked against `device` again and skipped unless it
+   still belongs to the same user, so a token removed at sign-out or moved to another user never
+   receives the earlier user's push.
+6. `UNAUTHENTICATED` from FCM (our access token rejected, e.g. after a service-account key
+   rotation) evicts the cached access token and retries the push.
+7. The consumer takes one message per invocation (`max_batch_size: 1`): a message can fan out
+   to 500 FCM requests, and this keeps an invocation under the Workers subrequest limit.
 5. An unexpected error in a message calls `message.retry()`; after the queue's `max_retries` (3)
    Cloudflare moves it to the DLQ. The DLQ has no consumer; messages expire there.
 

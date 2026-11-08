@@ -48,7 +48,10 @@ export const PushRequestSchema = v.object({
 });
 export type PushRequest = v.InferOutput<typeof PushRequestSchema>;
 
+/** A device token together with the user it belonged to when the push was addressed. */
+export type PushTarget = { token: string; userId: string };
+
 export type PushQueueMessage =
   | { kind: "users"; userIds: string[]; payload: PushPayload; attempt: number }
-  | { kind: "tokens"; tokens: string[]; payload: PushPayload; attempt: number }
+  | { kind: "tokens"; targets: PushTarget[]; payload: PushPayload; attempt: number }
   | { kind: "topic"; topic: string; payload: PushPayload; attempt: number };
