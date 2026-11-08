@@ -65,3 +65,13 @@ FCM and retries per token.
 Mobile apps subscribe with the FCM SDK (`subscribeToTopic`); the server stores no
 subscriptions. Conventions: `all` for broadcasts, `promotions` for marketing. Web clients cannot
 subscribe to topics client-side and receive per-user pushes only.
+
+## Scheduling
+
+1. `POST /v1/push` with `sendAt` stores the request (without `sendAt`) in `scheduled_push` with
+   `send_at` in epoch ms, and answers `202 { scheduled: true }`.
+2. A cron every minute (`src/jobs/scheduled.ts`, `enqueueDuePushes`) takes up to 100 due rows in
+   `send_at` order and runs the same dispatch as an immediate push, so opt-in and user existence
+   are checked at send time. Precision is about one minute.
+3. A row is deleted after its dispatch; if dispatch throws, the row stays and is retried on the
+   next minute. A row whose stored request no longer validates is logged and deleted.
