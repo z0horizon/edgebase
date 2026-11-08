@@ -16,8 +16,6 @@
     "@better-auth/expo": "^1.7.18",
     "better-auth": "^1.7.18",
     "hono": "^4.13.17",
-    "kysely": "^0.29.8",
-    "kysely-d1": "^0.4.0",
     "valibot": "^1.5.0"
   },
   "devDependencies": {
