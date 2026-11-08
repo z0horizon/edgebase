@@ -24,7 +24,7 @@ It asks for what `.env.production` lacks, then:
 6. uploads every secret with `wrangler secret bulk` (a draft Worker is created if none exists yet);
 7. creates the first admin from `ADMIN_EMAIL` and `ADMIN_PASSWORD` (see below; skipped with
    `--yes` when `ADMIN_EMAIL` is empty);
-8. creates `.dev.vars` for local dev when it does not exist.
+8. creates `.dev.vars` for local dev, or fills its empty secrets, never replacing a value.
 
 Rerun it any time: each step skips what already exists. Every key of `.env.production` is
 explained in [`.env.production.example`](../apps/server/.env.production.example).

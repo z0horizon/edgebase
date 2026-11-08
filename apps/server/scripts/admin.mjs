@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { hashPassword } from "better-auth/crypto";
 import {
   ENV_FILE,
+  ensureDevVars,
   PROD_CONFIG,
   parseEnvFile,
   serializeEnvFile,
@@ -64,6 +65,7 @@ async function main() {
     process.exit(1);
   };
   if (remote && !existsSync(file)) fail(`${file} not found: run pnpm bootstrap first`);
+  if (!remote && ensureDevVars()) console.log("✔ .dev.vars secrets filled in for local dev");
   const env = existsSync(file) ? parseEnvFile(readFileSync(file, "utf8")) : {};
   const before = JSON.stringify(env);
 

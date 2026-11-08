@@ -8,6 +8,7 @@ import { createInterface } from "node:readline/promises";
 import {
   databases,
   ENV_FILE,
+  ensureDevVars,
   PROD_CONFIG,
   parseEnvFile,
   readTemplate,
@@ -192,13 +193,7 @@ if (admin.status !== 0)
   fail("Creating the admin failed; fix it and run pnpm admin:create --remote.");
 
 // 8. Local dev secrets, separate from production.
-if (!existsSync(".dev.vars")) {
-  const local = readFileSync(".dev.vars.example", "utf8")
-    .replace(/^BETTER_AUTH_SECRET=$/m, `BETTER_AUTH_SECRET=${randomSecret()}`)
-    .replace(/^PUSH_API_KEY=$/m, `PUSH_API_KEY=${randomSecret()}`);
-  writeFileSync(".dev.vars", local, { mode: 0o600 });
-  console.log("✔ .dev.vars created for local dev");
-}
+if (ensureDevVars()) console.log("✔ .dev.vars secrets filled in for local dev");
 
 console.log(
   `\nReady. Next: pnpm run deploy\nOptional sign-in providers and push: fill them in ${ENV_FILE}, then pnpm bootstrap again.`,

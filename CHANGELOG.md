@@ -22,6 +22,7 @@ What changed for people building on EdgeBase. The format follows
 - `@edgebase/core` exports `app`, `worker`, `requireUser`, `requireAuthConfig`, `requireApiKey`, `jsonError` and `parseBody` for your own routes. See [docs/extending.md](docs/extending.md).
 - `pnpm admin:create [--remote]` and `pnpm bootstrap` create the first admin from `ADMIN_EMAIL` and `ADMIN_PASSWORD` in a gitignored file, without mail; an empty password is generated.
 - `pnpm admin:dev` starts the Worker and the admin page together.
+- `pnpm admin:create` and `pnpm bootstrap` create `apps/server/.dev.vars` or fill its empty secrets, never replacing a value; no manual copy of `.dev.vars.example` is needed.
 - Admin features need two-factor: an admin without TOTP gets `403 two_factor_required` on `/api/auth/admin/*` and the admin-session push routes, and the admin page walks them through setting it up. `pnpm admin:create --reset-2fa` resets an admin who lost their authenticator.
 - MIT license.
 

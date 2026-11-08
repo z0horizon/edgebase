@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { experimental_readRawConfig } from "wrangler";
 import {
+  ensureDevVars,
   parseEnvFile,
   renderConfig,
   secretsPayload,
@@ -173,5 +177,32 @@ describe("secretsPayload", () => {
       () => secretsPayload({ ...valid, FCM_SERVICE_ACCOUNT_FILE: "bad.json" }, readFile),
       /private_key/,
     );
+  });
+});
+
+describe("ensureDevVars", () => {
+  it("fills empty local secrets once and never replaces one", () => {
+    const home = process.cwd();
+    process.chdir(mkdtempSync(join(tmpdir(), "devvars-")));
+    try {
+      writeFileSync(".dev.vars.example", "BETTER_AUTH_SECRET=\nPUSH_API_KEY=\nOTHER=\n");
+      assert.equal(
+        ensureDevVars(() => "s1"),
+        true,
+      );
+      assert.equal(
+        readFileSync(".dev.vars", "utf8"),
+        "BETTER_AUTH_SECRET=s1\nPUSH_API_KEY=s1\nOTHER=\n",
+      );
+      assert.equal(
+        ensureDevVars(() => "s2"),
+        false,
+      );
+      writeFileSync(".dev.vars", "BETTER_AUTH_SECRET=kept\nPUSH_API_KEY=\n");
+      ensureDevVars(() => "s3");
+      assert.equal(readFileSync(".dev.vars", "utf8"), "BETTER_AUTH_SECRET=kept\nPUSH_API_KEY=s3\n");
+    } finally {
+      process.chdir(home);
+    }
   });
 });

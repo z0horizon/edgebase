@@ -1,7 +1,8 @@
 // Turns .env.production (gitignored) and the committed wrangler.jsonc template into
 // wrangler.production.jsonc, so no deploy-specific value ever lives in a committed file.
 // Usage: node scripts/prod-config.mjs   (pnpm run deploy and db:migrate:remote call it first)
-import { readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
@@ -133,6 +134,22 @@ export function secretsPayload(env, readFile = (path) => readFileSync(path, "utf
     payload.FCM_SERVICE_ACCOUNT = JSON.stringify(sa);
   }
   return payload;
+}
+
+/**
+ * Local secrets: creates .dev.vars from its example and fills an empty BETTER_AUTH_SECRET or
+ * PUSH_API_KEY, never replacing a value, since TOTP secrets and sessions depend on the first.
+ * Returns whether it changed the file.
+ */
+export function ensureDevVars(secret = () => randomBytes(32).toString("base64")) {
+  const before = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : null;
+  let text = before ?? readFileSync(".dev.vars.example", "utf8");
+  for (const key of ["BETTER_AUTH_SECRET", "PUSH_API_KEY"]) {
+    text = text.replace(new RegExp(`^${key}=$`, "m"), `${key}=${secret()}`);
+  }
+  if (text === before) return false;
+  writeFileSync(".dev.vars", text, { mode: 0o600 });
+  return true;
 }
 
 export function readTemplate() {

@@ -11,9 +11,9 @@ Requirements: Node.js 22+, pnpm 10+, Wrangler logged in (`npx wrangler login`), 
 ```bash
 pnpm install
 pnpm typecheck && pnpm lint && pnpm test
-cp apps/server/.dev.vars.example apps/server/.dev.vars   # or let pnpm bootstrap create it
 pnpm db:migrate:local
-pnpm admin:create       # local admin; email asked, password saved in apps/server/.env.local
+pnpm admin:create       # local secrets in apps/server/.dev.vars, and an admin whose password
+                        # is saved in apps/server/.env.local
 pnpm admin:dev          # Worker and admin page: http://localhost:5173/admin/
 ```
 
