@@ -3,6 +3,7 @@ import { appCallback } from "./auth/app-callback";
 import { createAuth, type SessionUser } from "./auth/auth";
 import { authRateLimit, requireAuthConfig, requireUser } from "./auth/middleware";
 import { jsonError } from "./http";
+import { deviceRoutes } from "./push/devices";
 
 export type AppEnv = { Bindings: Env; Variables: { user: SessionUser } };
 
@@ -26,6 +27,7 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).
 app.use("/v1/*", requireUser);
 app.get("/v1/me", (c) => c.json(c.get("user")));
 app.get("/v1/auth/app-callback", appCallback);
+app.route("/v1/devices", deviceRoutes);
 
 app.notFound(() => jsonError(404, "not_found", "Route not found"));
 
