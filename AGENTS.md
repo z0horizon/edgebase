@@ -10,3 +10,4 @@
 8. **Time is a parameter**: functions that depend on the clock take `now: number`, so tests pass it instead of faking time.
 9. **Docs follow code**: `docs/design.md`, `docs/api.md` and `docs/specs/*` describe behaviour that exists; change them in the same commit as that behaviour.
 10. **Storage is bounded**: every table that grows has a TTL or cap enforced in `src/jobs/cleanup.ts`. A new growing table without one is a bug.
+11. **No deploy values in git**: account IDs, database IDs, worker URLs, emails and secrets live only in `.env.production` (gitignored); `wrangler.jsonc` stays a template and `wrangler.production.jsonc` is generated from both.

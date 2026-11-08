@@ -4,3 +4,5 @@ node_modules/
 coverage/
 docs/superpowers/
 .superpowers/
+.env.production
+wrangler.production.jsonc
