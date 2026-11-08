@@ -7,7 +7,8 @@
 
 ## Errors and status codes
 
-Every error body is `{ "error": { "code": string, "message": string } }`.
+Every error body from EdgeBase routes is `{ "error": { "code": string, "message": string } }`.
+Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", "message" }`).
 
 | Status | Code | When |
 |---|---|---|
@@ -23,3 +24,20 @@ Every error body is `{ "error": { "code": string, "message": string } }`.
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/health` | none | liveness, answers `{ "ok": true }` |
+| ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, verify email, reset password, delete user, update user, one-time-token verify |
+| GET | `/v1/me` | user | the signed-in user |
+| GET | `/v1/auth/app-callback` | user | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
+
+## Auth & users
+
+Better Auth's endpoints are documented at https://www.better-auth.com/docs; see
+[specs/auth-and-users.md](specs/auth-and-users.md) for how EdgeBase configures them.
+
+### `GET /v1/me`
+Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `marketingOptIn`,
+`createdAt`, `updatedAt`. `401` without a session.
+
+### `GET /v1/auth/app-callback`
+Use as the `callbackURL` of a browser OAuth flow started from a native app. Answers `302` to
+`<APP_SCHEME>://auth?token=<ott>`; exchange `ott` once at `POST /api/auth/one-time-token/verify`
+with `{ "token": ott }` for a session.
