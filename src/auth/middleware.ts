@@ -28,3 +28,23 @@ export const authRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   await next();
 };
+
+async function sha256(text: string): Promise<ArrayBuffer> {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+}
+
+/** Server-to-server key for sending pushes; digests make the compare constant-time at equal length. */
+export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const expected = c.env.PUSH_API_KEY?.trim();
+  if (!expected || !c.env.FCM_SERVICE_ACCOUNT?.trim()) {
+    return jsonError(503, "not_configured", "Push is not configured");
+  }
+  const [given, wanted] = await Promise.all([
+    sha256(c.req.header("x-api-key") ?? ""),
+    sha256(expected),
+  ]);
+  if (!crypto.subtle.timingSafeEqual(given, wanted)) {
+    return jsonError(401, "unauthorized", "Invalid API key");
+  }
+  await next();
+};

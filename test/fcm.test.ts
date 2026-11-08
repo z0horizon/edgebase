@@ -1,32 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildFcmMessage, getAccessToken, resetFcmCacheForTests, sendFcm } from "../src/push/fcm";
+import { makeServiceAccount } from "./helpers";
 
 const NOW = Date.UTC(2026, 10, 8);
 let SA = "";
 let PUBLIC_KEY: CryptoKey;
-
-async function makeServiceAccount(): Promise<string> {
-  const pair = (await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
-  PUBLIC_KEY = pair.publicKey;
-  const der = new Uint8Array(
-    (await crypto.subtle.exportKey("pkcs8", pair.privateKey)) as ArrayBuffer,
-  );
-  const b64 = btoa(String.fromCharCode(...der)).replace(/(.{64})/g, "$1\n");
-  return JSON.stringify({
-    project_id: "demo-project",
-    client_email: "push@demo-project.iam.gserviceaccount.com",
-    private_key: `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`,
-  });
-}
 
 /** Stubs Google's OAuth and FCM endpoints; returns the list of OAuth exchanges seen. */
 function stubGoogle(fcm: () => Response = () => Response.json({ name: "m/1" })) {
@@ -55,7 +33,7 @@ const fcmError = (status: number, errorCode: string, headers: HeadersInit = {}) 
   );
 
 beforeAll(async () => {
-  SA = await makeServiceAccount();
+  ({ json: SA, publicKey: PUBLIC_KEY } = await makeServiceAccount());
 });
 afterEach(() => {
   vi.restoreAllMocks();

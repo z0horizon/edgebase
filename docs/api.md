@@ -28,6 +28,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | GET | `/v1/me` | user | the signed-in user |
 | PUT | `/v1/devices` | user | register this device's FCM token |
 | DELETE | `/v1/devices/{token}` | user | unregister a token of the caller |
+| POST | `/v1/push` | API key | send or schedule a push |
 | GET | `/v1/auth/app-callback` | user | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
 
 ## Auth & users
@@ -52,3 +53,27 @@ app launch and whenever FCM rotates the token.
 
 ### `DELETE /v1/devices/{token}`
 → `204`. Removes the token only when it belongs to the caller.
+
+## Push
+
+### `POST /v1/push`
+Header `X-API-Key`. Body:
+
+```json
+{
+  "to": { "userIds": ["..."] },
+  "title": "Order shipped",
+  "body": "Your order #123 is on its way",
+  "data": { "orderId": "123" },
+  "category": "transactional",
+  "inbox": true,
+  "sendAt": "2026-11-09T08:00:00Z"
+}
+```
+
+`to` is `{ "userIds": string[1..500] }` or `{ "topic": string }`. `category` is `transactional`
+or `marketing`. `data` values must be strings. `inbox` and `sendAt` are optional.
+
+- Now: `202 { "users": n }` with the number of eligible users (`0` for a topic).
+- With `sendAt`: `202 { "scheduled": true }`; dispatched within a minute of `sendAt`.
+- `400` on invalid input, `401` on a wrong key, `503` when push is not configured.

@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { appCallback } from "./auth/app-callback";
 import { createAuth, type SessionUser } from "./auth/auth";
-import { authRateLimit, requireAuthConfig, requireUser } from "./auth/middleware";
+import { authRateLimit, requireApiKey, requireAuthConfig, requireUser } from "./auth/middleware";
 import { jsonError } from "./http";
 import { deviceRoutes } from "./push/devices";
+import { pushRoutes } from "./push/routes";
 
 export type AppEnv = { Bindings: Env; Variables: { user: SessionUser } };
 
@@ -24,7 +25,12 @@ app.on(
 );
 app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).handler(c.req.raw));
 
-app.use("/v1/*", requireUser);
+// User routes take a session; /v1/push takes the server API key instead.
+for (const path of ["/v1/me", "/v1/auth/*", "/v1/devices/*", "/v1/inbox/*"]) {
+  app.use(path, requireUser);
+}
+app.use("/v1/push", requireApiKey);
+app.route("/v1/push", pushRoutes);
 app.get("/v1/me", (c) => c.json(c.get("user")));
 app.get("/v1/auth/app-callback", appCallback);
 app.route("/v1/devices", deviceRoutes);

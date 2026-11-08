@@ -60,3 +60,41 @@ export async function seedUser(createdAt = Date.UTC(2026, 10, 1), extra = ""): P
     .run();
   return id;
 }
+
+/** A queue producer that records what it was given instead of sending. */
+export function fakeQueue() {
+  const sent: { body: unknown; delaySeconds?: number | undefined }[] = [];
+  const queue = {
+    async send(body: unknown, options?: QueueSendOptions) {
+      sent.push({ body, delaySeconds: options?.delaySeconds });
+    },
+    async sendBatch(messages: Iterable<MessageSendRequest>) {
+      for (const m of messages) sent.push({ body: m.body, delaySeconds: m.delaySeconds });
+    },
+  };
+  return { queue: queue as unknown as Queue, sent };
+}
+
+/** A Firebase service account with a fresh RSA key, as FCM_SERVICE_ACCOUNT holds it. */
+export async function makeServiceAccount(): Promise<{ json: string; publicKey: CryptoKey }> {
+  const pair = (await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const der = new Uint8Array(
+    (await crypto.subtle.exportKey("pkcs8", pair.privateKey)) as ArrayBuffer,
+  );
+  const b64 = btoa(String.fromCharCode(...der)).replace(/(.{64})/g, "$1\n");
+  const json = JSON.stringify({
+    project_id: "demo-project",
+    client_email: "push@demo-project.iam.gserviceaccount.com",
+    private_key: `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`,
+  });
+  return { json, publicKey: pair.publicKey };
+}
