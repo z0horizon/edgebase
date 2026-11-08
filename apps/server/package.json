@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test \"scripts/*.test.mjs\"",
     "db:migrate:local": "node scripts/migrate.mjs --local",
-    "db:migrate:remote": "node scripts/prod-config.mjs && node scripts/migrate.mjs --remote -c wrangler.production.jsonc"
+    "db:migrate:remote": "node scripts/prod-config.mjs && node scripts/migrate.mjs --remote -c wrangler.production.jsonc",
+    "admin:create": "node scripts/admin.mjs"
   },
   "dependencies": {
     "@edgebase/core": "workspace:*",
@@ -19,6 +20,7 @@
     "valibot": "^1.5.0"
   },
   "devDependencies": {
+    "better-auth": "^1.7.18",
     "typescript": "^7.0.2",
     "wrangler": "^4.158.0"
   }

@@ -4,6 +4,7 @@ import { appCallback, appExchange } from "./auth/app-callback";
 import { createAuth, type SessionUser } from "./auth/auth";
 import {
   authRateLimit,
+  requireAdminTwoFactor,
   requireApiKey,
   requireAuthConfig,
   requireUser,
@@ -60,6 +61,7 @@ app.on(
 );
 // Native apps redeem one-time tokens only through /v1/auth/app-exchange, which checks the verifier.
 app.post("/api/auth/one-time-token/verify", () => jsonError(404, "not_found", "Route not found"));
+app.use("/api/auth/admin/*", requireAdminTwoFactor);
 app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).handler(c.req.raw));
 
 // User routes take a session; /v1/push takes the server API key instead.

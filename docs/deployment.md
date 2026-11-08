@@ -22,7 +22,9 @@ It asks for what `.env.production` lacks, then:
 4. creates the queues `<PROJECT_NAME>-push` and `<PROJECT_NAME>-push-dlq` when missing;
 5. writes `wrangler.production.jsonc` and applies the remote migrations;
 6. uploads every secret with `wrangler secret bulk` (a draft Worker is created if none exists yet);
-7. creates `.dev.vars` for local dev when it does not exist.
+7. creates the first admin from `ADMIN_EMAIL` and `ADMIN_PASSWORD` (see below; skipped with
+   `--yes` when `ADMIN_EMAIL` is empty);
+8. creates `.dev.vars` for local dev when it does not exist.
 
 Rerun it any time: each step skips what already exists. Every key of `.env.production` is
 explained in [`.env.production.example`](../apps/server/.env.production.example).
@@ -64,13 +66,24 @@ is served at `<BASE_URL>/admin/`. Locally, run `pnpm --filter @edgebase/admin bu
 `pnpm admin:dev`, which starts the Worker and the page together, for live reload at
 `http://localhost:5173/admin/`.
 
-The first admin is set in D1; after that, admins grant the role through
-`POST /api/auth/admin/set-role`:
+The first admin comes from `ADMIN_EMAIL` and `ADMIN_PASSWORD`: `pnpm bootstrap` asks for the
+email, generates the password into `.env.production` and creates the account, verified, with no
+mail sent. `pnpm admin:create --remote` does it again, for example to reset that password after
+changing it in the file. `pnpm admin:create` does the same for the local database, keeping both
+values in `apps/server/.env.local` (gitignored). Further admins are granted from the Users page
+(`POST /api/auth/admin/set-role`).
 
-```bash
-wrangler d1 execute DB --remote -c wrangler.production.jsonc \
-  --command "UPDATE user SET role = 'admin' WHERE email = '<your email>'"
-```
+Admin features need two-factor: at first sign-in the page shows a QR code for an authenticator
+app and then ten backup codes. An admin who has lost both the app and the codes is reset with
+`pnpm admin:create --remote --reset-2fa` (with their email as `ADMIN_EMAIL`), and sets it up again.
+
+### Optional: Cloudflare Access in front of the admin page
+
+For a second wall that needs no code, put [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/self-hosted-public-app/)
+(Zero Trust, free up to 50 users) on `<BASE_URL>/admin/*` and `<BASE_URL>/api/auth/admin/*`, with
+a policy that lets in only your admins' emails or identity provider. Do not cover `/api/auth/*`
+or `/v1/*` as a whole: apps and your servers call those without an Access login. The page's
+other calls (`/v1/push`, `/v1/templates`) stay guarded by the admin session and two-factor.
 
 ## Recurring
 

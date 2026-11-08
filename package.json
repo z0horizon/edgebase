@@ -7,6 +7,7 @@
     "bootstrap": "pnpm --filter @edgebase/server run bootstrap",
     "dev": "pnpm --filter @edgebase/server run dev",
     "admin:dev": "pnpm --parallel --filter @edgebase/server --filter @edgebase/admin run dev",
+    "admin:create": "pnpm --filter @edgebase/server run admin:create",
     "deploy": "pnpm --filter @edgebase/server run deploy",
     "types": "pnpm --filter @edgebase/server run types",
     "typecheck": "pnpm -r typecheck",

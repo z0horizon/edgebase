@@ -253,13 +253,31 @@ describe("admin, two-factor, organizations, locale", () => {
     const { userId, token } = await signUpVerified("admin@x.io");
     const list = () => call("/api/auth/admin/list-users", authed(token));
     expect((await list()).status).toBe(403);
-    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+    await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+      .bind(userId)
+      .run();
     expect((await list()).status).toBe(200);
+  });
+
+  it("an admin without two-factor gets 403 two_factor_required until TOTP is on", async () => {
+    const { userId, token } = await signUpVerified("admin-no-tfa@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+    const list = await call("/api/auth/admin/list-users", authed(token));
+    expect(list.status).toBe(403);
+    expect(await list.json()).toMatchObject({ error: { code: "two_factor_required" } });
+    // Setting it up stays open, or the admin could never get in.
+    const enable = await call(
+      "/api/auth/two-factor/enable",
+      authed(token, json({ password: PASSWORD })),
+    );
+    expect(enable.status).toBe(200);
   });
 
   it("a banned user's session stops working", async () => {
     const admin = await signUpVerified("banner@x.io");
-    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(admin.userId).run();
+    await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+      .bind(admin.userId)
+      .run();
     const target = await signUpVerified("banned@x.io");
     const ban = await call(
       "/api/auth/admin/ban-user",
@@ -322,7 +340,9 @@ describe("admin, two-factor, organizations, locale", () => {
 
   it("admin remove-user also deletes the user's inbox and opens", async () => {
     const admin = await signUpVerified("remover@x.io");
-    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(admin.userId).run();
+    await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+      .bind(admin.userId)
+      .run();
     const target = await signUpVerified("removed@x.io");
     await env.INBOX_DB.prepare(
       "INSERT INTO inbox_item (user_id, title, body, category, created_at) VALUES (?, 't', 'b', 'transactional', 1)",

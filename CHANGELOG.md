@@ -20,12 +20,16 @@ What changed for people building on EdgeBase. The format follows
 ### Added
 
 - `@edgebase/core` exports `app`, `worker`, `requireUser`, `requireAuthConfig`, `requireApiKey`, `jsonError` and `parseBody` for your own routes. See [docs/extending.md](docs/extending.md).
+- `pnpm admin:create [--remote]` and `pnpm bootstrap` create the first admin from `ADMIN_EMAIL` and `ADMIN_PASSWORD` in a gitignored file, without mail; an empty password is generated.
+- `pnpm admin:dev` starts the Worker and the admin page together.
+- Admin features need two-factor: an admin without TOTP gets `403 two_factor_required` on `/api/auth/admin/*` and the admin-session push routes, and the admin page walks them through setting it up. `pnpm admin:create --reset-2fa` resets an admin who lost their authenticator.
 - MIT license.
 
 ### Upgrade
 
 - Move `.env.production`, `.dev.vars` and `.wrangler/` from the repository root into `apps/server/`. `pnpm bootstrap` refuses to run until you do.
 - A relative `FCM_SERVICE_ACCOUNT_FILE` now resolves from `apps/server/`.
+- Existing admins set up two-factor at their next sign-in to the admin page; API-key callers of `/v1/push` are unaffected.
 - Routes you added to `src/app.ts` move to `apps/server/src/index.ts`.
 
 ## [0.1.0] - 2026-11-08

@@ -13,7 +13,8 @@ pnpm install
 pnpm typecheck && pnpm lint && pnpm test
 cp apps/server/.dev.vars.example apps/server/.dev.vars   # or let pnpm bootstrap create it
 pnpm db:migrate:local
-pnpm dev
+pnpm admin:create       # local admin; email asked, password saved in apps/server/.env.local
+pnpm admin:dev          # Worker and admin page: http://localhost:5173/admin/
 ```
 
 ## Start a new project from this template

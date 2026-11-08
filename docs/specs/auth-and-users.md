@@ -64,10 +64,13 @@ user routes answer `503`.
     one machine; Turnstile stops many machines sending emails to random addresses.
 11. Roles come from the Better Auth `admin` plugin: new users get `role = "user"` (rows from before
     `0004` have null, treated the same); `admin` reaches `/api/auth/admin/*` (list, create, remove,
-    ban, set role, impersonate, revoke sessions).
-    Banning deletes the user's sessions, so the next request answers `401`. The first admin is set
-    in D1 (see deployment.md). The `/admin` page (`apps/admin/`) signs admins in with email, password
-    and TOTP, manages users through these routes, and sends pushes and edits templates with the
+    ban, set role, impersonate, revoke sessions), but only with two-factor on: until then an
+    admin's session answers `403 two_factor_required` there and on the admin-session routes of
+    api.md, so a leaked password alone reaches nothing. Setting up 2FA stays open to them.
+    Banning deletes the user's sessions, so the next request answers `401`. The first admin comes
+    from `pnpm admin:create` or bootstrap (see deployment.md). The `/admin` page (`apps/admin/`)
+    signs admins in with email, password and TOTP, walks an admin without TOTP through setting it
+    up (QR code, confirming code, backup codes), manages users through these routes, and sends pushes and edits templates with the
     admin session (see api.md, Authentication). It is served with a CSP that allows only its own
     scripts, and renders user data as text.
 12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;

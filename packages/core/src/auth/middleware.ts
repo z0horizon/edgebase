@@ -37,6 +37,21 @@ export const topicRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+const twoFactorRequired = () =>
+  jsonError(403, "two_factor_required", "Turn on two-factor authentication to use admin features");
+
+/**
+ * An admin without TOTP may sign in, but only to set it up: a leaked password alone must not
+ * reach users, bans or pushes.
+ */
+export const requireAdminTwoFactor: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const session = await createAuth(c.env, c.executionCtx).api.getSession({
+    headers: c.req.raw.headers,
+  });
+  if (session?.user.role === "admin" && !session.user.twoFactorEnabled) return twoFactorRequired();
+  await next();
+};
+
 /**
  * Server-to-server key for sending pushes; digests make the compare constant-time at equal length.
  * Without the header, a session of an admin from the Worker's own origin (the /admin page) is
@@ -56,6 +71,7 @@ export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
       ? await createAuth(c.env, c.executionCtx).api.getSession({ headers: c.req.raw.headers })
       : null;
     if (session?.user.role !== "admin") return jsonError(401, "unauthorized", "Invalid API key");
+    if (!session.user.twoFactorEnabled) return twoFactorRequired();
     await next();
     return;
   }

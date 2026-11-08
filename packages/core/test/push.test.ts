@@ -280,7 +280,9 @@ describe("admin session on server routes (the /admin page)", () => {
   const asAdmin = async (email: string, admin: boolean) => {
     const { userId, token } = await signUpVerified(email);
     if (admin)
-      await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+      await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+        .bind(userId)
+        .run();
     return token;
   };
 
@@ -301,6 +303,14 @@ describe("admin session on server routes (the /admin page)", () => {
       json({ ...base, to: { topic: "all" } }, { headers: { origin: "https://evil.test" } }),
     );
     expect((await call("/v1/push", foreign, bindings())).status).toBe(401);
+  });
+
+  it("refuses an admin without two-factor", async () => {
+    const { userId, token } = await signUpVerified("page-admin-no-tfa@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+    const res = await call("/v1/push", authed(token), bindings());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: { code: "two_factor_required" } });
   });
 
   it("refuses an admin's write that carries no Origin", async () => {

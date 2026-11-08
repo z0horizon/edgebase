@@ -180,7 +180,18 @@ console.log(
   `✔ Secrets uploaded${off.length > 0 ? `; not set (feature off): ${off.join(", ")}` : ""}`,
 );
 
-// 7. Local dev secrets, separate from production.
+// 7. The first admin, from ADMIN_EMAIL and ADMIN_PASSWORD.
+const admin = spawnSync(
+  "node",
+  ["scripts/admin.mjs", "--remote", "--keep-existing", ...(yes ? ["--yes"] : [])],
+  {
+    stdio: "inherit",
+  },
+);
+if (admin.status !== 0)
+  fail("Creating the admin failed; fix it and run pnpm admin:create --remote.");
+
+// 8. Local dev secrets, separate from production.
 if (!existsSync(".dev.vars")) {
   const local = readFileSync(".dev.vars.example", "utf8")
     .replace(/^BETTER_AUTH_SECRET=$/m, `BETTER_AUTH_SECRET=${randomSecret()}`)

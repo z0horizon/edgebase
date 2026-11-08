@@ -217,6 +217,9 @@ importers:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
+      uqr:
+        specifier: 0.1.3
+        version: 0.1.3
       vite:
         specifier: ^8.3.6
         version: 8.3.6(esbuild@0.28.2)(jiti@2.7.0)
@@ -233,6 +236,9 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0(typescript@7.0.2)
     devDependencies:
+      better-auth:
+        specifier: ^1.7.18
+        version: 1.7.18(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vitest@5.1.0(vite@8.3.6(esbuild@0.28.2)(jiti@2.7.0)))
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -3168,6 +3174,9 @@ packages:
     peerDependencies:
       browserslist: '>= 4.21.0'
 
+  uqr@0.1.3:
+    resolution: {integrity: sha512-0rjE8iEJe4YmT9TOhwsZtqCMRLc5DXZUI2UEYUUg63ikBkqqE5EYWaI0etFe/5KUcmcYwLih2RND1kq+hrUJXA==}
+
   use-callback-ref@1.3.3:
     resolution: {integrity: sha512-jQL3lRnocaFtu3V00JToYz/4QkNWswxijDaCVNZRiRTO3HQDLsdu1ZtmIUvV4yPp+rvWm5j0y0TG/S61cuijTg==}
     engines: {node: '>=10'}
@@ -5982,6 +5991,8 @@ snapshots:
       browserslist: 4.29.5
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uqr@0.1.3: {}
 
   use-callback-ref@1.3.3(@types/react@19.3.0)(react@19.3.1):
     dependencies:

@@ -9,6 +9,7 @@ import { PushesPage } from "./pages/Pushes";
 import { SendPage } from "./pages/Send";
 import { SignIn } from "./pages/SignIn";
 import { TemplatesPage } from "./pages/Templates";
+import { TwoFactorSetup } from "./pages/TwoFactorSetup";
 import { UsersPage } from "./pages/Users";
 
 const VIEWS = {
@@ -50,6 +51,10 @@ export function App() {
       </div>
     );
   }
+  const signOut = async () => {
+    await api("/api/auth/sign-out", { method: "POST", body: {} }).catch(() => {});
+    setMe(null);
+  };
   if (me?.role !== "admin") {
     return (
       <>
@@ -58,11 +63,14 @@ export function App() {
       </>
     );
   }
-
-  const signOut = async () => {
-    await api("/api/auth/sign-out", { method: "POST", body: {} }).catch(() => {});
-    setMe(null);
-  };
+  if (!me.twoFactorEnabled) {
+    return (
+      <>
+        <TwoFactorSetup email={me.email} onDone={loadSession} onSignOut={signOut} />
+        <Toaster />
+      </>
+    );
+  }
   const Page = VIEWS[view].page;
 
   return (
