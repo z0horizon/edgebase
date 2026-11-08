@@ -152,6 +152,17 @@ describe("inbox routes", () => {
     expect((await res.json<{ items: unknown[] }>()).items).toHaveLength(expected);
   });
 
+  it("the inbox page carries the unread count, so opening the app takes one call", async () => {
+    const { userId, token } = await signUpVerified("count-in-list@x.io");
+    await insertPersonal(env.INBOX_DB, [userId, userId, userId], p("three"), Date.now());
+    const page = await (await call("/v1/inbox?limit=1", authed(token))).json<{
+      items: unknown[];
+      unreadCount: number;
+    }>();
+    expect(page.items).toHaveLength(1);
+    expect(page.unreadCount).toBe(3);
+  });
+
   it("read, read-all, unread-count and delete work over HTTP for the caller only", async () => {
     const a = await signUpVerified("http-a@x.io");
     const b = await signUpVerified("http-b@x.io");

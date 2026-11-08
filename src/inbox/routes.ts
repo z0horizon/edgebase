@@ -42,9 +42,12 @@ export const inboxRoutes = new Hono<AppEnv>()
     }
     const limit = v.safeParse(LimitSchema, c.req.query("limit"));
     if (!limit.success) return jsonError(400, "invalid_limit", "limit must be an integer 1-100");
-    return c.json(
-      await listInbox(c.env.INBOX_DB, { ...inboxQuery(c), cursor, limit: limit.output }),
-    );
+    const q = inboxQuery(c);
+    const [page, unread] = await Promise.all([
+      listInbox(c.env.INBOX_DB, { ...q, cursor, limit: limit.output }),
+      unreadCount(c.env.INBOX_DB, q),
+    ]);
+    return c.json({ ...page, unreadCount: unread });
   })
   .get("/unread-count", async (c) => {
     return c.json({ count: await unreadCount(c.env.INBOX_DB, inboxQuery(c)) });

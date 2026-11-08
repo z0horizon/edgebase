@@ -73,3 +73,16 @@ template changes (bindings, crons) always reach production. Never edit the gener
   `POST /v1/auth/app-exchange { token, verifier }` (see [api.md](api.md)).
 - Web on another origin: list it in `TRUSTED_ORIGINS`; CORS with credentials is then allowed.
 - Android apps create two notification channels: `default` and `promotions`.
+
+Calls that keep requests (the cost that grows with users) low:
+
+- Load the inbox with `GET /v1/inbox`; its `unreadCount` sets the badge, no second call needed.
+- `PUT /v1/devices` only when the FCM token changes, or once a week; the server refreshes a device
+  at most weekly anyway.
+- Refresh the badge when a push arrives instead of polling `unread-count`.
+- Timers and reminders the device can compute (end of a session, a daily alarm) are local
+  notifications, not pushes.
+- Broadcast topics: subscribe with the FCM SDK (`subscribeToTopic`); subscribe to a marketing
+  topic only after the user opts in, since FCM delivers to every subscribed device. Broadcasts
+  can only be marked read all at once, so call `POST /v1/inbox/read-all` when the inbox screen
+  opens.

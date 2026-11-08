@@ -4,7 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-15",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // Logs are billed per event beyond 20M a month; one request in ten is enough to see what fails.
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
   // Every authenticated request reads its session from D1; running near the database cuts that round trip.
   "placement": { "mode": "smart" },
   "d1_databases": [

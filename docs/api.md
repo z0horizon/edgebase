@@ -100,13 +100,14 @@ or `marketing`. `data` values must be strings. `inbox` and `sendAt` are optional
 ## Inbox
 
 ### `GET /v1/inbox?cursor&limit`
-→ `{ "items": InboxEntry[], "nextCursor": string | null }`. `InboxEntry` is
+→ `{ "items": InboxEntry[], "nextCursor": string | null, "unreadCount": number }`. `InboxEntry` is
 `{ id, kind: "personal" | "broadcast", title, body, data, category, read, createdAt }`.
 Pass `nextCursor` back as `cursor` for the next page. `limit` 1–100, default 20. `400 invalid_cursor`
 for a cursor this API did not issue; `400 invalid_limit` for a `limit` outside 1–100.
 
 ### `GET /v1/inbox/unread-count`
-→ `{ "count": number }`.
+→ `{ "count": number }`. The same number comes with every `GET /v1/inbox` page, so call this one
+only to refresh a badge without loading the list.
 
 ### `POST /v1/inbox/read`
 Body `{ "ids": string[] (≤ 100) }` → `204`. Only `p_` ids are applied.

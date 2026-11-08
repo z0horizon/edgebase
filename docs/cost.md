@@ -13,8 +13,24 @@ before relying on the numbers.
 | D1 rows written | 50M / month | $1.00 / M |
 | D1 storage | 5 GB | $0.75 / GB-month; 10 GB max per database |
 | Queues | 1M operations / month | $0.40 / M (a message is about 3 operations) |
+| Workers Logs | 20M log events / month | $0.60 / M |
 
-FCM is free. Email Sending is billed separately.
+FCM is free. Email Sending is billed separately. Logs are sampled at 10%
+(`observability.head_sampling_rate` in `wrangler.jsonc`), so 200M requests a month stay within the
+included log events.
+
+## What a push costs
+
+| Push | D1 rows written | Queue messages | Grows with users |
+|---|---|---|---|
+| Topic broadcast with `inbox: true` | 1 insert + 1 delete by cleanup | 1 | no |
+| Topic broadcast with `inbox: false` | 0 | 1 | no |
+| To `userIds` with `inbox: true` | ~4 per user (row and index, insert and delete) | 1 per 50 users | yes |
+| To `userIds` with `inbox: false` | 0 | 1 per 50 users | yes |
+
+So the included 50M row writes hold about 12M personal inbox items a month (~400k a day), while
+broadcasts are nearly free at any size. TTL changes storage only: every item is written once and
+deleted once whatever its lifetime.
 
 ## Write rules built into the code
 
