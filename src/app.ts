@@ -3,6 +3,7 @@ import { appCallback } from "./auth/app-callback";
 import { createAuth, type SessionUser } from "./auth/auth";
 import { authRateLimit, requireApiKey, requireAuthConfig, requireUser } from "./auth/middleware";
 import { jsonError } from "./http";
+import { inboxRoutes } from "./inbox/routes";
 import { deviceRoutes } from "./push/devices";
 import { pushRoutes } from "./push/routes";
 
@@ -34,6 +35,7 @@ app.route("/v1/push", pushRoutes);
 app.get("/v1/me", (c) => c.json(c.get("user")));
 app.get("/v1/auth/app-callback", appCallback);
 app.route("/v1/devices", deviceRoutes);
+app.route("/v1/inbox", inboxRoutes);
 
 app.notFound(() => jsonError(404, "not_found", "Route not found"));
 

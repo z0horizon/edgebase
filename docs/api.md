@@ -28,6 +28,11 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | GET | `/v1/me` | user | the signed-in user |
 | PUT | `/v1/devices` | user | register this device's FCM token |
 | DELETE | `/v1/devices/{token}` | user | unregister a token of the caller |
+| GET | `/v1/inbox` | user | list inbox items, newest first |
+| GET | `/v1/inbox/unread-count` | user | number of unread items |
+| POST | `/v1/inbox/read` | user | mark personal items read |
+| POST | `/v1/inbox/read-all` | user | mark everything read |
+| DELETE | `/v1/inbox/{id}` | user | delete a personal item |
 | POST | `/v1/push` | API key | send or schedule a push |
 | GET | `/v1/auth/app-callback` | user | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
 
@@ -77,3 +82,23 @@ or `marketing`. `data` values must be strings. `inbox` and `sendAt` are optional
 - Now: `202 { "users": n }` with the number of eligible users (`0` for a topic).
 - With `sendAt`: `202 { "scheduled": true }`; dispatched within a minute of `sendAt`.
 - `400` on invalid input, `401` on a wrong key, `503` when push is not configured.
+
+## Inbox
+
+### `GET /v1/inbox?cursor&limit`
+→ `{ "items": InboxEntry[], "nextCursor": string | null }`. `InboxEntry` is
+`{ id, kind: "personal" | "broadcast", title, body, data, category, read, createdAt }`.
+Pass `nextCursor` back as `cursor` for the next page. `limit` 1–100, default 20. `400 invalid_cursor`
+for a cursor this API did not issue.
+
+### `GET /v1/inbox/unread-count`
+→ `{ "count": number }`.
+
+### `POST /v1/inbox/read`
+Body `{ "ids": string[] (≤ 100) }` → `204`. Only `p_` ids are applied.
+
+### `POST /v1/inbox/read-all`
+→ `204`.
+
+### `DELETE /v1/inbox/{id}`
+→ `204`, or `404` when it is not a personal item of the caller.
