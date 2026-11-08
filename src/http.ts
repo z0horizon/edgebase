@@ -24,12 +24,15 @@ export async function parseBody<S extends v.GenericSchema>(
   return result.output;
 }
 
-export function encodeCursor(value: unknown): string {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
+export function base64url(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/, "");
+}
+
+export function encodeCursor(value: unknown): string {
+  return base64url(new TextEncoder().encode(JSON.stringify(value)));
 }
 
 /** The decoded cursor, or null when it is not one we issued. */
