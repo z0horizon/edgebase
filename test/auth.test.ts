@@ -105,9 +105,14 @@ describe("auth", () => {
       expect((await exchange(ott, VERIFIER)).status).toBe(401);
     });
 
-    it("app-callback without a challenge answers 400", async () => {
-      const { token } = await signUpVerified("e3@x.io");
-      expect((await call("/v1/auth/app-callback", authed(token))).status).toBe(400);
+    it.each([
+      ["without a challenge", "", true, "invalid_challenge"],
+      ["without a session", `?challenge=${"a".repeat(43)}`, false, "unauthorized"],
+    ])("app-callback %s redirects the app with an error", async (_name, query, signedIn, error) => {
+      const init = signedIn ? authed((await signUpVerified(`cb-${error}@x.io`)).token) : {};
+      const res = await call(`/v1/auth/app-callback${query}`, init);
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe(`edgebase://auth?error=${error}`);
     });
 
     it("Better Auth's own one-time-token verify is not reachable", async () => {

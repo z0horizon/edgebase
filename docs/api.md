@@ -34,7 +34,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | POST | `/v1/inbox/read-all` | user | mark everything read |
 | DELETE | `/v1/inbox/{id}` | user | delete a personal item |
 | POST | `/v1/push` | API key | send or schedule a push |
-| GET | `/v1/auth/app-callback` | user | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
+| GET | `/v1/auth/app-callback` | user (cookie) | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
 | POST | `/v1/auth/app-exchange` | none | redeem a hand-off token with its verifier for a bearer token |
 
 ## Auth & users
@@ -49,7 +49,8 @@ Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `mark
 ### `GET /v1/auth/app-callback?challenge=<c>`
 Use as the `callbackURL` of a browser OAuth flow started from a native app, with
 `c = base64url(SHA-256(verifier))` (43 chars) for a random `verifier` the app keeps. Answers `302`
-to `<APP_SCHEME>://auth?token=<ott>`; `400 invalid_challenge` without a valid challenge.
+to `<APP_SCHEME>://auth?token=<ott>`. Failures also redirect to the app:
+`<APP_SCHEME>://auth?error=invalid_challenge` or `<APP_SCHEME>://auth?error=unauthorized`.
 
 ### `POST /v1/auth/app-exchange`
 Body `{ "token": ott, "verifier": string (43–128 chars) }` → `200 { "token": <bearer>, "user": {...} }`.

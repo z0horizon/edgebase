@@ -18,7 +18,8 @@ items are one row per user; a broadcast is one row for everyone.
 
 1. A user's inbox is their `inbox_item` rows plus every `broadcast` created after the user's
    `createdAt`, both limited to `created_at` within the last `INBOX_TTL_DAYS` (default 30) and not
-   after now (`listInbox`).
+   after now (`listInbox`). Broadcasts with `category: "marketing"` are left out for users whose
+   `marketingOptIn` is off, matching who receives marketing pushes.
 2. Order is `created_at` DESC, then personal before broadcast, then `id` DESC. The cursor is the
    base64url JSON `{ t, k, i }` of the last returned row; a cursor that does not decode to that
    shape answers `400 invalid_cursor` (`src/inbox/routes.ts`).

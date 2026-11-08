@@ -38,6 +38,7 @@ export const inboxRoutes = new Hono<AppEnv>()
       await listInbox(c.env.INBOX_DB, {
         userId: user.id,
         userCreatedAt: user.createdAt.getTime(),
+        marketingOptIn: user.marketingOptIn === true,
         cursor,
         limit: parseLimit(c.req.query("limit")),
         now: Date.now(),
@@ -50,6 +51,7 @@ export const inboxRoutes = new Hono<AppEnv>()
     const count = await unreadCount(c.env.INBOX_DB, {
       userId: user.id,
       userCreatedAt: user.createdAt.getTime(),
+      marketingOptIn: user.marketingOptIn === true,
       now: Date.now(),
       ttlDays: Number(c.env.INBOX_TTL_DAYS),
     });

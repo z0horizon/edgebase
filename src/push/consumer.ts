@@ -109,13 +109,23 @@ async function handleMessage(
     }
     logDrop(result, t.token);
   });
-  if (dead.length > 0) await deleteTokens(env.DB, dead);
-  if (retry.length > 0) {
-    await retryLater(
-      env,
-      { kind: "tokens", targets: retry, payload, attempt: message.attempt },
-      retryAfterSec,
-    );
+  // The sends already happened: a failure from here on must not make Queues redeliver the whole
+  // message to devices that got it. A lost retry or a dead token left behind is the lesser harm.
+  try {
+    if (dead.length > 0) await deleteTokens(env.DB, dead);
+    if (retry.length > 0) {
+      await retryLater(
+        env,
+        { kind: "tokens", targets: retry, payload, attempt: message.attempt },
+        retryAfterSec,
+      );
+    }
+  } catch (error) {
+    console.error("push follow-up failed after send", {
+      dead: dead.length,
+      retry: retry.length,
+      error: String(error),
+    });
   }
 }
 

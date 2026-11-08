@@ -35,8 +35,7 @@ function stubFcm(byToken: Record<string, Response> = {}) {
 const fcmError = (status: number, errorCode: string) =>
   Response.json({ error: { status: errorCode, details: [{ errorCode }] } }, { status });
 
-async function run(body: PushQueueMessage) {
-  const queue = fakeQueue();
+async function run(body: PushQueueMessage, queue = fakeQueue()) {
   const dlq = fakeQueue();
   const batch = createMessageBatch<PushQueueMessage>("edgebase-push", [
     { id: "m1", timestamp: new Date(), attempts: 1, body },
@@ -135,5 +134,19 @@ describe("handlePushBatch", () => {
     const { result } = await run({ kind: "users", userIds: [u], payload, attempt: 0 });
     expect(fetch).not.toHaveBeenCalled();
     expect(result.explicitAcks).toEqual(["m1"]);
+  });
+
+  it("a failure after FCM sends is logged and acked, so delivered devices are not sent twice", async () => {
+    const u = await seedUser();
+    await addDevice("ok-1", u);
+    await addDevice("flaky-1", u);
+    stubFcm({ "flaky-1": fcmError(503, "UNAVAILABLE") });
+    const broken = fakeQueue();
+    broken.queue.send = async () => {
+      throw new Error("queue unavailable");
+    };
+    const { result } = await run({ kind: "users", userIds: [u], payload, attempt: 0 }, broken);
+    expect(result.explicitAcks).toEqual(["m1"]);
+    expect(result.retryMessages).toEqual([]);
   });
 });

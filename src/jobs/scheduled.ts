@@ -25,7 +25,12 @@ export async function enqueueDuePushes(env: Env, now: number): Promise<number> {
   for (const row of due.results) {
     const request = parseRequest(row.request);
     if (request) {
-      await dispatchPush(env, request, now);
+      // Once the inbox is written, the stored request drops it, so a retry only sends the push.
+      await dispatchPush(env, request, now, async () => {
+        await env.DB.prepare("UPDATE scheduled_push SET request = ? WHERE id = ?")
+          .bind(JSON.stringify({ ...request, inbox: false }), row.id)
+          .run();
+      });
       dispatched++;
     } else {
       console.error("dropping invalid scheduled push", { id: row.id });

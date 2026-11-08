@@ -64,7 +64,10 @@ FCM and retries per token.
    rotation) evicts the cached access token and retries the push.
 7. The consumer takes one message per invocation (`max_batch_size: 1`): a message can fan out
    to 500 FCM requests, and this keeps an invocation under the Workers subrequest limit.
-5. An unexpected error in a message calls `message.retry()`; after the queue's `max_retries` (3)
+5. Once a message's FCM requests have been sent, a failure while deleting dead tokens or
+   queueing the retry is logged and the message is still acked, so devices that got the push are
+   not sent it again; the cost is a lost retry for the failed tokens. An unexpected error before
+   sending calls `message.retry()`; after the queue's `max_retries` (3)
    Cloudflare moves it to the DLQ. The DLQ has no consumer; messages expire there.
 
 ## Topics
@@ -81,4 +84,5 @@ subscribe to topics client-side and receive per-user pushes only.
    `send_at` order and runs the same dispatch as an immediate push, so opt-in and user existence
    are checked at send time. Precision is about one minute.
 3. A row is deleted after its dispatch; if dispatch throws, the row stays and is retried on the
-   next minute. A row whose stored request no longer validates is logged and deleted.
+   next minute. Right after the inbox rows are written the stored request is rewritten with
+   `inbox: false`, so a retry sends the push without writing the inbox again. A row whose stored request no longer validates is logged and deleted.

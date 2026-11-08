@@ -51,7 +51,8 @@ app.post("/api/auth/one-time-token/verify", () => jsonError(404, "not_found", "R
 app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).handler(c.req.raw));
 
 // User routes take a session; /v1/push takes the server API key instead.
-for (const path of ["/v1/me", "/v1/auth/app-callback", "/v1/devices/*", "/v1/inbox/*"]) {
+// app-callback checks its own session so it can redirect failures back to the app.
+for (const path of ["/v1/me", "/v1/devices/*", "/v1/inbox/*"]) {
   app.use(path, requireUser);
 }
 app.use("/v1/push", requireApiKey);

@@ -24,13 +24,13 @@ const handoffId = async (token: string) => `app-handoff:${base64url(await sha256
  * another app that claims the scheme, because only the verifier can redeem it.
  */
 export async function appCallback(c: Context<AppEnv>): Promise<Response> {
+  // The app is waiting on its URL scheme, so failures go back there too, not to a JSON page.
+  const fail = (error: string) => c.redirect(`${c.env.APP_SCHEME}://auth?error=${error}`, 302);
   const challenge = v.safeParse(ChallengeSchema, c.req.query("challenge"));
-  if (!challenge.success) {
-    return jsonError(400, "invalid_challenge", "challenge must be a base64url SHA-256 (43 chars)");
-  }
-  const { token } = await createAuth(c.env, c.executionCtx).api.generateOneTimeToken({
-    headers: c.req.raw.headers,
-  });
+  if (!challenge.success) return fail("invalid_challenge");
+  const auth = createAuth(c.env, c.executionCtx);
+  if (!(await auth.api.getSession({ headers: c.req.raw.headers }))) return fail("unauthorized");
+  const { token } = await auth.api.generateOneTimeToken({ headers: c.req.raw.headers });
   const now = Date.now();
   // Stored in Better Auth's verification table so the daily expiry cleanup covers it.
   await c.env.DB.prepare(

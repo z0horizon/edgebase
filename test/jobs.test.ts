@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { runCleanup } from "../src/jobs/cleanup";
 import { enqueueDuePushes } from "../src/jobs/scheduled";
-import { fakeQueue, seedUser } from "./helpers";
+import { fakeQueue, seedUser, signUpVerified } from "./helpers";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 8);
@@ -177,4 +177,43 @@ describe("enqueueDuePushes", () => {
       await count(env.DB, "SELECT count(*) AS n FROM scheduled_push WHERE send_at = ?", NOW - 2),
     ).toBe(0);
   });
+
+  it("a dispatch that fails after writing the inbox does not write it again on the next run", async () => {
+    const u = await seedUser();
+    await env.DB.prepare("INSERT INTO scheduled_push (send_at, request) VALUES (?, ?)")
+      .bind(
+        NOW - 3,
+        JSON.stringify({
+          to: { userIds: [u] },
+          title: "t",
+          body: "b",
+          category: "transactional",
+          inbox: true,
+        }),
+      )
+      .run();
+    const broken = fakeQueue();
+    broken.queue.sendBatch = async () => {
+      throw new Error("queue unavailable");
+    };
+    await expect(enqueueDuePushes({ ...env, PUSH_QUEUE: broken.queue }, NOW)).rejects.toThrow();
+    const q = fakeQueue();
+    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: q.queue }, NOW)).toBe(1);
+    expect(q.sent).toHaveLength(1);
+    expect(
+      await count(env.INBOX_DB, "SELECT count(*) AS n FROM inbox_item WHERE user_id = ?", u),
+    ).toBe(1);
+  });
+});
+
+it("cleanup removes a session Better Auth itself wrote, once it has expired", async () => {
+  const { userId } = await signUpVerified("cleanup-real@x.io");
+  const row = await env.DB.prepare("SELECT expiresAt FROM session WHERE userId = ?")
+    .bind(userId)
+    .first<{ expiresAt: string }>();
+  expect(row?.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  await runCleanup(env, Date.parse(row?.expiresAt ?? "") - 1);
+  expect(await count(env.DB, "SELECT count(*) AS n FROM session WHERE userId = ?", userId)).toBe(1);
+  await runCleanup(env, Date.parse(row?.expiresAt ?? "") + 1);
+  expect(await count(env.DB, "SELECT count(*) AS n FROM session WHERE userId = ?", userId)).toBe(0);
 });

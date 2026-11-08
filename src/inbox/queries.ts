@@ -63,7 +63,16 @@ export type InboxEntry = {
 /** Position of the last returned row in the (created_at, kind, id) DESC order. */
 export type Cursor = { t: number; k: 0 | 1; i: number };
 
-type InboxQuery = { userId: string; userCreatedAt: number; now: number; ttlDays: number };
+type InboxQuery = {
+  userId: string;
+  userCreatedAt: number;
+  /** Marketing broadcasts reach only users who opted in, like marketing pushes do. */
+  marketingOptIn: boolean;
+  now: number;
+  ttlDays: number;
+};
+
+const broadcastFilter = (q: InboxQuery) => (q.marketingOptIn ? "" : " AND category <> 'marketing'");
 
 type Row = {
   id: number;
@@ -105,7 +114,7 @@ export async function listInbox(
     db
       .prepare(
         `SELECT id, title, body, data, category, NULL AS read_at, created_at FROM broadcast
-         WHERE created_at BETWEEN ? AND ? AND created_at > ?${after(BROADCAST)}
+         WHERE created_at BETWEEN ? AND ? AND created_at > ?${broadcastFilter(q)}${after(BROADCAST)}
          ORDER BY created_at DESC, id DESC LIMIT ?`,
       )
       .bind(cutoff(q), q.now, q.userCreatedAt, ...cursorParams, q.limit + 1)
@@ -146,7 +155,7 @@ export async function unreadCount(db: D1Database, q: InboxQuery): Promise<number
          (SELECT count(*) FROM inbox_item WHERE user_id = ?1 AND created_at BETWEEN ?2 AND ?5
             AND created_at > ?3 AND read_at IS NULL)
        + (SELECT count(*) FROM broadcast WHERE created_at BETWEEN ?2 AND ?5 AND created_at > ?3
-            AND created_at > ?4) AS n`,
+            AND created_at > ?4${broadcastFilter(q)}) AS n`,
     )
     .bind(q.userId, cutoff(q), readUntil, q.userCreatedAt, q.now)
     .first<number>("n");

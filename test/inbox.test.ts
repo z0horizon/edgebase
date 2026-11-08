@@ -24,6 +24,7 @@ const q = (NOW: number, userId: string, extra: Partial<Parameters<typeof listInb
   limit: 20,
   now: NOW,
   ttlDays: 30,
+  marketingOptIn: true,
   ...extra,
 });
 
@@ -101,6 +102,24 @@ describe("inbox queries", () => {
     const base = q(NOW, u, { userCreatedAt: NOW - 1 });
     expect((await listInbox(env.INBOX_DB, base)).items.map((i) => i.title)).toEqual(["new"]);
     expect(await unreadCount(env.INBOX_DB, base)).toBe(1);
+  });
+});
+
+describe("marketing broadcasts", () => {
+  it("are hidden from and not counted for users who have not opted in", async () => {
+    const NOW = epoch();
+    await insertBroadcast(env.INBOX_DB, { ...p("promo"), category: "marketing" }, NOW - 1000);
+    await insertBroadcast(env.INBOX_DB, p("notice"), NOW - 500);
+    const base = { userCreatedAt: NOW - DAY };
+    const optedOut = q(NOW, uid(), { ...base, marketingOptIn: false });
+    const optedIn = q(NOW, uid(), base);
+    expect((await listInbox(env.INBOX_DB, optedOut)).items.map((i) => i.title)).toEqual(["notice"]);
+    expect(await unreadCount(env.INBOX_DB, optedOut)).toBe(1);
+    expect((await listInbox(env.INBOX_DB, optedIn)).items.map((i) => i.title)).toEqual([
+      "notice",
+      "promo",
+    ]);
+    expect(await unreadCount(env.INBOX_DB, optedIn)).toBe(2);
   });
 });
 

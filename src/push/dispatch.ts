@@ -27,10 +27,15 @@ async function eligibleUsers(db: D1Database, ids: string[], marketing: boolean):
   return found;
 }
 
+/**
+ * `onInboxWritten` runs right after the inbox rows are stored, before anything is queued, so a
+ * caller that retries a failed dispatch can avoid writing the inbox twice.
+ */
 export async function dispatchPush(
   env: Env,
   req: PushDispatch,
   now: number,
+  onInboxWritten: () => Promise<void> = async () => {},
 ): Promise<{ users: number }> {
   const payload: PushPayload = {
     title: req.title,
@@ -40,7 +45,10 @@ export async function dispatchPush(
   };
 
   if ("topic" in req.to) {
-    if (req.inbox) await insertBroadcast(env.INBOX_DB, payload, now);
+    if (req.inbox) {
+      await insertBroadcast(env.INBOX_DB, payload, now);
+      await onInboxWritten();
+    }
     const message: PushQueueMessage = { kind: "topic", topic: req.to.topic, payload, attempt: 0 };
     await env.PUSH_QUEUE.send(message);
     return { users: 0 };
@@ -48,7 +56,10 @@ export async function dispatchPush(
 
   const users = await eligibleUsers(env.DB, req.to.userIds, req.category === "marketing");
   if (users.length === 0) return { users: 0 };
-  if (req.inbox) await insertPersonal(env.INBOX_DB, users, payload, now);
+  if (req.inbox) {
+    await insertPersonal(env.INBOX_DB, users, payload, now);
+    await onInboxWritten();
+  }
   await env.PUSH_QUEUE.sendBatch(
     chunk(users, USERS_PER_MESSAGE).map((userIds) => ({
       body: { kind: "users", userIds, payload, attempt: 0 } satisfies PushQueueMessage,
