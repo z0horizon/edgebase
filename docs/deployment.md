@@ -56,6 +56,14 @@ pnpm db:migrate:remote        # after pulling new migrations
 Both regenerate `wrangler.production.jsonc` from `wrangler.jsonc` and `.env.production` first, so
 template changes (bindings, crons) always reach production. Never edit the generated file.
 
+The first admin is set in D1; after that, admins grant the role through
+`POST /api/auth/admin/set-role`:
+
+```bash
+wrangler d1 execute DB --remote -c wrangler.production.jsonc \
+  --command "UPDATE user SET role = 'admin' WHERE email = '<your email>'"
+```
+
 ## Recurring
 
 - **Apple client secret** expires after 6 months: rerun `scripts/apple-secret.mjs`, put the result in
@@ -74,6 +82,12 @@ template changes (bindings, crons) always reach production. Never edit the gener
   `POST /v1/auth/app-exchange { token, verifier }` (see [api.md](api.md)).
 - Web on another origin: list it in `TRUSTED_ORIGINS`; CORS with credentials is then allowed.
 - Android apps create two notification channels: `default` and `promotions`.
+- Web apps subscribe to topics through `POST /v1/topics/{topic}/subscribe { token }`; the
+  Firebase JS SDK cannot.
+- On a notification tap, apps send `POST /v1/opens { pushId }` with the push's `data.pushId`.
+- 2FA: a sign-in answering `{ twoFactorRedirect: true }` sets a short-lived `better-auth.two_factor`
+  cookie; send it back with `POST /api/auth/two-factor/verify-totp { code }` (or
+  `verify-backup-code`). Expo's client keeps it; Flutter must store and resend that cookie.
 
 Calls that keep requests (the cost that grows with users) low:
 

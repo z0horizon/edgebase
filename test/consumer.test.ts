@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { handlePushBatch } from "../src/push/consumer";
 import { resetFcmCacheForTests } from "../src/push/fcm";
+import { createPushStats } from "../src/push/stats";
 import type { PushQueueMessage } from "../src/push/types";
 import { fakeQueue, makeServiceAccount, seedUser } from "./helpers";
 
@@ -148,5 +149,24 @@ describe("handlePushBatch", () => {
     const { result } = await run({ kind: "users", userIds: [u], payload, attempt: 0 }, broken);
     expect(result.explicitAcks).toEqual(["m1"]);
     expect(result.retryMessages).toEqual([]);
+  });
+
+  it("counts accepted tokens as sent and refused or out-of-retries ones as failed", async () => {
+    const u = await seedUser();
+    for (const t of ["s-ok", "s-dead", "s-bad"]) await addDevice(t, u);
+    const pushId = await createPushStats(env.DB, "transactional", Date.now());
+    const withId = { ...payload, data: { pushId: String(pushId) } };
+    stubFcm({
+      "s-dead": fcmError(404, "UNREGISTERED"),
+      "s-bad": fcmError(400, "INVALID_ARGUMENT"),
+    });
+    await run({ kind: "users", userIds: [u], payload: withId, attempt: 0 });
+    await addDevice("s-flaky", u);
+    stubFcm({ "s-flaky": fcmError(503, "UNAVAILABLE") });
+    const last = [{ token: "s-flaky", userId: u }];
+    await run({ kind: "tokens", targets: last, payload: withId, attempt: 4 });
+    expect(
+      await env.DB.prepare("SELECT sent, failed FROM push_stats WHERE id = ?").bind(pushId).first(),
+    ).toEqual({ sent: 1, failed: 3 });
   });
 });

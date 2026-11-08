@@ -34,13 +34,49 @@ FCM and retries per token.
    ISO 8601 and in the future.
 3. Dispatch (`src/push/dispatch.ts`) keeps only existing, de-duplicated user ids; for
    `category: "marketing"` only users with `marketingOptIn = 1`. Unknown ids are dropped, never
-   written to `INBOX_DB`. The response is `202 { users: <eligible count> }`.
+   written to `INBOX_DB`. The response is `202 { id, users: <eligible count> }`, `id` being the
+   push's stats row (see Stats); dispatch adds it to the push's `data` as `pushId`, overwriting a
+   caller's own `pushId` key.
 4. With `inbox: true`, one `inbox_item` per eligible user (to users) or one `broadcast` row (to a
    topic) is written before enqueueing.
 5. User pushes are queued as messages of at most 50 user ids; a topic push is one message.
 6. `category` sets delivery priority: `transactional` → Android `HIGH`, channel `default`,
    `apns-priority: 10`; `marketing` → `NORMAL`, channel `promotions`, `apns-priority: 5`
    (`src/push/fcm.ts`, `buildFcmMessage`). Apps must create both Android channels.
+
+## Idempotency
+
+1. `POST /v1/push` with `Idempotency-Key: <1–255 printable ASCII>` claims the key in
+   `push_idempotency` before doing anything (`src/push/routes.ts`). The `202` answer is stored and
+   replayed with `Idempotent-Replayed: true` to every repeat of the same key for 24 h, so a push
+   is dispatched or scheduled once however often the client retries.
+2. A repeat with a different body (SHA-256 of the validated body as JSON, so keys inside `data`,
+   `vars` and `translations` must keep their order) answers `422
+   idempotency_mismatch`; a repeat while the first request still runs answers `409
+   idempotency_in_progress`.
+3. A `400` or an unexpected error frees the key, so the corrected or retried request runs. A
+   Worker killed mid-request leaves the key at `409` until it expires.
+4. Without the header nothing changes: every request dispatches.
+
+## Templates and translations
+
+1. `PUT /v1/templates/{name}` (API key, `name` `[a-z0-9_.-]{1,64}`) stores
+   `{ title, body, data?, category?, translations? }` with the same limits as a push; at most 500
+   templates, a new name past that answers `409 limit_reached` (`src/push/templates.ts`).
+   `GET` returns it, `DELETE` removes it.
+2. A push may name `template` and pass `vars` (≤ 50, values ≤ 500 chars). Its own `title`,
+   `body`, `data`, `category` and `translations` override the template's; then every `{{name}}` in
+   the title, body, data values and translations is filled from `vars`. A placeholder without a
+   var, an unknown template or a rendered field over its limit answers `400`. Placeholders are
+   only filled when a template or `vars` is given.
+3. The template is applied when the push is accepted: a scheduled push keeps the text it was
+   accepted with even if the template changes.
+4. `translations` maps up to 50 BCP 47 tags to `{ title, body }`. Each user gets the translation
+   of their `locale` (case-insensitive), else of its language (`vi-VN` → `vi`), else the default
+   `title` and `body`; their inbox item holds the same text. Users are queued in groups per
+   translation.
+5. Topic pushes and broadcasts use the default text: a topic has no per-user locale, so apps that
+   need one subscribe to a topic per language.
 
 ## Delivery
 
@@ -70,16 +106,41 @@ FCM and retries per token.
    sending calls `message.retry()`; after the queue's `max_retries` (3)
    Cloudflare moves it to the DLQ. The DLQ has no consumer; messages expire there.
 
+## Stats
+
+1. Every accepted push gets a `push_stats` row: `category`, `users` (eligible users, set at
+   dispatch; `0` for a topic), `sent`, `failed`, `send_at` (`sendAt`, or the time it was accepted).
+2. The consumer adds FCM's answers per queue message (`src/push/stats.ts`, `recordDelivery`):
+   `sent` counts tokens FCM accepted (for a topic, one for the topic), which is not proof the
+   device displayed it; `failed` counts dead tokens, dropped requests and tokens whose last retry
+   failed. Tokens still being retried count in neither. A stats write that fails is logged and
+   never makes Queues resend.
+3. `POST /v1/opens { pushId }` (user session) records that the caller opened the push, at most
+   once per user and push; an unknown or pruned `pushId` writes nothing and still answers `204`.
+   It does not check that the push reached the caller, so `opened` can exceed `users`. Deleting
+   the account deletes the user's opens.
+4. `GET /v1/push/{id}` (API key) answers `{ id, category, users, sent, failed, opened, sendAt }`,
+   `opened` being unique users. Stats and opens are deleted 90 days after `send_at`.
+
 ## Topics
 
 Mobile apps subscribe with the FCM SDK (`subscribeToTopic`); the server stores no
-subscriptions. Conventions: `all` for broadcasts, `promotions` for marketing. Web clients cannot
-subscribe to topics client-side and receive per-user pushes only.
+subscriptions. Conventions: `all` for broadcasts, `promotions` for marketing.
+
+Web apps cannot subscribe from the Firebase JS SDK, so they call
+`POST /v1/topics/{topic}/subscribe { token }` and `/unsubscribe` with a user session
+(`src/push/topics.ts`). The token must be a device the caller registered (`404` otherwise). The
+Worker calls the Instance ID API (`iid.googleapis.com/iid/v1:batchAdd` / `:batchRemove`) with the
+service account's OAuth2 token and `access_token_auth: true`; legacy server keys are not used,
+since Google refuses them. Calls share the per-IP auth limit. A non-2xx answer or a per-token error answers `502 upstream_error`;
+without `FCM_SERVICE_ACCOUNT` the route answers `503`. Any platform's token works, though native
+apps should keep using the SDK.
 
 ## Scheduling
 
-1. `POST /v1/push` with `sendAt` stores the request (without `sendAt`) in `scheduled_push` with
-   `send_at` in epoch ms, and answers `202 { scheduled: true }`.
+1. `POST /v1/push` with `sendAt` stores the request (without `sendAt`, template applied) in
+   `scheduled_push` with `send_at` in epoch ms and its stats row's `push_id`, and answers
+   `202 { id, scheduled: true }`. Rows stored before `push_id` existed get a stats row at dispatch.
 2. A cron every minute (`src/jobs/scheduled.ts`, `enqueueDuePushes`) takes up to 100 due rows in
    `send_at` order and runs the same dispatch as an immediate push, so opt-in and user existence
    are checked at send time. Precision is about one minute.

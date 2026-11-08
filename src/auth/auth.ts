@@ -1,8 +1,11 @@
 import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
-import { bearer, captcha, oneTimeToken } from "better-auth/plugins";
+import { admin, bearer, captcha, oneTimeToken, organization, twoFactor } from "better-auth/plugins";
+import * as v from "valibot";
 import { deleteUserInbox } from "../inbox/queries";
 import { sendMail } from "../mail";
+import { deleteUserOpens } from "../push/stats";
+import { LocaleSchema } from "../push/types";
 
 const DAY_SECONDS = 86_400;
 
@@ -62,16 +65,43 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     user: {
       additionalFields: {
         marketingOptIn: { type: "boolean", required: false, defaultValue: false },
+        locale: { type: "string", required: false, validator: { input: v.nullable(LocaleSchema) } },
       },
-      deleteUser: {
-        enabled: true,
-        afterDelete: async (user) => deleteUserInbox(env.INBOX_DB, user.id),
+      deleteUser: { enabled: true },
+    },
+    // A database hook, not deleteUser.afterDelete, so admin remove-user cleans up too.
+    databaseHooks: {
+      user: {
+        delete: {
+          after: async (user) => {
+            await Promise.all([
+              deleteUserInbox(env.INBOX_DB, user.id),
+              deleteUserOpens(env.DB, user.id),
+            ]);
+          },
+        },
       },
     },
     plugins: [
       bearer(),
       oneTimeToken({ disableClientRequest: true, storeToken: "hashed" }),
       expo(),
+      // Roles: "user" (default) and "admin"; the first admin is set in D1 (see docs/deployment.md).
+      admin(),
+      // TOTP and backup codes for email + password sign-in; the authenticator app shows the API host.
+      twoFactor({ issuer: new URL(env.BASE_URL).hostname }),
+      organization({
+        // Bounds organization and member rows per user; pending invitations are capped at 100 per
+        // organization by default and expire after 48 h.
+        organizationLimit: 10,
+        membershipLimit: 100,
+        sendInvitationEmail: async ({ id, email, organization, inviter }) =>
+          mail(
+            email,
+            `Join ${organization.name}`,
+            `${inviter.user.name} invited you to ${organization.name}. Open the app to accept: ${env.APP_SCHEME}://invitation?id=${id}`,
+          ),
+      }),
       // Off until a key is set: the per-IP rate limit covers one machine, Turnstile covers botnets
       // sending sign-up and reset emails to random addresses.
       ...(has(env.TURNSTILE_SECRET_KEY)

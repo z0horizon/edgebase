@@ -1,4 +1,5 @@
 import { buildFcmMessage, type FcmAccess, getAccessToken, type SendResult, sendFcm } from "./fcm";
+import { recordDelivery } from "./stats";
 import type { PushPayload, PushQueueMessage, PushTarget } from "./types";
 
 type UserTargets = Exclude<PushQueueMessage, { kind: "topic" }>;
@@ -53,10 +54,12 @@ async function deleteTokens(db: D1Database, tokens: string[]): Promise<void> {
     .run();
 }
 
+const retriesLeft = (message: PushQueueMessage) => message.attempt + 1 < MAX_ATTEMPTS;
+
 /** Retries go out as new messages so already-delivered tokens are never sent twice. */
 async function retryLater(env: Env, message: PushQueueMessage, retryAfterSec: number | null) {
   const next = { ...message, attempt: message.attempt + 1 };
-  if (next.attempt >= MAX_ATTEMPTS) {
+  if (!retriesLeft(message)) {
     await env.PUSH_DLQ.send(next);
     return;
   }
@@ -68,6 +71,9 @@ function logDrop(result: SendResult, target: string) {
   if (result.kind === "drop")
     console.error("fcm dropped", { target, status: result.status, code: result.code });
 }
+
+/** The push_stats row of a message; messages queued before push stats existed have none. */
+const pushIdOf = (message: PushQueueMessage) => Number(message.payload.data?.["pushId"] ?? 0);
 
 async function handleMessage(
   env: Env,
@@ -81,6 +87,13 @@ async function handleMessage(
     );
     if (result.kind === "retry") await retryLater(env, message, result.retryAfterSec);
     logDrop(result, `topic:${message.topic}`);
+    const finalFailure = result.kind !== "ok" && !(result.kind === "retry" && retriesLeft(message));
+    await recordDelivery(
+      env.DB,
+      pushIdOf(message),
+      result.kind === "ok" ? 1 : 0,
+      finalFailure ? 1 : 0,
+    );
     return;
   }
 
@@ -92,11 +105,13 @@ async function handleMessage(
     sendFcm(token, buildFcmMessage(payload, { token: t.token })),
   );
 
+  let sent = 0;
   const dead: string[] = [];
   const retry: PushTarget[] = [];
   let retryAfterSec: number | null = null;
   results.forEach((result, i) => {
     const t = targets[i] as PushTarget;
+    if (result.kind === "ok") sent++;
     if (result.kind === "dead") dead.push(t.token);
     if (result.kind === "retry") {
       retry.push(t);
@@ -108,6 +123,9 @@ async function handleMessage(
   // The sends already happened: a failure from here on must not make Queues redeliver the whole
   // message to devices that got it. A lost retry or a dead token left behind is the lesser harm.
   try {
+    const dropped = results.filter((r) => r.kind === "drop").length;
+    const outOfRetries = retriesLeft(message) ? 0 : retry.length;
+    await recordDelivery(env.DB, pushIdOf(message), sent, dead.length + dropped + outOfRetries);
     if (dead.length > 0) await deleteTokens(env.DB, dead);
     if (retry.length > 0) {
       await retryLater(

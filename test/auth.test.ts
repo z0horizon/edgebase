@@ -247,3 +247,126 @@ describe("captcha (Cloudflare Turnstile)", () => {
     expect((await post("/api/auth/sign-up/email", body, env)).status).toBe(200);
   });
 });
+
+describe("admin, two-factor, organizations, locale", () => {
+  it("admin routes refuse a user and accept one whose role is admin", async () => {
+    const { userId, token } = await signUpVerified("admin@x.io");
+    const list = () => call("/api/auth/admin/list-users", authed(token));
+    expect((await list()).status).toBe(403);
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+    expect((await list()).status).toBe(200);
+  });
+
+  it("a banned user's session stops working", async () => {
+    const admin = await signUpVerified("banner@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(admin.userId).run();
+    const target = await signUpVerified("banned@x.io");
+    const ban = await call(
+      "/api/auth/admin/ban-user",
+      authed(admin.token, json({ userId: target.userId })),
+    );
+    expect(ban.status).toBe(200);
+    expect((await call("/v1/me", authed(target.token))).status).toBe(401);
+  });
+
+  it("with 2FA on, password sign-in needs a second factor before it gets a session", async () => {
+    const email = "tfa@x.io";
+    const { userId, token } = await signUpVerified(email);
+    const enable = await call(
+      "/api/auth/two-factor/enable",
+      authed(token, json({ password: PASSWORD })),
+    );
+    const { backupCodes } = await enable.json<{ backupCodes: string[] }>();
+    // Stands in for confirming a TOTP code, which needs the secret's current time step.
+    await env.DB.batch([
+      env.DB.prepare("UPDATE user SET twoFactorEnabled = 1 WHERE id = ?").bind(userId),
+      env.DB.prepare("UPDATE twoFactor SET verified = 1 WHERE userId = ?").bind(userId),
+    ]);
+
+    const headers = { "cf-connecting-ip": freshIp() };
+    const signIn = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers }),
+    );
+    expect(await signIn.json()).toMatchObject({ twoFactorRedirect: true });
+    // The bearer plugin may still echo a token here; the session behind it was deleted.
+    const early = signIn.headers.get("set-auth-token");
+    if (early) expect((await call("/v1/me", authed(early))).status).toBe(401);
+
+    const cookie = signIn.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    const verify = await call(
+      "/api/auth/two-factor/verify-backup-code",
+      json({ code: backupCodes[0] }, { headers: { ...headers, cookie } }),
+    );
+    expect(verify.status).toBe(200);
+    const bearer = verify.headers.get("set-auth-token") ?? "";
+    expect((await call("/v1/me", authed(bearer))).status).toBe(200);
+  });
+
+  it("an organization is removed with its last member's account", async () => {
+    const { token } = await signUpVerified("org-owner@x.io");
+    const create = await call(
+      "/api/auth/organization/create",
+      authed(token, json({ name: "Acme", slug: "acme" })),
+    );
+    expect(create.status).toBe(200);
+    const orgs = () =>
+      env.DB.prepare("SELECT count(*) AS n FROM organization WHERE slug = 'acme'").first("n");
+    expect(await orgs()).toBe(1);
+    await call("/api/auth/delete-user", authed(token, json({ password: PASSWORD })));
+    expect(await orgs()).toBe(0);
+  });
+
+  it("admin remove-user also deletes the user's inbox and opens", async () => {
+    const admin = await signUpVerified("remover@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(admin.userId).run();
+    const target = await signUpVerified("removed@x.io");
+    await env.INBOX_DB.prepare(
+      "INSERT INTO inbox_item (user_id, title, body, category, created_at) VALUES (?, 't', 'b', 'transactional', 1)",
+    )
+      .bind(target.userId)
+      .run();
+    await env.DB.prepare("INSERT INTO push_open VALUES (1, ?)").bind(target.userId).run();
+    const res = await call(
+      "/api/auth/admin/remove-user",
+      authed(admin.token, json({ userId: target.userId })),
+    );
+    expect(res.status).toBe(200);
+    const left = async (db: D1Database, table: string) =>
+      db
+        .prepare(`SELECT count(*) AS n FROM ${table} WHERE user_id = ?`)
+        .bind(target.userId)
+        .first("n");
+    expect(await left(env.INBOX_DB, "inbox_item")).toBe(0);
+    expect(await left(env.DB, "push_open")).toBe(0);
+  });
+
+  it("invite-member is rate-limited per IP, since it mails any address", async () => {
+    const { token } = await signUpVerified("inviter@x.io");
+    const headers = { "cf-connecting-ip": freshIp() };
+    const res = await firstLimited(() =>
+      call(
+        "/api/auth/organization/invite-member",
+        authed(token, json({ email: "victim@x.io", role: "member", resend: true }, { headers })),
+      ),
+    );
+    expect(res?.status).toBe(429);
+  });
+
+  it("update-user takes a BCP 47 locale and refuses anything else", async () => {
+    const { userId, token } = await signUpVerified("locale@x.io");
+    const update = (locale: string) =>
+      call("/api/auth/update-user", authed(token, json({ locale })));
+    expect((await update("not a locale")).status).toBe(400);
+    const locale = () =>
+      env.DB.prepare("SELECT locale FROM user WHERE id = ?").bind(userId).first("locale");
+    expect((await update("vi-VN")).status).toBe(200);
+    expect(await locale()).toBe("vi-VN");
+    const clear = await call("/api/auth/update-user", authed(token, json({ locale: null })));
+    expect(clear.status).toBe(200);
+    expect(await locale()).toBeNull();
+  });
+});

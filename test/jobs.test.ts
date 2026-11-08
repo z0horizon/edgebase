@@ -80,6 +80,37 @@ describe("runCleanup", () => {
   });
 });
 
+it("removes expired invitations, idempotency keys and 90-day-old push stats with their opens", async () => {
+  const u = await seedUser();
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO organization (id, name, slug, createdAt) VALUES ('o1', 'O', 'o-clean', ?)",
+    ).bind(iso(NOW)),
+    env.DB.prepare(
+      "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m1', 'o1', ?, 'owner', ?)",
+    ).bind(u, iso(NOW)),
+    env.DB.prepare(
+      `INSERT INTO invitation (id, organizationId, email, status, expiresAt, createdAt, inviterId)
+       VALUES ('i-old', 'o1', 'a@x.io', 'pending', ?1, ?1, ?3), ('i-live', 'o1', 'b@x.io', 'pending', ?2, ?2, ?3)`,
+    ).bind(iso(NOW - 1), iso(NOW + DAY), u),
+    env.DB.prepare(
+      "INSERT INTO push_idempotency VALUES ('k-old', 'h', '{}', ?), ('k-live', 'h', '{}', ?)",
+    ).bind(NOW - DAY - 1, NOW - 1),
+    env.DB.prepare(
+      "INSERT INTO push_stats (id, category, send_at) VALUES (9001, 'transactional', ?), (9002, 'transactional', ?)",
+    ).bind(NOW - 91 * DAY, NOW - 89 * DAY),
+    env.DB.prepare("INSERT INTO push_open VALUES (9001, ?), (9002, ?)").bind(u, u),
+  ]);
+  const report = await runCleanup(env, NOW);
+  expect(report).toMatchObject({ invitation: 1, idempotency: 1, pushOpen: 1, pushStats: 1 });
+  expect(await count(env.DB, "SELECT count(*) AS n FROM invitation WHERE id = 'i-live'")).toBe(1);
+  expect(
+    await count(env.DB, "SELECT count(*) AS n FROM push_idempotency WHERE key = 'k-live'"),
+  ).toBe(1);
+  expect(await count(env.DB, "SELECT count(*) AS n FROM push_stats WHERE id = 9002")).toBe(1);
+  expect(await count(env.DB, "SELECT count(*) AS n FROM push_open WHERE push_id = 9002")).toBe(1);
+});
+
 describe("runCleanup bounds", () => {
   it("does not scan fresh rows when nothing has expired", async () => {
     await seedInbox("fresh-many", 2000, NOW);

@@ -3,7 +3,7 @@
 ## Authentication
 
 - **Users**: a Better Auth session, either the session cookie (web) or `Authorization: Bearer <token>` (mobile).
-- **Servers**: `X-API-Key: <PUSH_API_KEY>` on `/v1/push`.
+- **Servers**: `X-API-Key: <PUSH_API_KEY>` on `/v1/push`, `/v1/push/*` and `/v1/templates/*`.
 - **Captcha** (only when `TURNSTILE_SECRET_KEY` is set): `X-Captcha-Response: <Turnstile token>` on
   `POST /api/auth/sign-up/email`, `/api/auth/request-password-reset` and
   `/api/auth/send-verification-email`. Missing answers `400`, rejected answers `403`. Mobile apps
@@ -16,11 +16,14 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `invalid_body`, `invalid_cursor`, `invalid_limit` | input failed validation |
+| 400 | `invalid_body`, `invalid_header`, `invalid_cursor`, `invalid_limit` | input failed validation |
 | 401 | `unauthorized` | no valid session or API key |
 | 404 | `not_found` | unknown route or resource |
+| 409 | `idempotency_in_progress`, `limit_reached` | key still running; template cap reached |
+| 422 | `idempotency_mismatch` | `Idempotency-Key` reused with another body |
 | 429 | `rate_limited` | auth rate limit hit |
 | 500 | `internal` | unexpected error |
+| 502 | `upstream_error` | Google's Instance ID API refused a topic change |
 | 503 | `not_configured` | a required secret is missing |
 
 ## Route summary
@@ -28,7 +31,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/health` | none | liveness, answers `{ "ok": true }` |
-| ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, verify email, reset password, delete user, update user, one-time-token verify |
+| ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, verify email, reset password, delete user, update user, admin, two-factor, organization |
 | GET | `/v1/me` | user | the signed-in user |
 | PUT | `/v1/devices` | user | register this device's FCM token |
 | DELETE | `/v1/devices/{token}` | user | unregister a token of the caller |
@@ -38,6 +41,10 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | POST | `/v1/inbox/read-all` | user | mark everything read |
 | DELETE | `/v1/inbox/{id}` | user | delete a personal item |
 | POST | `/v1/push` | API key | send or schedule a push |
+| GET | `/v1/push/{id}` | API key | delivery and open stats of a push |
+| PUT / GET / DELETE | `/v1/templates/{name}` | API key | manage a push template |
+| POST | `/v1/opens` | user | report that the user opened a push |
+| POST | `/v1/topics/{topic}/subscribe`, `/unsubscribe` | user | add or remove a device token on a topic (web) |
 | GET | `/v1/auth/app-callback` | user (cookie) | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
 | POST | `/v1/auth/app-exchange` | none | redeem a hand-off token with its verifier for a bearer token |
 
@@ -48,7 +55,14 @@ Better Auth's endpoints are documented at https://www.better-auth.com/docs; see
 
 ### `GET /v1/me`
 Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `marketingOptIn`,
-`createdAt`, `updatedAt`. `401` without a session.
+`locale`, `role`, `banned`, `banReason`, `banExpires`, `twoFactorEnabled`, `createdAt`,
+`updatedAt`. `401` without a session.
+
+### Admin, two-factor, organizations
+Better Auth's `admin`, `twoFactor` and `organization` plugin routes under `/api/auth/admin/*`,
+`/api/auth/two-factor/*` and `/api/auth/organization/*`; limits and flows are in
+[specs/auth-and-users.md](specs/auth-and-users.md) rules 11–13. `/api/auth/two-factor/*` is
+rate-limited per IP like sign-in.
 
 ### `GET /v1/auth/app-callback?challenge=<c>`
 Use as the `callbackURL` of a browser OAuth flow started from a native app, with
@@ -95,11 +109,36 @@ Header `X-API-Key`. Body:
 ```
 
 `to` is `{ "userIds": string[1..500] }` or `{ "topic": string }`. `category` is `transactional`
-or `marketing`. `data` values must be strings. `inbox` and `sendAt` are optional.
+or `marketing`. `data` values must be strings; `data.pushId` is set by the server. `inbox` and
+`sendAt` are optional. Optional too:
 
-- Now: `202 { "users": n }` with the number of eligible users (`0` for a topic).
-- With `sendAt`: `202 { "scheduled": true }`; dispatched within a minute of `sendAt`.
-- `400` on invalid input, `401` on a wrong key, `503` when push is not configured.
+- `translations`: `{ "<BCP 47 tag>": { "title", "body" } }`, chosen per user by their `locale`.
+- `template` + `vars`: start from a stored template and fill its `{{name}}` placeholders; fields
+  given in the request override the template's.
+- Header `Idempotency-Key`: repeats within 24 h replay the first answer instead of sending again.
+
+Answers:
+
+- Now: `202 { "id": n, "users": n }`, `id` for `GET /v1/push/{id}`, `users` the eligible users
+  (`0` for a topic).
+- With `sendAt`: `202 { "id": n, "scheduled": true }`; dispatched within a minute of `sendAt`.
+- `400` on invalid input (also an unknown template or a missing var), `401` on a wrong key,
+  `409`/`422` on idempotency conflicts, `503` when push is not configured.
+
+### `GET /v1/push/{id}`
+→ `{ id, category, users, sent, failed, opened, sendAt }`; `404` when unknown or older than 90 days.
+
+### `PUT /v1/templates/{name}`
+Body `{ title, body, data?, category?, translations? }` → `204`. `409 limit_reached` past 500
+templates. `GET` returns the stored body, `DELETE` → `204`.
+
+### `POST /v1/opens`
+Body `{ "pushId": string }` (the push's `data.pushId`) → `204`. Counted once per user; any
+signed-in user can report any live push, so `opened` is a signal, not proof of reach.
+
+### `POST /v1/topics/{topic}/subscribe` and `/unsubscribe`
+Body `{ "token": string }`, a token the caller registered with `PUT /v1/devices` → `204`.
+`404` for someone else's token, `502` when Google refuses, `503` without `FCM_SERVICE_ACCOUNT`.
 
 ## Inbox
 

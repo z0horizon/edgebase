@@ -2,6 +2,8 @@ const CHUNK = 5000;
 const DAY_MS = 86_400_000;
 const DEVICE_STALE_DAYS = 60;
 const UNVERIFIED_SIGNUP_DAYS = 7;
+const IDEMPOTENCY_TTL_MS = DAY_MS;
+const PUSH_STATS_DAYS = 90;
 const BUDGET_MS = 20_000;
 
 type ChunkResult = { deleted: number; sizeAfter: number; rowsRead: number; complete: boolean };
@@ -41,6 +43,10 @@ type CleanupReport = {
   verification: number;
   device: number;
   unverifiedUsers: number;
+  invitation: number;
+  idempotency: number;
+  pushOpen: number;
+  pushStats: number;
   rowsRead: number;
   /** False when the time budget ran out; the rest is deleted on the next run. */
   complete: boolean;
@@ -97,7 +103,46 @@ export async function runCleanup(
     deadline,
   );
 
-  const all = [inbox, broadcast, session, verification, device, unverified];
+  const invitation = await deleteInChunks(env.DB, expired("invitation"), [iso(now)], deadline);
+  const idempotency = await deleteInChunks(
+    env.DB,
+    `DELETE FROM push_idempotency WHERE key IN
+       (SELECT key FROM push_idempotency WHERE created_at < ? LIMIT ${CHUNK})`,
+    [now - IDEMPOTENCY_TTL_MS],
+    deadline,
+  );
+  // Opens go first, and a stats row only once it has none left, so no open outlives its push.
+  const statsCutoff = now - PUSH_STATS_DAYS * DAY_MS;
+  const pushOpen = await deleteInChunks(
+    env.DB,
+    `DELETE FROM push_open WHERE (push_id, user_id) IN (
+       SELECT push_id, user_id FROM push_open
+       WHERE push_id IN (SELECT id FROM push_stats WHERE send_at < ?) LIMIT ${CHUNK})`,
+    [statsCutoff],
+    deadline,
+  );
+  const pushStats = await deleteInChunks(
+    env.DB,
+    `DELETE FROM push_stats WHERE id IN (
+       SELECT id FROM push_stats s WHERE send_at < ?
+         AND NOT EXISTS (SELECT 1 FROM push_open o WHERE o.push_id = s.id)
+       LIMIT ${CHUNK})`,
+    [statsCutoff],
+    deadline,
+  );
+
+  const all = [
+    inbox,
+    broadcast,
+    session,
+    verification,
+    device,
+    unverified,
+    invitation,
+    idempotency,
+    pushOpen,
+    pushStats,
+  ];
   const report: CleanupReport = {
     inbox: inbox.deleted,
     broadcast: broadcast.deleted,
@@ -105,9 +150,13 @@ export async function runCleanup(
     verification: verification.deleted,
     device: device.deleted,
     unverifiedUsers: unverified.deleted,
+    invitation: invitation.deleted,
+    idempotency: idempotency.deleted,
+    pushOpen: pushOpen.deleted,
+    pushStats: pushStats.deleted,
     rowsRead: all.reduce((sum, r) => sum + r.rowsRead, 0),
     complete: all.every((r) => r.complete),
-    dbBytes: unverified.sizeAfter,
+    dbBytes: pushStats.sizeAfter,
     inboxBytes: broadcast.sizeAfter,
   };
   if (report.complete) console.info("cleanup", JSON.stringify(report));

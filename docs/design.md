@@ -10,7 +10,9 @@ push delivery, and `scheduled` for crons (`src/index.ts`).
                         ├─ /v1/me, /v1/auth/app-callback                          (user)
                         ├─ /v1/devices        FCM token registration              src/push/devices.ts (user)
                         ├─ /v1/inbox/*        inbox                               src/inbox/ (user)
-                        ├─ /v1/push           send or schedule                    src/push/routes.ts (API key)
+                        ├─ /v1/opens, /v1/topics/*  open reports, web topics      src/push/stats.ts, topics.ts (user)
+                        ├─ /v1/push           send, schedule, stats               src/push/routes.ts (API key)
+                        ├─ /v1/templates/*    push templates                      src/push/templates.ts (API key)
                         ├─ queue consumer     FCM HTTP v1, retry, DLQ             src/push/consumer.ts
                         └─ scheduled          * * * * *  due scheduled pushes     src/jobs/scheduled.ts
                                               17 * * * * retention cleanup        src/jobs/cleanup.ts
@@ -20,7 +22,7 @@ push delivery, and `scheduled` for crons (`src/index.ts`).
 
 | Binding | Kind | Holds |
 |---|---|---|
-| `DB` | D1 `edgebase-db` | Better Auth tables, `device`, `scheduled_push` |
+| `DB` | D1 `edgebase-db` | Better Auth tables (incl. admin, twoFactor, organization), `device`, `scheduled_push`, `push_stats`, `push_open`, `push_template`, `push_idempotency` |
 | `INBOX_DB` | D1 `edgebase-inbox` | `inbox_item`, `broadcast`, `inbox_state` |
 | `PUSH_QUEUE` | Queue `edgebase-push` | push messages (producer and consumer) |
 | `PUSH_DLQ` | Queue `edgebase-push-dlq` | pushes that failed 5 attempts |

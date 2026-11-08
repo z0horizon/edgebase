@@ -7,6 +7,9 @@ import { jsonError } from "./http";
 import { inboxRoutes } from "./inbox/routes";
 import { deviceRoutes } from "./push/devices";
 import { pushRoutes } from "./push/routes";
+import { openRoutes } from "./push/stats";
+import { templateRoutes } from "./push/templates";
+import { topicRoutes } from "./push/topics";
 
 export type AppEnv = { Bindings: Env; Variables: { user: SessionUser } };
 
@@ -41,6 +44,12 @@ app.on(
     "/api/auth/sign-up/*",
     "/api/auth/request-password-reset",
     "/api/auth/send-verification-email",
+    // Six-digit codes: without a limit they are guessed in minutes.
+    "/api/auth/two-factor/*",
+    // Sends mail to any address, with text the inviter chooses.
+    "/api/auth/organization/invite-member",
+    // Each call is one Instance ID request against the project's quota.
+    "/v1/topics/*",
     "/v1/auth/app-exchange",
   ],
   authRateLimit,
@@ -51,11 +60,14 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).
 
 // User routes take a session; /v1/push takes the server API key instead.
 // app-callback checks its own session so it can redirect failures back to the app.
-for (const path of ["/v1/me", "/v1/devices/*", "/v1/inbox/*"]) {
+for (const path of ["/v1/me", "/v1/devices/*", "/v1/inbox/*", "/v1/opens", "/v1/topics/*"]) {
   app.use(path, requireAuthConfig, requireUser);
 }
-app.use("/v1/push", requireApiKey);
+for (const path of ["/v1/push/*", "/v1/templates/*"]) app.use(path, requireApiKey);
 app.route("/v1/push", pushRoutes);
+app.route("/v1/templates", templateRoutes);
+app.route("/v1/opens", openRoutes);
+app.route("/v1/topics", topicRoutes);
 app.get("/v1/me", (c) => c.json(c.get("user")));
 app.get("/v1/auth/app-callback", appCallback);
 app.post("/v1/auth/app-exchange", appExchange);

@@ -20,6 +20,17 @@ export async function insertPersonal(
   p: PushPayload,
   now: number,
 ): Promise<void> {
+  const statements = personalStatements(db, userIds, p, now);
+  if (statements.length > 0) await db.batch(statements);
+}
+
+/** The inserts of `insertPersonal`, for callers that write several payloads in one atomic batch. */
+export function personalStatements(
+  db: D1Database,
+  userIds: string[],
+  p: PushPayload,
+  now: number,
+): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   for (let i = 0; i < userIds.length; i += PERSONAL_ROWS_PER_STATEMENT) {
     const chunk = userIds.slice(i, i + PERSONAL_ROWS_PER_STATEMENT);
@@ -33,7 +44,7 @@ export async function insertPersonal(
         .bind(...chunk.flatMap((id) => [id, p.title, p.body, dataColumn(p), p.category, now])),
     );
   }
-  if (statements.length > 0) await db.batch(statements);
+  return statements;
 }
 
 export async function insertBroadcast(db: D1Database, p: PushPayload, now: number): Promise<void> {

@@ -17,6 +17,13 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 | `user` (+ cascades) | `DB` | email unverified and created more than 7 days ago, with no social account | `user_unverified_created_at` (partial) |
 | `scheduled_push` | `DB` | when dispatched (minute cron) | `scheduled_push_send_at` |
 | `inbox_state` | `INBOX_DB` | when the user is deleted | primary key |
+| `invitation` | `DB` | `expiresAt` < now | `invitation_expires_at` |
+| `push_idempotency` | `DB` | `created_at` older than 24 h | `push_idempotency_created_at` |
+| `push_open` | `DB` | its push's stats row is due for deletion, or the user is deleted | `push_stats_send_at` + primary key, `push_open_user_id` |
+| `push_stats` | `DB` | `send_at` older than 90 days and no opens left | `push_stats_send_at` |
+| `push_template` | `DB` | capped at 500 rows on write (`PUT` answers `409`) | primary key |
+| `twoFactor`, `member` | `DB` | cascade with the user (one 2FA row per user; ≤ 10 memberships) | `two_factor_user_id`, `member_user_id` |
+| `organization` | `DB` | trigger when its last member is deleted | `member_organization_id` |
 
 1. Deletes run in chunks of 5000 rows (`deleteInChunks`) until a chunk deletes fewer than 5000
    or the 20 s budget is spent; the rest waits for the next hour. Deleted rows are counted from

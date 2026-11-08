@@ -8,11 +8,17 @@ user routes answer `503`.
 
 ## Entities
 
-- **`user`** (`migrations/0001_init.sql`): Better Auth columns plus `marketingOptIn` (0/1, default 0).
-  Dates are ISO 8601 text, booleans 0/1.
+- **`user`** (`migrations/0001_init.sql`): Better Auth columns plus `marketingOptIn` (0/1, default 0)
+  and `locale` (BCP 47 or null, `0006`); `role`, `banned`, `banReason`, `banExpires`,
+  `twoFactorEnabled` come from the admin and twoFactor plugins (`0004`). Dates are ISO 8601 text,
+  booleans 0/1.
 - **`session`**: one row per signed-in device; `expiresAt` indexed for retention.
 - **`account`**: one row per sign-in method of a user (`credential`, `google`, `apple`, `github`).
-- **`verification`**: email verification, password reset and one-time tokens; `expiresAt` indexed.
+- **`verification`**: email verification, password reset, one-time tokens and 2FA challenges; `expiresAt` indexed.
+- **`twoFactor`** (`migrations/0004_admin_two_factor_organization.sql`): one row per user with 2FA,
+  holding the TOTP secret and backup codes; cascades with the user.
+- **`organization`**, **`member`** (cascade with organization and user), **`invitation`**
+  (`expiresAt` indexed); `session.activeOrganizationId` and `session.impersonatedBy`.
 
 ## Rules
 
@@ -38,12 +44,14 @@ user routes answer `503`.
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.
 4. Sessions last 30 days and are extended at most once a day (`updateAge`), so an active session
    costs about one D1 write per day. There is no cookie cache and no secondary storage.
-5. Sign-in, sign-up, password-reset, resend-verification and app-exchange requests are limited
+5. Sign-in, sign-up, password-reset, resend-verification, two-factor, organization invite-member,
+   web topic and app-exchange requests are limited
    to 10 per minute per `cf-connecting-ip` through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`src/auth/middleware.ts`). Better Auth's own limiter is disabled.
-6. `POST /api/auth/delete-user` deletes the user; `session`, `account` and `device` rows cascade,
-   and the `afterDelete` hook removes the user's `inbox_item` and `inbox_state` rows from
-   `INBOX_DB`, which has no foreign keys (`src/inbox/queries.ts`).
+6. `POST /api/auth/delete-user` and admin `remove-user` delete the user; `session`, `account`,
+   `device`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
+   hook removes the user's `inbox_item` and `inbox_state` rows from `INBOX_DB`, which has no
+   foreign keys (`src/inbox/queries.ts`), and their `push_open` rows.
 7. Users opt in to marketing pushes with `POST /api/auth/update-user { marketingOptIn: true }`.
 8. Browsers on another origin may call the API with credentials when their origin is an
    `http(s)://` entry of `TRUSTED_ORIGINS`; `set-auth-token` is exposed to them (`src/app.ts`).
@@ -54,3 +62,22 @@ user routes answer `503`.
     token: missing answers `400`, rejected by Turnstile answers `403` (Better Auth `captcha`
     plugin, `src/auth/auth.ts`). Unset, these routes need no token. The per-IP limit of rule 5 stops
     one machine; Turnstile stops many machines sending emails to random addresses.
+11. Roles come from the Better Auth `admin` plugin: new users get `role = "user"` (rows from before
+    `0004` have null, treated the same); `admin` reaches `/api/auth/admin/*` (list, create, remove,
+    ban, set role, impersonate, revoke sessions).
+    Banning deletes the user's sessions, so the next request answers `401`. The first admin is set
+    in D1 (see deployment.md).
+12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;
+    social sign-in is not challenged. `POST /api/auth/two-factor/enable { password }` returns the
+    TOTP URI (issuer: the `BASE_URL` host) and backup codes; 2FA is on once a code is confirmed
+    with `verify-totp`. A sign-in of a user with 2FA answers `{ twoFactorRedirect: true }` with
+    no session and a 10-minute `two_factor` cookie; `verify-totp` or `verify-backup-code` with that
+    cookie creates the session. `/api/auth/two-factor/*` shares rule 5's per-IP limit, and Better
+    Auth locks the challenge after repeated wrong codes.
+13. Organizations (`organization` plugin): a user belongs to at most 10, an organization has at
+    most 100 members and 100 pending invitations, and invitations expire after 48 h. Invitations
+    are mailed with `<APP_SCHEME>://invitation?id=<id>`; the app accepts with
+    `POST /api/auth/organization/accept-invitation`. A trigger deletes an organization when its
+    last member row goes, which happens only when that member's account is deleted.
+14. `POST /api/auth/update-user { locale }` sets the language pushes are written in; `null`
+    clears it, and anything other than a BCP 47 tag such as `vi` or `en-US` answers `400`.

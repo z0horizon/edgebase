@@ -10,11 +10,11 @@
 - Scheduled pushes (minute precision).
 - Inbox with broadcasts, cursor paging, read state.
 - Daily retention cleanup with size logging.
+- Admin and roles (Better Auth `admin`), TOTP 2FA with backup codes, organizations.
+- Idempotency keys on `POST /v1/push`.
+- Push stats (users, sent, failed, unique opens), templates, localized notifications.
+- Web topic subscription through the Instance ID API.
 
 ## Next
 
-- Admin and roles (Better Auth `admin` plugin), 2FA, organizations.
-- Idempotency keys on `POST /v1/push`.
-- Delivery and open analytics, notification templates, localized notifications.
-- Web topic subscription (needs the legacy Instance ID API).
 - Sharding `INBOX_DB` by user hash; archiving old inbox rows to R2.
