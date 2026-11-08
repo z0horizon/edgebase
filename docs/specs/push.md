@@ -8,12 +8,12 @@ FCM and retries per token.
 
 ### Entities
 
-- **`device`** (`migrations/0001_init.sql`): `token` (primary key), `user_id` (FK `user`, cascade),
+- **`device`** (`packages/core/migrations/0001_init.sql`): `token` (primary key), `user_id` (FK `user`, cascade),
   `platform` (`web` | `ios` | `android`), `updated_at` (epoch ms). `WITHOUT ROWID`, `INDEX(user_id)`.
 
 ### Rules
 
-1. `PUT /v1/devices { token, platform }` registers the caller's token (`src/push/devices.ts`,
+1. `PUT /v1/devices { token, platform }` registers the caller's token (`packages/core/src/push/devices.ts`,
    `upsertDevice`). The row is written only when its owner or platform changed or it is at least
    7 days old, so apps can call it on every launch at near-zero write cost.
 2. A token already registered by another user moves to the caller (a shared or resold device).
@@ -28,11 +28,11 @@ FCM and retries per token.
 
 1. `POST /v1/push` takes `X-API-Key: <PUSH_API_KEY>`, compared as SHA-256 digests with
    `crypto.subtle.timingSafeEqual`; a user session does not reach it. Missing `PUSH_API_KEY` or
-   `FCM_SERVICE_ACCOUNT` answers `503 not_configured` (`src/auth/middleware.ts`, `requireApiKey`).
-2. Body limits (`src/push/types.ts`): `userIds` 1–500, `title` 1–120 chars, `body` ≤ 500 chars,
+   `FCM_SERVICE_ACCOUNT` answers `503 not_configured` (`packages/core/src/auth/middleware.ts`, `requireApiKey`).
+2. Body limits (`packages/core/src/push/types.ts`): `userIds` 1–500, `title` 1–120 chars, `body` ≤ 500 chars,
    `data` string map ≤ 1 KB as JSON, `topic` matches FCM's `[a-zA-Z0-9-_.~%]{1,900}`, `sendAt`
    ISO 8601 and in the future.
-3. Dispatch (`src/push/dispatch.ts`) keeps only existing, de-duplicated user ids; for
+3. Dispatch (`packages/core/src/push/dispatch.ts`) keeps only existing, de-duplicated user ids; for
    `category: "marketing"` only users with `marketingOptIn = 1`. Unknown ids are dropped, never
    written to `INBOX_DB`. The response is `202 { id, users: <eligible count> }`, `id` being the
    push's stats row (see Stats); dispatch adds it to the push's `data` as `pushId`, overwriting a
@@ -42,12 +42,12 @@ FCM and retries per token.
 5. User pushes are queued as messages of at most 50 user ids; a topic push is one message.
 6. `category` sets delivery priority: `transactional` → Android `HIGH`, channel `default`,
    `apns-priority: 10`; `marketing` → `NORMAL`, channel `promotions`, `apns-priority: 5`
-   (`src/push/fcm.ts`, `buildFcmMessage`). Apps must create both Android channels.
+   (`packages/core/src/push/fcm.ts`, `buildFcmMessage`). Apps must create both Android channels.
 
 ## Idempotency
 
 1. `POST /v1/push` with `Idempotency-Key: <1–255 printable ASCII>` claims the key in
-   `push_idempotency` before doing anything (`src/push/routes.ts`). The `202` answer is stored and
+   `push_idempotency` before doing anything (`packages/core/src/push/routes.ts`). The `202` answer is stored and
    replayed with `Idempotent-Replayed: true` to every repeat of the same key for 24 h, so a push
    is dispatched or scheduled once however often the client retries.
 2. A repeat with a different body (SHA-256 of the validated body as JSON, so keys inside `data`,
@@ -62,7 +62,7 @@ FCM and retries per token.
 
 1. `PUT /v1/templates/{name}` (API key, `name` `[a-z0-9_.-]{1,64}`) stores
    `{ title, body, data?, category?, translations? }` with the same limits as a push; at most 500
-   templates, a new name past that answers `409 limit_reached` (`src/push/templates.ts`).
+   templates, a new name past that answers `409 limit_reached` (`packages/core/src/push/templates.ts`).
    `GET` returns it, `DELETE` removes it.
 2. A push may name `template` and pass `vars` (≤ 50, values ≤ 500 chars). Its own `title`,
    `body`, `data`, `category` and `translations` override the template's; then every `{{name}}` in
@@ -82,7 +82,7 @@ FCM and retries per token.
 
 ### Rules
 
-1. The consumer (`src/push/consumer.ts`) resolves a message's users to their device tokens and
+1. The consumer (`packages/core/src/push/consumer.ts`) resolves a message's users to their device tokens and
    sends one FCM v1 request per token (FCM v1 has no multicast), 20 at a time.
 2. The FCM OAuth token is minted from the service account (RS256 JWT, WebCrypto), cached per
    isolate until 5 minutes before expiry, and shared by concurrent callers. A batch with nothing to
@@ -110,7 +110,7 @@ FCM and retries per token.
 
 1. Every accepted push gets a `push_stats` row: `category`, `users` (eligible users, set at
    dispatch; `0` for a topic), `sent`, `failed`, `send_at` (`sendAt`, or the time it was accepted).
-2. The consumer adds FCM's answers per queue message (`src/push/stats.ts`, `recordDelivery`):
+2. The consumer adds FCM's answers per queue message (`packages/core/src/push/stats.ts`, `recordDelivery`):
    `sent` counts tokens FCM accepted (for a topic, one for the topic), which is not proof the
    device displayed it; `failed` counts dead tokens, dropped requests and tokens whose last retry
    failed. Tokens still being retried count in neither. A stats write that fails is logged and
@@ -129,7 +129,7 @@ subscriptions. Conventions: `all` for broadcasts, `promotions` for marketing.
 
 Web apps cannot subscribe from the Firebase JS SDK, so they call
 `POST /v1/topics/{topic}/subscribe { token }` and `/unsubscribe` with a user session
-(`src/push/topics.ts`). The token must be a device the caller registered (`404` otherwise). The
+(`packages/core/src/push/topics.ts`). The token must be a device the caller registered (`404` otherwise). The
 Worker calls the Instance ID API (`iid.googleapis.com/iid/v1:batchAdd` / `:batchRemove`) with the
 service account's OAuth2 token and `access_token_auth: true`; legacy server keys are not used,
 since Google refuses them. A user may make 20 topic changes a minute
@@ -142,7 +142,7 @@ apps should keep using the SDK.
 1. `POST /v1/push` with `sendAt` stores the request (without `sendAt`, template applied) in
    `scheduled_push` with `send_at` in epoch ms and its stats row's `push_id`, and answers
    `202 { id, scheduled: true }`. Rows stored before `push_id` existed get a stats row at dispatch.
-2. A cron every minute (`src/jobs/scheduled.ts`, `enqueueDuePushes`) takes up to 100 due rows in
+2. A cron every minute (`packages/core/src/jobs/scheduled.ts`, `enqueueDuePushes`) takes up to 100 due rows in
    `send_at` order and runs the same dispatch as an immediate push, so opt-in and user existence
    are checked at send time. Precision is about one minute.
 3. A row is deleted after its dispatch; if dispatch throws, the row stays and is retried on the

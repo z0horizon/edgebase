@@ -16,7 +16,7 @@ before relying on the numbers.
 | Workers Logs | 20M log events / month | $0.60 / M |
 
 FCM is free. Email Sending is billed separately. Logs are sampled at 10%
-(`observability.head_sampling_rate` in `wrangler.jsonc`), so 200M requests a month stay within the
+(`observability.head_sampling_rate` in `apps/server/wrangler.jsonc`), so 200M requests a month stay within the
 included log events.
 
 ## What a push costs

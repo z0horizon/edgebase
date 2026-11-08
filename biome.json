@@ -7,8 +7,8 @@
       "!**/worker-configuration.d.ts",
       "!**/*.md",
       "!**/pnpm-lock.yaml",
-      "!admin/src/components/ui",
-      "!public/admin"
+      "!apps/admin/src/components/ui",
+      "!apps/server/public/admin"
     ]
   },
   "css": { "parser": { "tailwindDirectives": true } },
@@ -44,7 +44,7 @@
       "linter": { "rules": { "style": { "noNonNullAssertion": "off" } } }
     },
     {
-      "includes": ["scripts/**"],
+      "includes": ["**/scripts/**"],
       "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
     }
   ]

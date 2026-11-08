@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Core runs inside the app's Worker, so it is checked against that Worker's bindings.
+    "types": ["../../apps/server/worker-configuration.d.ts", "@cloudflare/vitest-plugin/types"]
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

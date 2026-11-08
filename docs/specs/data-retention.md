@@ -1,7 +1,7 @@
 # Data Retention
 
 Every table that grows has a rule that bounds it. An hourly cron (`17 * * * *`) runs
-`runCleanup` (`src/jobs/cleanup.ts`) with a 20 s budget; it logs a JSON report with rows deleted
+`runCleanup` (`packages/core/src/jobs/cleanup.ts`) with a 20 s budget; it logs a JSON report with rows deleted
 per table, rows read, whether it finished (`complete`), and both databases' sizes
 (`meta.size_after`). An unfinished run is logged with `console.warn` and continues next hour.
 

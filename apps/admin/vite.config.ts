@@ -16,12 +16,12 @@ const worker = {
   }) => proxy.on("proxyReq", (req) => req.setHeader("origin", WORKER)),
 };
 
-// Built into the Worker's static assets and served at /admin/ (see wrangler.jsonc).
+// Built into the Worker's static assets and served at /admin/ (see apps/server/wrangler.jsonc).
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   base: "/admin/",
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
-  build: { outDir: "../public/admin", emptyOutDir: true },
+  build: { outDir: "../server/public/admin", emptyOutDir: true },
   server: { proxy: { "/api": worker, "/v1": worker } },
 });

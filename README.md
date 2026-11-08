@@ -6,12 +6,12 @@ Clone it, bootstrap it, deploy it, build on it.
 
 ## Quick start
 
-Requirements: Node.js 22+, pnpm, Wrangler logged in (`npx wrangler login`), Workers Paid plan.
+Requirements: Node.js 22+, pnpm 10+, Wrangler logged in (`npx wrangler login`), Workers Paid plan.
 
 ```bash
 pnpm install
 pnpm typecheck && pnpm lint && pnpm test
-cp .dev.vars.example .dev.vars   # or let pnpm bootstrap create it
+cp apps/server/.dev.vars.example apps/server/.dev.vars   # or let pnpm bootstrap create it
 pnpm db:migrate:local
 pnpm dev
 ```
@@ -21,11 +21,11 @@ pnpm dev
 1. Copy the repository.
 2. `pnpm bootstrap` asks for a project name (lowercase, dashes, e.g. `acme`) and the deploy
    values, creates the D1 databases and queues under that name, migrates them and uploads the
-   secrets. Everything it learns goes to `.env.production`, which is gitignored, so the code
-   never needs renaming and no ID or secret is committed.
+   secrets. Everything it learns goes to `apps/server/.env.production`, which is gitignored, so the
+   code never needs renaming and no ID or secret is committed.
 3. `pnpm run deploy`.
-4. Build your features: add routes in `src/app.ts`, keep docs in `docs/specs/` true to the code
-   (see `AGENTS.md`).
+4. Build your features in `apps/server` and leave `packages/core` to EdgeBase, so updates merge
+   cleanly (see [docs/extending.md](docs/extending.md)).
 
 See [docs/deployment.md](docs/deployment.md) for details.
 
@@ -33,5 +33,11 @@ See [docs/deployment.md](docs/deployment.md) for details.
 
 - [docs/design.md](docs/design.md): architecture and why
 - [docs/api.md](docs/api.md): HTTP API
+- [docs/extending.md](docs/extending.md): your own routes and tables
 - [docs/specs/](docs/specs/README.md): behaviour per domain
 - [docs/deployment.md](docs/deployment.md), [docs/cost.md](docs/cost.md), [docs/roadmap.md](docs/roadmap.md)
+- [CHANGELOG.md](CHANGELOG.md): what changed, and what to do when you update
+
+## License
+
+[MIT](LICENSE)

@@ -2,7 +2,10 @@
 
 Requirements: a Cloudflare account on the **Workers Paid** plan (password hashing needs more CPU
 than the free plan allows, and Email Sending needs Paid), Node.js 22+, pnpm, and
-`npx wrangler login`.
+`npx wrangler login`. Run the `pnpm` commands below from the repository root; the files they
+read and write (`.env.production`, `.dev.vars`, `wrangler.jsonc`, `scripts/`) are in `apps/server/`.
+Upgrading a copy from before the workspace layout: see
+[extending.md](extending.md#from-the-single-package-layout).
 
 ## 1. Bootstrap
 
@@ -22,7 +25,7 @@ It asks for what `.env.production` lacks, then:
 7. creates `.dev.vars` for local dev when it does not exist.
 
 Rerun it any time: each step skips what already exists. Every key of `.env.production` is
-explained in [`.env.production.example`](../.env.production.example).
+explained in [`.env.production.example`](../apps/server/.env.production.example).
 
 `.env.production` is the source of truth for secrets: a secret that is empty there is deleted from
 the Worker on the next bootstrap, including one set by hand with `wrangler secret put`.
@@ -35,7 +38,7 @@ Fill in the optional keys of `.env.production`, then `pnpm bootstrap` again:
 |---|---|
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Cloud console, OAuth client (web) |
 | `APPLE_CLIENT_ID`, `APPLE_APP_BUNDLE_IDENTIFIER` | Apple Developer: Services ID and the app's bundle ID |
-| `APPLE_CLIENT_SECRET` | `node scripts/apple-secret.mjs <teamId> <keyId> <servicesId> AuthKey.p8` |
+| `APPLE_CLIENT_SECRET` | `node apps/server/scripts/apple-secret.mjs <teamId> <keyId> <servicesId> AuthKey.p8` |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub OAuth app |
 | `TURNSTILE_SECRET_KEY` | Cloudflare dashboard → Turnstile → add a widget (free); its secret key. Turn it on when sign-up or reset emails are abused; the apps must then send the widget's token (see [api.md](api.md#authentication)) |
 | `FCM_SERVICE_ACCOUNT_FILE` | Firebase console → Service accounts → generate key; the path to the JSON file |
@@ -56,8 +59,8 @@ pnpm db:migrate:remote        # after pulling new migrations
 Both regenerate `wrangler.production.jsonc` from `wrangler.jsonc` and `.env.production` first, so
 template changes (bindings, crons) always reach production. Never edit the generated file.
 
-`pnpm run deploy` also builds the admin page (`admin/`, React + shadcn/ui) into `public/admin`; it
-is served at `<BASE_URL>/admin/`. Locally, run `pnpm admin:build` once so `pnpm dev` serves it, or
+`pnpm run deploy` also builds the admin page (`apps/admin/`, React + shadcn/ui) into `apps/server/public/admin`; it
+is served at `<BASE_URL>/admin/`. Locally, run `pnpm --filter @edgebase/admin build` once so `pnpm dev` serves it, or
 `pnpm dev` and `pnpm admin:dev` together for live reload at `http://localhost:5173/admin/`.
 
 The first admin is set in D1; after that, admins grant the role through
@@ -70,7 +73,7 @@ wrangler d1 execute DB --remote -c wrangler.production.jsonc \
 
 ## Recurring
 
-- **Apple client secret** expires after 6 months: rerun `scripts/apple-secret.mjs`, put the result in
+- **Apple client secret** expires after 6 months: rerun `apps/server/scripts/apple-secret.mjs`, put the result in
   `.env.production` and `pnpm bootstrap` before then.
 - **Watch the cleanup log** (`cleanup {...}` hourly): `dbBytes` and `inboxBytes` approaching 10 GB
   means it is time for the mitigations in [cost.md](cost.md); repeated "ran out of time" warnings

@@ -1,22 +1,24 @@
 # Design
 
 EdgeBase is one Cloudflare Worker (Hono) with three entry points: `fetch` for HTTP, `queue` for
-push delivery, and `scheduled` for crons (`src/index.ts`).
+push delivery, and `scheduled` for crons (`packages/core/src/index.ts`). The code is a pnpm
+workspace: `packages/core` is EdgeBase, `apps/server` is the deployable Worker that composes it with
+the app's own routes, and `apps/admin` is the admin page (see [extending.md](extending.md)).
 
 ```
  Web (cookie) ────┐
- Expo (bearer) ───┼──▶ Worker (Hono, src/app.ts)
- Flutter (bearer) ┘     ├─ /api/auth/*        Better Auth                         src/auth/
+ Expo (bearer) ───┼──▶ Worker (Hono, packages/core/src/app.ts)
+ Flutter (bearer) ┘     ├─ /api/auth/*        Better Auth                         packages/core/src/auth/
                         ├─ /v1/me, /v1/auth/app-callback                          (user)
-                        ├─ /v1/devices        FCM token registration              src/push/devices.ts (user)
-                        ├─ /v1/inbox/*        inbox                               src/inbox/ (user)
-                        ├─ /v1/opens, /v1/topics/*  open reports, web topics      src/push/stats.ts, topics.ts (user)
-                        ├─ /v1/push           send, schedule, stats               src/push/routes.ts (API key)
-                        ├─ /v1/templates/*    push templates                      src/push/templates.ts (API key)
-                        ├─ /admin/            admin page (static assets)          admin/ → public/admin (admin session)
-                        ├─ queue consumer     FCM HTTP v1, retry, DLQ             src/push/consumer.ts
-                        └─ scheduled          * * * * *  due scheduled pushes     src/jobs/scheduled.ts
-                                              17 * * * * retention cleanup        src/jobs/cleanup.ts
+                        ├─ /v1/devices        FCM token registration              packages/core/src/push/devices.ts (user)
+                        ├─ /v1/inbox/*        inbox                               packages/core/src/inbox/ (user)
+                        ├─ /v1/opens, /v1/topics/*  open reports, web topics      packages/core/src/push/stats.ts, topics.ts (user)
+                        ├─ /v1/push           send, schedule, stats               packages/core/src/push/routes.ts (API key)
+                        ├─ /v1/templates/*    push templates                      packages/core/src/push/templates.ts (API key)
+                        ├─ /admin/            admin page (static assets)          apps/admin/ → apps/server/public/admin (admin session)
+                        ├─ queue consumer     FCM HTTP v1, retry, DLQ             packages/core/src/push/consumer.ts
+                        └─ scheduled          * * * * *  due scheduled pushes     packages/core/src/jobs/scheduled.ts
+                                              17 * * * * retention cleanup        packages/core/src/jobs/cleanup.ts
 ```
 
 ## Bindings
@@ -29,7 +31,7 @@ push delivery, and `scheduled` for crons (`src/index.ts`).
 | `PUSH_DLQ` | Queue `edgebase-push-dlq` | pushes that failed 5 attempts |
 | `AUTH_RL` | Rate limiting | 10 auth attempts / 60 s per IP |
 | `TOPIC_RL` | Rate limiting | 20 web topic changes / 60 s per user |
-| Static assets (no binding) | Static assets `public/` | the `/admin` page, built from `admin/`, served before the Worker runs |
+| Static assets (no binding) | Static assets `apps/server/public/` | the `/admin` page, built from `apps/admin/`, served before the Worker runs |
 | `MAIL` | Email Sending | verification and password-reset mail |
 
 ## Why it is shaped this way
@@ -44,7 +46,7 @@ push delivery, and `scheduled` for crons (`src/index.ts`).
 - **Broadcasts are one row.** A broadcast to every user writes one `broadcast` row; reads merge
   it with personal items, and a per-user watermark marks everything read in one write.
 - **FCM without firebase-admin.** The FCM HTTP v1 client signs its own service-account JWT with
-  WebCrypto (`src/push/fcm.ts`); `firebase-admin` does not run reliably on Workers.
+  WebCrypto (`packages/core/src/push/fcm.ts`); `firebase-admin` does not run reliably on Workers.
 - **Retries per token.** A message that partly fails is re-queued with only the failed tokens,
   so users whose devices already got the push are not sent it again.
 - **Writes are budgeted.** Device upserts skip writes inside 7 days, rowid keys avoid extra

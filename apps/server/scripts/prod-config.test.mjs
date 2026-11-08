@@ -78,8 +78,26 @@ describe("renderConfig", () => {
   it("refuses to render before setup has stored the database ids", () => {
     assert.throws(
       () => renderConfig(template, { ...valid, DB_ID: "" }),
-      /run pnpm bootstrap first/,
+      /no DB_ID: run pnpm bootstrap first/,
     );
+  });
+
+  it("names and fills a database the app adds, from its <binding>_ID", () => {
+    const extra = { binding: "APP_DB", database_name: "edgebase-app", database_id: "local-app" };
+    const withApp = { ...template, d1_databases: [...template.d1_databases, extra] };
+    const appId = "33333333-3333-3333-3333-333333333333";
+    const rendered = renderConfig(withApp, { ...valid, APP_DB_ID: appId });
+    assert.deepEqual(rendered.d1_databases.at(-1), {
+      ...extra,
+      database_name: "myapp-app",
+      database_id: appId,
+    });
+    assert.throws(() => renderConfig(withApp, valid), /no APP_DB_ID/);
+  });
+
+  it("refuses a database whose name does not start with the template's name", () => {
+    const odd = { ...template, d1_databases: [{ binding: "X", database_name: "other" }] };
+    assert.throws(() => renderConfig(odd, valid), /must start with edgebase-/);
   });
 });
 

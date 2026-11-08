@@ -77,19 +77,40 @@ export function validate(env) {
   return problems;
 }
 
+/**
+ * Every D1 database in the template, named for the project: `edgebase-inbox` becomes
+ * `<PROJECT_NAME>-inbox`, and its id lives in `.env.production` as `<binding>_ID`. Adding a
+ * database to wrangler.jsonc is all bootstrap, deploy and migrations need.
+ */
+export function databases(template, projectName) {
+  const prefix = `${template.name}-`;
+  return template.d1_databases.map((d) => {
+    if (!d.database_name.startsWith(prefix)) {
+      throw new Error(`wrangler.jsonc: database_name ${d.database_name} must start with ${prefix}`);
+    }
+    return {
+      binding: d.binding,
+      name: `${projectName}-${d.database_name.slice(prefix.length)}`,
+      idKey: `${d.binding}_ID`,
+    };
+  });
+}
+
 /** The deployable config: the template with names, database ids and vars from the env. */
 export function renderConfig(template, env) {
-  if (!env.DB_ID || !env.INBOX_DB_ID) {
-    throw new Error(`${ENV_FILE} has no database ids: run pnpm bootstrap first`);
-  }
   const name = env.PROJECT_NAME;
+  const dbs = databases(template, name);
+  const unset = dbs.filter((d) => !env[d.idKey]).map((d) => d.idKey);
+  if (unset.length > 0) {
+    throw new Error(`${ENV_FILE} has no ${unset.join(", ")}: run pnpm bootstrap first`);
+  }
   const queueName = { PUSH_QUEUE: `${name}-push`, PUSH_DLQ: `${name}-push-dlq` };
-  const database = { DB: [`${name}-db`, env.DB_ID], INBOX_DB: [`${name}-inbox`, env.INBOX_DB_ID] };
   const out = structuredClone(template);
   out.name = name;
   if (env.CLOUDFLARE_ACCOUNT_ID) out.account_id = env.CLOUDFLARE_ACCOUNT_ID;
-  for (const d of out.d1_databases) {
-    [d.database_name, d.database_id] = database[d.binding];
+  for (const [i, d] of out.d1_databases.entries()) {
+    d.database_name = dbs[i].name;
+    d.database_id = env[dbs[i].idKey];
   }
   for (const p of out.queues.producers) p.queue = queueName[p.binding];
   for (const c of out.queues.consumers) {

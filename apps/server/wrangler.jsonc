@@ -13,13 +13,13 @@
       "binding": "DB",
       "database_name": "edgebase-db",
       "database_id": "local",
-      "migrations_dir": "migrations"
+      "migrations_dir": "../../packages/core/migrations"
     },
     {
       "binding": "INBOX_DB",
       "database_name": "edgebase-inbox",
       "database_id": "local-inbox",
-      "migrations_dir": "migrations-inbox"
+      "migrations_dir": "../../packages/core/migrations-inbox"
     }
   ],
   "ratelimits": [

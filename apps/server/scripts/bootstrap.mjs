@@ -6,14 +6,27 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import {
+  databases,
   ENV_FILE,
   PROD_CONFIG,
   parseEnvFile,
+  readTemplate,
   secretsPayload,
   serializeEnvFile,
   validate,
   writeProdConfig,
 } from "./prod-config.mjs";
+
+// Before the workspace layout these files sat at the repository root; starting over here would
+// generate new secrets and sign every user out.
+for (const old of [ENV_FILE, ".dev.vars"]) {
+  if (existsSync(`../../${old}`)) {
+    console.error(
+      `✖ ${old} is at the repository root: move it to apps/server/, then run this again.`,
+    );
+    process.exit(1);
+  }
+}
 
 const yes = process.argv.includes("--yes");
 const rl = yes ? null : createInterface({ input: process.stdin, output: process.stdout });
@@ -117,10 +130,8 @@ console.log(`✔ ${ENV_FILE} saved (mode 600)`);
 
 // 3. Databases: reuse by name, create when missing.
 const d1List = () => JSON.parse(wrangler(["d1", "list", "--json"], { capture: true }).stdout);
-for (const [key, name] of [
-  ["DB_ID", `${env.PROJECT_NAME}-db`],
-  ["INBOX_DB_ID", `${env.PROJECT_NAME}-inbox`],
-]) {
+const dbs = databases(await readTemplate(), env.PROJECT_NAME);
+for (const { idKey: key, name } of dbs) {
   let found = d1List().find((d) => d.name === name);
   if (!found) {
     wrangler(["d1", "create", name], { capture: true });
@@ -152,7 +163,7 @@ try {
   fail(error.message);
 }
 console.log(`✔ ${PROD_CONFIG} written`);
-for (const binding of ["DB", "INBOX_DB"]) {
+for (const { binding } of dbs) {
   wrangler(["d1", "migrations", "apply", binding, "--remote", "-c", PROD_CONFIG]);
 }
 
