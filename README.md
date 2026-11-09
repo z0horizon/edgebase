@@ -6,7 +6,8 @@ Clone it, bootstrap it, deploy it, build on it.
 
 ## Quick start
 
-Requirements: Node.js 22+, pnpm 10+, Wrangler logged in (`npx wrangler login`), Workers Paid plan.
+Requirements: Node.js 22+, pnpm 10+, Wrangler logged in (`npx wrangler login`), Workers Paid plan
+(Free works with limits, see [Cost](#cost)).
 
 ```bash
 pnpm install
@@ -32,7 +33,9 @@ See [docs/deployment.md](docs/deployment.md) for details.
 
 ## Cost
 
-Small apps fit in the $5 Workers Paid plan. At 1M daily users expect roughly $260 a month, mostly
+The Workers Free plan runs EdgeBase for development and for small apps of up to about 10k daily
+users that sign in with Google, Apple or GitHub only; email and password sign-in and mail need
+Workers Paid. Apps of moderate size fit in the $5 Paid plan. At 1M daily users expect roughly $260 a month, mostly
 Worker requests from client API calls and D1 row writes from inbox items and daily session
 refreshes. How often your client calls the API matters most; see
 [docs/cost.md](docs/cost.md) for the numbers and the client rules that keep them down.

@@ -4,6 +4,28 @@ Prices are Cloudflare's list prices when this was written; check the current pri
 before relying on the numbers. Row-write counts are estimates from the schema: D1 counts one
 write per row and one per index entry it changes, and deletes count too.
 
+## Workers Free ($0)
+
+Free works for development and for a small app that signs in with Google, Apple or GitHub only:
+
+- Email and password sign-in does not: hashing a password takes more than Free's 10 ms CPU per
+  request, so sign-up and sign-in fail.
+- Mail does not: verification, password reset and invitations need Email Sending, which needs Paid.
+
+Daily limits, reset at 00:00 UTC; past them requests fail instead of costing money:
+
+| Limit per day | Roughly holds |
+|---|---|
+| 100k Worker requests | ~10k daily users at 10 API calls each (cron uses ~1.5k) |
+| 100k D1 rows written | ~40k daily users without inbox items (~2.3 writes each: session, device); ~16k with one personal inbox item each (~6 writes) |
+| 5M D1 rows read | ~150k API calls of a few dozen rows |
+| 10k Queue operations | ~3,300 messages: ~165k users reached by `userIds` pushes, or thousands of broadcasts |
+| 500 MB per D1 database | ~1M inbox items, e.g. 10k users × 1 item a day × 30-day TTL ≈ 120 MB |
+
+So expect **up to about 10k daily users**, fewer if clients call the API more often. Requests run
+out first; follow the client rules below. Move to Paid when you need email and password, mail,
+or more headroom.
+
 ## Included in Workers Paid ($5 / month)
 
 | Service | Included | Beyond |
