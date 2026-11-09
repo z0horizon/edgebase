@@ -1,0 +1,29 @@
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { f = 1; next }
+            /^## \[/ || /^\[[^]]+\]: / { f = 0 }
+            f
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --latest
+        env:
+          GH_TOKEN: ${{ github.token }}

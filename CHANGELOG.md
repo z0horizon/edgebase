@@ -6,6 +6,10 @@ What changed for people building on EdgeBase. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Pushing a `vX.Y.Z` tag publishes a GitHub release from its CHANGELOG section after CI passes.
+
 ## [0.2.0] - 2026-11-09
 
 ### Changed

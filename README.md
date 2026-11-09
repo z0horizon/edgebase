@@ -1,5 +1,8 @@
 # EdgeBase
 
+[![Latest release](https://img.shields.io/github/v/release/z0horizon/edgebase)](https://github.com/z0horizon/edgebase/releases/latest)
+[![CI](https://github.com/z0horizon/edgebase/actions/workflows/ci.yml/badge.svg)](https://github.com/z0horizon/edgebase/actions/workflows/ci.yml)
+
 A backend template on Cloudflare Workers: sign-in with Better Auth (email and password, Google,
 Apple, GitHub) and push notifications through Firebase Cloud Messaging with an in-app inbox.
 Clone it, bootstrap it, deploy it, build on it.
@@ -20,9 +23,13 @@ pnpm admin:dev          # Worker and admin page: http://localhost:5173/admin/
 
 ## Start a new project from this template
 
-1. Clone the latest release: `git clone --branch vX.Y.Z https://github.com/z0horizon/edgebase.git`
-   (clone or fork, not "Use this template", so updates merge; see
-   [Updating EdgeBase](docs/extending.md#updating-edgebase)).
+1. Clone the latest release (clone or fork, not "Use this template", so updates merge; see
+   [Updating EdgeBase](docs/extending.md#updating-edgebase)):
+
+   ```bash
+   git clone https://github.com/z0horizon/edgebase.git acme && cd acme
+   git reset --hard "$(git describe --tags --abbrev=0)"   # newest release tag
+   ```
 2. `pnpm bootstrap` asks for a project name (lowercase, dashes, e.g. `acme`) and the deploy
    values, creates the D1 databases and queues under that name, migrates them and uploads the
    secrets. Everything it learns goes to `apps/server/.env.production`, which is gitignored, so the
