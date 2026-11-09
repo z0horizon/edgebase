@@ -56,6 +56,17 @@ admin page.
 - One topic per pull request. Describe what changed, why, and how you tested it.
 - CI must pass before review.
 
+## Releasing (maintainers)
+
+When `Unreleased` in [CHANGELOG.md](CHANGELOG.md) holds something users should get:
+
+1. Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add an empty `## [Unreleased]` above it,
+   and update the compare links at the bottom. Before 1.0, bump the minor version for anything
+   with an `Upgrade` line and the patch version for fixes only.
+2. Commit as `chore(release): vX.Y.Z`, then `git tag -a vX.Y.Z -m vX.Y.Z && git push --follow-tags`.
+3. Create a GitHub release from the tag with that version's CHANGELOG section, so watchers are
+   notified.
+
 ## License
 
 By contributing you agree that your contributions are licensed under the [MIT License](LICENSE).

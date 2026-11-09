@@ -6,6 +6,8 @@ What changed for people building on EdgeBase. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-09
+
 ### Changed
 
 - The repository is a pnpm workspace:
@@ -17,6 +19,7 @@ What changed for people building on EdgeBase. The format follows
 - Bootstrap, deploy and migrations read the D1 databases from `apps/server/wrangler.jsonc`. A database you add there is created, migrated and deployed with no script changes, and its id is stored as `<binding>_ID`.
 - Redesigned `/admin/` with a user search-and-select recipient picker, multi-user selection from the Users table, push summary stats, and template placeholder highlighting.
 - Requires pnpm 10 or later.
+- Releases are `vX.Y.Z` tags; [Updating EdgeBase](docs/extending.md#updating-edgebase) merges a tag instead of `main`.
 
 ### Added
 
@@ -62,5 +65,6 @@ First version.
   - 10% log sampling;
   - per-IP rate limits on auth and per-user limits on topic changes.
 
-[Unreleased]: https://github.com/z0horizon/edgebase/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/z0horizon/edgebase/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/z0horizon/edgebase/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/z0horizon/edgebase/releases/tag/v0.1.0

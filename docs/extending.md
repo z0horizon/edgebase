@@ -84,11 +84,13 @@ export default {
 ## Updating EdgeBase
 
 Start from a clone or fork, not GitHub's "Use this template": a template copy has no shared
-history, so every later merge conflicts on every file. Then:
+history, so every later merge conflicts on every file. Releases are `vX.Y.Z` tags, each with its
+section in [CHANGELOG.md](../CHANGELOG.md); merge a tag rather than `main`, which may hold
+unreleased work. Watch the repository for releases to hear about new ones. Then:
 
 ```bash
 git remote add upstream https://github.com/z0horizon/edgebase.git   # once
-git fetch upstream && git merge upstream/main     # read CHANGELOG.md for Upgrade steps
+git fetch upstream --tags && git merge v0.2.0     # the release you want; read its Upgrade steps
 pnpm install                                         # regenerates pnpm-lock.yaml if it conflicted
 pnpm db:migrate:local && pnpm typecheck && pnpm test
 ```

@@ -2,8 +2,10 @@
 
 ## Supported versions
 
-EdgeBase has no tagged releases yet. Security fixes land on `main` only; update your copy from
-`main` to get them (see [CHANGELOG.md](CHANGELOG.md) for upgrade steps).
+Only the latest release (the newest `vX.Y.Z` tag) and `main` get security fixes. To get a fix,
+merge it into your copy as described in
+[Updating EdgeBase](docs/extending.md#updating-edgebase), and follow the `Upgrade` steps in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Reporting a vulnerability
 
