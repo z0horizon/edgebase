@@ -1,5 +1,5 @@
-import { Pencil, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { FileText, Globe, Pencil, Plus, Trash2 } from "lucide-react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import {
@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
-  CardDescription,
+  CardContent,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -39,11 +39,32 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage, type Template } from "@/lib/api";
 
 const ANY = "any";
 type Editing = { template: Template | null } | null;
+
+function highlightPlaceholders(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(/\{\{\s*[\w.-]+\s*\}\}/g)) {
+    const start = match.index;
+    if (start > cursor) nodes.push(text.slice(cursor, start));
+    nodes.push(
+      <code
+        key={start}
+        className="rounded bg-primary/10 px-1 py-0.5 font-mono text-[11px] font-medium text-primary"
+      >
+        {match[0]}
+      </code>,
+    );
+    cursor = start + match[0].length;
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
 
 export function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[] | null>(null);
@@ -83,9 +104,22 @@ export function TemplatesPage() {
         </Button>
       </PageHeader>
 
+      {templates === null && (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {[1, 2, 3].map((k) => (
+            <Skeleton key={k} className="h-44 rounded-xl" />
+          ))}
+        </div>
+      )}
+
       {templates?.length === 0 && (
-        <div className="grid place-items-center gap-3 rounded-lg border border-dashed p-12 text-center">
-          <p className="text-muted-foreground">No templates yet. Save the pushes you send often.</p>
+        <div className="grid place-items-center gap-3 rounded-xl border border-dashed bg-card p-12 text-center">
+          <span className="grid size-10 place-items-center rounded-xl bg-secondary text-muted-foreground">
+            <FileText className="size-5" />
+          </span>
+          <p className="text-sm text-muted-foreground">
+            No templates yet. Save the pushes you send often.
+          </p>
           <Button variant="outline" onClick={() => setEditing({ template: null })}>
             <Plus /> New template
           </Button>
@@ -94,30 +128,43 @@ export function TemplatesPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {templates?.map((t) => (
-          <Card key={t.name} className="gap-4">
-            <CardHeader>
-              <p className="font-mono text-xs text-muted-foreground">{t.name}</p>
-              <CardTitle className="break-words">{t.title}</CardTitle>
-              <CardDescription className="line-clamp-2 break-words">{t.body}</CardDescription>
+          <Card key={t.name} className="gap-4 shadow-xs transition-shadow hover:shadow-md">
+            <CardHeader className="pb-0">
+              <code className="w-fit rounded bg-secondary px-2 py-0.5 font-mono text-xs font-medium text-secondary-foreground">
+                {t.name}
+              </code>
               <CardAction>
                 {t.category && (
-                  <Badge variant="outline">
+                  <Badge variant={t.category === "marketing" ? "warning" : "secondary"}>
                     {t.category === "marketing" ? "Marketing" : "Transactional"}
                   </Badge>
                 )}
               </CardAction>
             </CardHeader>
-            <CardFooter className="mt-auto flex-wrap gap-2">
-              <div className="mr-auto flex flex-wrap gap-1">
+            <CardContent className="grid gap-1.5">
+              <div className="rounded-lg border bg-muted/35 p-3">
+                <CardTitle className="text-sm break-words">
+                  {highlightPlaceholders(t.title)}
+                </CardTitle>
+                {t.body && (
+                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed break-words text-muted-foreground">
+                    {highlightPlaceholders(t.body)}
+                  </p>
+                )}
+              </div>
+            </CardContent>
+            <CardFooter className="mt-auto flex-wrap gap-2 border-t pt-3">
+              <div className="mr-auto flex flex-wrap items-center gap-1">
+                <Globe className="mr-0.5 size-3.5 text-muted-foreground" />
                 {["Default", ...Object.keys(t.translations ?? {})].map((l) => (
-                  <Badge key={l} variant="secondary">
+                  <Badge key={l} variant="outline">
                     {l}
                   </Badge>
                 ))}
               </div>
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 aria-label={`Edit ${t.name}`}
                 onClick={() => setEditing({ template: t })}
               >
@@ -125,7 +172,7 @@ export function TemplatesPage() {
               </Button>
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 aria-label={`Delete ${t.name}`}
                 onClick={() => setDeleting(t)}
               >

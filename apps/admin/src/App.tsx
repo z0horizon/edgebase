@@ -1,4 +1,4 @@
-import { BellRing, FileText, LogOut, Send, Users } from "lucide-react";
+import { BellRing, FileText, Layers, LogOut, Send, Users } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -46,8 +46,14 @@ export function App() {
 
   if (me === undefined) {
     return (
-      <div className="grid min-h-screen place-items-center">
-        <Skeleton className="h-8 w-40" />
+      <div className="grid min-h-screen place-items-center bg-background p-4">
+        <div className="flex items-center gap-3 rounded-xl border bg-card px-5 py-4 shadow-xs">
+          <Skeleton className="size-8 rounded-lg" />
+          <div className="grid gap-1.5">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-3 w-40" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -72,40 +78,87 @@ export function App() {
     );
   }
   const Page = VIEWS[view].page;
+  const initial = (me.name || me.email).trim().charAt(0).toUpperCase() || "A";
 
   return (
-    <div className="min-h-screen bg-background md:grid md:grid-cols-[240px_1fr]">
-      <aside className="flex flex-col gap-1 border-b bg-muted/40 p-3 md:sticky md:top-0 md:h-screen md:border-r md:border-b-0 md:p-4">
-        <div className="px-2 pb-4 font-semibold tracking-tight">EdgeBase</div>
-        <nav className="flex gap-1 overflow-x-auto md:flex-col" aria-label="Sections">
+    <div className="min-h-screen bg-background md:grid md:grid-cols-[252px_1fr]">
+      <aside className="flex flex-col gap-3 border-b bg-sidebar p-3 text-sidebar-foreground md:sticky md:top-0 md:h-screen md:border-r md:border-b-0 md:p-4">
+        <div className="flex items-center justify-between gap-2 px-1.5 py-1">
+          <div className="flex items-center gap-2.5">
+            <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-xs">
+              <Layers className="size-4" />
+            </span>
+            <div className="grid leading-tight">
+              <span className="text-sm font-semibold tracking-tight">EdgeBase</span>
+              <span className="text-[11px] text-muted-foreground">Admin console</span>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="md:hidden"
+            onClick={signOut}
+            aria-label="Sign out"
+          >
+            <LogOut className="size-4" />
+          </Button>
+        </div>
+
+        <nav className="flex gap-1 overflow-x-auto md:mt-2 md:flex-col" aria-label="Sections">
           {(Object.keys(VIEWS) as View[]).map((key) => {
             const { label, icon: Icon } = VIEWS[key];
+            const active = view === key;
             return (
               <a
                 key={key}
                 href={`#${key}`}
-                aria-current={view === key ? "page" : undefined}
+                aria-current={active ? "page" : undefined}
                 className={cn(
-                  "flex items-center gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring",
-                  view === key && "bg-background font-medium text-foreground shadow-xs",
+                  "group relative flex items-center gap-2.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring",
+                  active
+                    ? "bg-accent font-medium text-accent-foreground"
+                    : "text-muted-foreground hover:bg-secondary/80 hover:text-foreground",
                 )}
               >
-                <Icon className="size-4" />
+                {active && (
+                  <span
+                    aria-hidden="true"
+                    className="hidden h-4 w-1 rounded-full bg-primary md:absolute md:left-0 md:block"
+                  />
+                )}
+                <Icon
+                  className={cn(
+                    "size-4 shrink-0 transition-colors",
+                    active ? "text-primary" : "text-muted-foreground group-hover:text-foreground",
+                  )}
+                />
                 {label}
               </a>
             );
           })}
         </nav>
-        <div className="mt-auto flex items-center justify-between gap-2 px-2 pt-3 md:grid md:pt-4">
-          <p className="truncate text-xs text-muted-foreground" title={me.email}>
-            {me.email}
-          </p>
-          <Button variant="outline" size="sm" onClick={signOut}>
+
+        <div className="mt-auto hidden rounded-xl border bg-background/60 p-2.5 md:grid md:gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span
+              aria-hidden="true"
+              className="grid size-8 shrink-0 place-items-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+            >
+              {initial}
+            </span>
+            <div className="min-w-0 flex-1">
+              {me.name && <p className="truncate text-xs font-medium">{me.name}</p>}
+              <p className="truncate text-xs text-muted-foreground" title={me.email}>
+                {me.email}
+              </p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" className="w-full justify-center" onClick={signOut}>
             <LogOut /> Sign out
           </Button>
         </div>
       </aside>
-      <main className="mx-auto w-full max-w-6xl p-4 md:p-8">
+      <main className="mx-auto w-full max-w-6xl p-4 sm:p-6 md:p-8 lg:py-10">
         <Page me={me} />
       </main>
       <Toaster />

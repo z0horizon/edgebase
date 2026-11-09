@@ -15,6 +15,7 @@ What changed for people building on EdgeBase. The format follows
   
   Root commands (`pnpm dev`, `pnpm bootstrap`, `pnpm run deploy`, `pnpm db:migrate:*`) work as before.
 - Bootstrap, deploy and migrations read the D1 databases from `apps/server/wrangler.jsonc`. A database you add there is created, migrated and deployed with no script changes, and its id is stored as `<binding>_ID`.
+- Redesigned `/admin/` with a user search-and-select recipient picker, multi-user selection from the Users table, push summary stats, and template placeholder highlighting.
 - Requires pnpm 10 or later.
 
 ### Added
