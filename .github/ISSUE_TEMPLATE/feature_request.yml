@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest something EdgeBase should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: EdgeBase core holds only what most apps need. A feature for one app usually belongs in your own apps/server (see docs/extending.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and why the current behaviour does not cover it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behaviour you want, e.g. a route, script or admin page change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including building it in apps/server.
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost and storage impact
+      description: Extra requests, D1 writes or growing tables, if any.

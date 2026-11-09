@@ -49,6 +49,11 @@ refreshes. How often your client calls the API matters most; see
 - [docs/deployment.md](docs/deployment.md), [docs/cost.md](docs/cost.md), [docs/roadmap.md](docs/roadmap.md)
 - [CHANGELOG.md](CHANGELOG.md): what changed, and what to do when you update
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as described in
+[SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE)

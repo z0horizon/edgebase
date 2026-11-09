@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in EdgeBase does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security problems go to SECURITY.md, not here. Remove IDs, URLs, emails and secrets from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Commands, requests (method, path, body) or admin page actions.
+      placeholder: |
+        1. pnpm admin:dev
+        2. POST /v1/...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error response
+      render: shell
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - Local (wrangler dev)
+        - Deployed Worker
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: EdgeBase commit
+      description: Output of `git rev-parse --short HEAD`, or the date you copied the template.
+  - type: input
+    id: env
+    attributes:
+      label: Node.js, pnpm and Wrangler versions
