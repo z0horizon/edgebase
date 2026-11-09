@@ -26,6 +26,7 @@ What changed for people building on EdgeBase. The format follows
 - `pnpm admin:create` and `pnpm bootstrap` create `apps/server/.dev.vars` or fill its empty secrets, never replacing a value; no manual copy of `.dev.vars.example` is needed.
 - Admin features need two-factor: an admin without TOTP gets `403 two_factor_required` on `/api/auth/admin/*` and the admin-session push routes, and the admin page walks them through setting it up. `pnpm admin:create --reset-2fa` resets an admin who lost their authenticator.
 - MIT license.
+- [docs/cost.md](docs/cost.md) counts what an active user costs (API calls, session and device refreshes, reported opens), lists client rules that keep cost down, and gives a full monthly estimate for 1M daily users.
 
 ### Upgrade
 

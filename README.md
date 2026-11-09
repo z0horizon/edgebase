@@ -30,6 +30,13 @@ pnpm admin:dev          # Worker and admin page: http://localhost:5173/admin/
 
 See [docs/deployment.md](docs/deployment.md) for details.
 
+## Cost
+
+Small apps fit in the $5 Workers Paid plan. At 1M daily users expect roughly $260 a month, mostly
+Worker requests from client API calls and D1 row writes from inbox items and daily session
+refreshes. How often your client calls the API matters most; see
+[docs/cost.md](docs/cost.md) for the numbers and the client rules that keep them down.
+
 ## Docs
 
 - [docs/design.md](docs/design.md): architecture and why
