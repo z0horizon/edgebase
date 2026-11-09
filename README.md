@@ -27,10 +27,10 @@ pnpm admin:dev          # Worker and admin page: http://localhost:5173/admin/
    [Updating EdgeBase](docs/extending.md#updating-edgebase)):
 
    ```bash
-   git clone https://github.com/z0horizon/edgebase.git acme && cd acme
+   git clone https://github.com/z0horizon/edgebase.git my-app && cd my-app
    git reset --hard "$(git describe --tags --abbrev=0)"   # newest release tag
    ```
-2. `pnpm bootstrap` asks for a project name (lowercase, dashes, e.g. `acme`) and the deploy
+2. `pnpm bootstrap` asks for a project name (lowercase, dashes, e.g. `my-app`) and the deploy
    values, creates the D1 databases and queues under that name, migrates them and uploads the
    secrets. Everything it learns goes to `apps/server/.env.production`, which is gitignored, so the
    code never needs renaming and no ID or secret is committed.
