@@ -2,6 +2,7 @@ import { Copy, ShieldCheck } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import { renderSVG } from "uqr";
+import { FormError } from "@/components/FormError";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -134,14 +135,7 @@ export function TwoFactorSetup({
                     autoFocus
                   />
                 </div>
-                {error && (
-                  <p
-                    role="alert"
-                    className="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
-                  >
-                    {error}
-                  </p>
-                )}
+                <FormError message={error} />
                 <Button type="submit" disabled={busy}>
                   Continue
                 </Button>
@@ -179,14 +173,7 @@ export function TwoFactorSetup({
                     autoFocus
                   />
                 </div>
-                {error && (
-                  <p
-                    role="alert"
-                    className="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
-                  >
-                    {error}
-                  </p>
-                )}
+                <FormError message={error} />
                 <Button type="submit" disabled={busy}>
                   Turn on two-factor
                 </Button>

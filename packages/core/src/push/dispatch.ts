@@ -1,7 +1,6 @@
-import { insertBroadcast, personalStatements } from "../inbox/queries";
+import { broadcastStatement, personalStatements, writeInboxOnce } from "../inbox/queries";
 import type { PushDispatch, PushPayload, PushQueueMessage, Translations } from "./types";
 
-const IDS_PER_QUERY = 90;
 const USERS_PER_MESSAGE = 50;
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -18,19 +17,16 @@ async function eligibleUsers(
   ids: string[],
   marketing: boolean,
 ): Promise<Recipient[]> {
-  const found: Recipient[] = [];
-  for (const part of chunk([...new Set(ids)], IDS_PER_QUERY)) {
-    const rows = await db
-      .prepare(
-        `SELECT id, locale FROM user WHERE id IN (${part.map(() => "?").join(", ")})${
-          marketing ? " AND marketingOptIn = 1" : ""
-        }`,
-      )
-      .bind(...part)
-      .all<Recipient>();
-    found.push(...rows.results);
-  }
-  return found;
+  // One JSON parameter keeps any number of ids under D1's 100 bound parameters.
+  const rows = await db
+    .prepare(
+      `SELECT id, locale FROM user WHERE id IN (SELECT value FROM json_each(?))${
+        marketing ? " AND marketingOptIn = 1" : ""
+      }`,
+    )
+    .bind(JSON.stringify(ids))
+    .all<Recipient>();
+  return rows.results;
 }
 
 /** The translation key for a user's locale: exact tag, then its language, else "" (default text). */
@@ -53,18 +49,19 @@ function groupByLocale(users: Recipient[], translations: Translations): Map<stri
   return groups;
 }
 
+type Prepared = { users: number; messages: { body: PushQueueMessage }[] };
+
 /**
+ * Stores the push's inbox rows (once per `pushId`, however often it is called) and returns the
+ * queue messages to send; queueing is left to the caller holding the push's claim.
  * `pushId` (a push_stats row) is added to the push's data so apps can report opens.
- * `onInboxWritten` runs right after the inbox rows are stored, before anything is queued, so a
- * caller that retries a failed dispatch can avoid writing the inbox twice.
  */
-export async function dispatchPush(
+export async function preparePush(
   env: Env,
   req: PushDispatch,
   now: number,
   pushId: number,
-  onInboxWritten: () => Promise<void> = async () => {},
-): Promise<{ users: number }> {
+): Promise<Prepared> {
   // Translation keys are matched in lowercase; "" is the default text.
   const translations: Translations = Object.fromEntries(
     Object.entries(req.translations ?? {}).map(([tag, text]) => [tag.toLowerCase(), text]),
@@ -79,36 +76,43 @@ export async function dispatchPush(
     // A topic has no per-user locale; apps that need one subscribe to a topic per language.
     const payload = payloadFor("");
     if (req.inbox) {
-      await insertBroadcast(env.INBOX_DB, payload, now);
-      await onInboxWritten();
+      await writeInboxOnce(
+        env.INBOX_DB,
+        pushId,
+        [broadcastStatement(env.INBOX_DB, payload, now)],
+        now,
+      );
     }
-    const message: PushQueueMessage = { kind: "topic", topic: req.to.topic, payload, attempt: 0 };
-    await env.PUSH_QUEUE.send(message);
-    return { users: 0 };
+    return {
+      users: 0,
+      messages: [{ body: { kind: "topic", topic: req.to.topic, payload, attempt: 0 } }],
+    };
   }
 
   const users = await eligibleUsers(env.DB, req.to.userIds, req.category === "marketing");
   await env.DB.prepare("UPDATE push_stats SET users = ? WHERE id = ?")
     .bind(users.length, pushId)
     .run();
-  if (users.length === 0) return { users: 0 };
+  if (users.length === 0) return { users: 0, messages: [] };
   const groups = [...groupByLocale(users, translations)].map(([locale, userIds]) => ({
     payload: payloadFor(locale),
     userIds,
   }));
   if (req.inbox) {
-    // One batch for every locale, so a failure leaves no inbox rows for a retry to duplicate.
-    await env.INBOX_DB.batch(
+    // One transaction for every locale, so a failure leaves no partial inbox behind.
+    await writeInboxOnce(
+      env.INBOX_DB,
+      pushId,
       groups.flatMap((g) => personalStatements(env.INBOX_DB, g.userIds, g.payload, now)),
+      now,
     );
-    await onInboxWritten();
   }
-  await env.PUSH_QUEUE.sendBatch(
-    groups.flatMap(({ payload, userIds }) =>
+  return {
+    users: users.length,
+    messages: groups.flatMap(({ payload, userIds }) =>
       chunk(userIds, USERS_PER_MESSAGE).map((part) => ({
         body: { kind: "users", userIds: part, payload, attempt: 0 } satisfies PushQueueMessage,
       })),
     ),
-  );
-  return { users: users.length };
+  };
 }

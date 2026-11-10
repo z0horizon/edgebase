@@ -4,7 +4,9 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./limits": "./src/push/limits.ts",
+    "./crons": "./src/jobs/crons.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

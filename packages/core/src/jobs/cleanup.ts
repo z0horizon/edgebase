@@ -1,9 +1,10 @@
+import { STATS_KEPT_DAYS } from "../push/limits";
+
 const CHUNK = 5000;
 const DAY_MS = 86_400_000;
 const DEVICE_STALE_DAYS = 60;
 const UNVERIFIED_SIGNUP_DAYS = 7;
 const IDEMPOTENCY_TTL_MS = DAY_MS;
-const PUSH_STATS_DAYS = 90;
 const BUDGET_MS = 20_000;
 
 type ChunkResult = { deleted: number; sizeAfter: number; rowsRead: number; complete: boolean };
@@ -39,6 +40,7 @@ async function deleteInChunks(
 type CleanupReport = {
   inbox: number;
   broadcast: number;
+  inboxPush: number;
   session: number;
   verification: number;
   device: number;
@@ -83,6 +85,13 @@ export async function runCleanup(
     [inboxCutoff],
     deadline,
   );
+  // Push ids grow with time like rowids, and a push past the inbox TTL is never retried.
+  const inboxPush = await deleteInChunks(
+    env.INBOX_DB,
+    byRowid("inbox_push"),
+    [inboxCutoff],
+    deadline,
+  );
   const session = await deleteInChunks(env.DB, expired("session"), [iso(now)], deadline);
   const verification = await deleteInChunks(env.DB, expired("verification"), [iso(now)], deadline);
   const device = await deleteInChunks(
@@ -112,7 +121,7 @@ export async function runCleanup(
     deadline,
   );
   // Opens go first, and a stats row only once it has none left, so no open outlives its push.
-  const statsCutoff = now - PUSH_STATS_DAYS * DAY_MS;
+  const statsCutoff = now - STATS_KEPT_DAYS * DAY_MS;
   const pushOpen = await deleteInChunks(
     env.DB,
     `DELETE FROM push_open WHERE (push_id, user_id) IN (
@@ -134,6 +143,7 @@ export async function runCleanup(
   const all = [
     inbox,
     broadcast,
+    inboxPush,
     session,
     verification,
     device,
@@ -146,6 +156,7 @@ export async function runCleanup(
   const report: CleanupReport = {
     inbox: inbox.deleted,
     broadcast: broadcast.deleted,
+    inboxPush: inboxPush.deleted,
     session: session.deleted,
     verification: verification.deleted,
     device: device.deleted,
@@ -157,7 +168,7 @@ export async function runCleanup(
     rowsRead: all.reduce((sum, r) => sum + r.rowsRead, 0),
     complete: all.every((r) => r.complete),
     dbBytes: pushStats.sizeAfter,
-    inboxBytes: broadcast.sizeAfter,
+    inboxBytes: inboxPush.sizeAfter,
   };
   if (report.complete) console.info("cleanup", JSON.stringify(report));
   else

@@ -50,6 +50,9 @@ export type User = {
   createdAt: string;
 };
 
+/** `GET /v1/me`: the signed-in user, and whether admin features first need TOTP set up. */
+export type Me = User & { adminNeedsTwoFactor: boolean };
+
 export type Text = { title: string; body: string };
 export type Category = "transactional" | "marketing";
 
@@ -70,6 +73,30 @@ export type PushStats = {
   opened: number;
   sendAt: number;
 };
+
+/** A page of users, newest first; `email` narrows to addresses containing it. */
+export function listUsers({
+  limit,
+  offset = 0,
+  email,
+}: {
+  limit: number;
+  offset?: number;
+  email?: string;
+}) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+    sortBy: "createdAt",
+    sortDirection: "desc",
+  });
+  if (email) {
+    params.set("searchField", "email");
+    params.set("searchOperator", "contains");
+    params.set("searchValue", email);
+  }
+  return api<{ users: User[]; total: number }>(`/api/auth/admin/list-users?${params}`);
+}
 
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong";

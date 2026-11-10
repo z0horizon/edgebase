@@ -72,6 +72,16 @@ function logDrop(result: SendResult, target: string) {
     console.error("fcm dropped", { target, status: result.status, code: result.code });
 }
 
+/** Stats for FCM's answers: accepted, and finally failed (refused, or out of retries). */
+function tally(results: SendResult[], message: PushQueueMessage) {
+  const final = (r: SendResult) =>
+    r.kind === "dead" || r.kind === "drop" || (r.kind === "retry" && !retriesLeft(message));
+  return {
+    sent: results.filter((r) => r.kind === "ok").length,
+    failed: results.filter(final).length,
+  };
+}
+
 /** The push_stats row of a message; messages queued before push stats existed have none. */
 const pushIdOf = (message: PushQueueMessage) => Number(message.payload.data?.["pushId"] ?? 0);
 
@@ -87,13 +97,8 @@ async function handleMessage(
     );
     if (result.kind === "retry") await retryLater(env, message, result.retryAfterSec);
     logDrop(result, `topic:${message.topic}`);
-    const finalFailure = result.kind !== "ok" && !(result.kind === "retry" && retriesLeft(message));
-    await recordDelivery(
-      env.DB,
-      pushIdOf(message),
-      result.kind === "ok" ? 1 : 0,
-      finalFailure ? 1 : 0,
-    );
+    const { sent, failed } = tally([result], message);
+    await recordDelivery(env.DB, pushIdOf(message), sent, failed);
     return;
   }
 
@@ -105,13 +110,11 @@ async function handleMessage(
     sendFcm(token, buildFcmMessage(payload, { token: t.token })),
   );
 
-  let sent = 0;
   const dead: string[] = [];
   const retry: PushTarget[] = [];
   let retryAfterSec: number | null = null;
   results.forEach((result, i) => {
     const t = targets[i] as PushTarget;
-    if (result.kind === "ok") sent++;
     if (result.kind === "dead") dead.push(t.token);
     if (result.kind === "retry") {
       retry.push(t);
@@ -123,9 +126,8 @@ async function handleMessage(
   // The sends already happened: a failure from here on must not make Queues redeliver the whole
   // message to devices that got it. A lost retry or a dead token left behind is the lesser harm.
   try {
-    const dropped = results.filter((r) => r.kind === "drop").length;
-    const outOfRetries = retriesLeft(message) ? 0 : retry.length;
-    await recordDelivery(env.DB, pushIdOf(message), sent, dead.length + dropped + outOfRetries);
+    const { sent, failed } = tally(results, message);
+    await recordDelivery(env.DB, pushIdOf(message), sent, failed);
     if (dead.length > 0) await deleteTokens(env.DB, dead);
     if (retry.length > 0) {
       await retryLater(

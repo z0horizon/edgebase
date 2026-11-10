@@ -13,7 +13,7 @@ const DAY_SECONDS = 86_400;
 const has = (...values: (string | undefined)[]) => values.every((value) => value?.trim());
 
 /** Only providers whose credentials are set, so a project can start with any subset. */
-function configuredProviders(env: Env) {
+export function configuredProviders(env: Env) {
   return {
     ...(has(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET) && {
       google: {
@@ -35,6 +35,9 @@ function configuredProviders(env: Env) {
     }),
   };
 }
+
+/** TRUSTED_ORIGINS as a list: app schemes (`myapp://`) and web origins. */
+export const trustedOrigins = (env: Env) => env.TRUSTED_ORIGINS.split(",").map((o) => o.trim());
 
 const SOCIAL_PROVIDERS = new Set(["google", "apple", "github"]);
 
@@ -67,7 +70,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     basePath: "/api/auth",
     baseURL: env.BASE_URL,
     secret: env.BETTER_AUTH_SECRET,
-    trustedOrigins: env.TRUSTED_ORIGINS.split(",").map((o) => o.trim()),
+    trustedOrigins: trustedOrigins(env),
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
@@ -170,7 +173,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
 }
 
 type Auth = ReturnType<typeof createAuth>;
-type Session = Auth["$Infer"]["Session"];
+export type Session = Auth["$Infer"]["Session"];
 export type SessionUser = Session["user"];
 
 /**

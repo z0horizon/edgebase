@@ -1,3 +1,4 @@
+import { MAX_RECIPIENTS } from "@edgebase/core/limits";
 import {
   Ban,
   Copy,
@@ -41,11 +42,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api, errorMessage, type User } from "@/lib/api";
+import { api, errorMessage, listUsers, type User } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 
 const PAGE = 20;
-const MAX_RECIPIENTS = 500;
 
 export function UsersPage({ me }: { me: User }) {
   const [users, setUsers] = useState<User[] | null>(null);
@@ -59,21 +59,8 @@ export function UsersPage({ me }: { me: User }) {
   const load = useCallback(async () => {
     // A slow answer for an older search or page must not replace a newer one.
     const request = ++latest.current;
-    const params = new URLSearchParams({
-      limit: String(PAGE),
-      offset: String(offset),
-      sortBy: "createdAt",
-      sortDirection: "desc",
-    });
-    if (query) {
-      params.set("searchField", "email");
-      params.set("searchOperator", "contains");
-      params.set("searchValue", query);
-    }
     try {
-      const result = await api<{ users: User[]; total: number }>(
-        `/api/auth/admin/list-users?${params}`,
-      );
+      const result = await listUsers({ limit: PAGE, offset, email: query });
       if (request !== latest.current) return;
       setUsers(result.users);
       setTotal(result.total);

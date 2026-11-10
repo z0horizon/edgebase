@@ -2,9 +2,8 @@
 // who can sign in with ADMIN_PASSWORD, with no mail or sign-up step. They set up TOTP at first
 // sign-in; --reset-2fa makes them set it up again (a lost phone and lost backup codes). Both live in a gitignored file: .env.local for the
 // local database, .env.production for the deployed one. An empty password is generated and saved.
-import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { hashPassword } from "better-auth/crypto";
@@ -12,8 +11,9 @@ import {
   ENV_FILE,
   ensureDevVars,
   PROD_CONFIG,
-  parseEnvFile,
-  serializeEnvFile,
+  readEnvFile,
+  runWrangler,
+  writeEnvFile,
   writeProdConfig,
 } from "./prod-config.mjs";
 
@@ -66,7 +66,7 @@ async function main() {
   };
   if (remote && !existsSync(file)) fail(`${file} not found: run pnpm bootstrap first`);
   if (!remote && ensureDevVars()) console.log("✔ .dev.vars secrets filled in for local dev");
-  const env = existsSync(file) ? parseEnvFile(readFileSync(file, "utf8")) : {};
+  const env = readEnvFile(file);
   const before = JSON.stringify(env);
 
   if (!env.ADMIN_EMAIL) {
@@ -82,19 +82,15 @@ async function main() {
   if (!EMAIL.test(env.ADMIN_EMAIL)) fail(`ADMIN_EMAIL ${env.ADMIN_EMAIL} is not an email address`);
   env.ADMIN_PASSWORD ||= randomBytes(18).toString("base64url");
   if (env.ADMIN_PASSWORD.length < 8) fail("ADMIN_PASSWORD must be at least 8 characters");
-  if (JSON.stringify(env) !== before) {
-    writeFileSync(file, `# Never commit this file.\n${serializeEnvFile(env)}`, { mode: 0o600 });
-    chmodSync(file, 0o600);
-  }
+  if (JSON.stringify(env) !== before) writeEnvFile(file, env);
 
   const target = remote ? ["--remote", "-c", PROD_CONFIG] : ["--local"];
   if (remote) await writeProdConfig(env);
   const d1 = (command) => {
-    const result = spawnSync(
-      "node_modules/.bin/wrangler",
-      ["d1", "execute", "DB", ...target, "--json", "--command", command],
-      { encoding: "utf8", env: { ...process.env, CI: "1" } },
-    );
+    const result = runWrangler(["d1", "execute", "DB", ...target, "--json", "--command", command], {
+      capture: true,
+      env: { CI: "1" },
+    });
     if (result.status !== 0) fail(`wrangler d1 execute failed:\n${result.stderr || result.stdout}`);
     return JSON.parse(result.stdout);
   };

@@ -18,6 +18,7 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   });
   if (!session) return jsonError(401, "unauthorized", "Sign in first");
   c.set("user", session.user);
+  c.set("session", session.session);
   await next();
 };
 

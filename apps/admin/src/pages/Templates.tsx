@@ -1,3 +1,4 @@
+import { BODY_MAX, TEMPLATE_NAME_PATTERN, TITLE_MAX } from "@edgebase/core/limits";
 import { FileText, Globe, Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -283,7 +284,7 @@ function TemplateDialog({
               name="name"
               defaultValue={template?.name}
               disabled={template !== null}
-              pattern="[a-z0-9_.\-]{1,64}"
+              pattern={TEMPLATE_NAME_PATTERN}
               title="Lowercase letters, digits, dots, dashes and underscores"
               placeholder="order-shipped"
               spellCheck={false}
@@ -296,13 +297,13 @@ function TemplateDialog({
               id="t-title"
               name="title"
               defaultValue={template?.title}
-              maxLength={120}
+              maxLength={TITLE_MAX}
               required
             />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="t-body">Message</Label>
-            <Textarea id="t-body" name="body" defaultValue={template?.body} maxLength={500} />
+            <Textarea id="t-body" name="body" defaultValue={template?.body} maxLength={BODY_MAX} />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="t-kind">Kind</Label>

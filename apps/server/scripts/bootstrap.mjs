@@ -3,18 +3,22 @@
 // It stops before deploying; run `pnpm run deploy` after it.
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import {
   databases,
   ENV_FILE,
   ensureDevVars,
+  GENERATED_SECRETS,
+  migrateAll,
   PROD_CONFIG,
-  parseEnvFile,
+  queueNames,
+  readEnvFile,
   readTemplate,
+  runWrangler,
   secretsPayload,
-  serializeEnvFile,
   validate,
+  writeEnvFile,
   writeProdConfig,
 } from "./prod-config.mjs";
 
@@ -41,13 +45,11 @@ function fail(message) {
 
 /** Runs wrangler; stops setup on failure. `capture` returns stdout instead of showing it. */
 function wrangler(args, { capture = false, input, allowFail = false } = {}) {
-  const result = spawnSync("node_modules/.bin/wrangler", args, {
+  const result = runWrangler(args, {
+    capture,
     input,
-    encoding: "utf8",
-    stdio: [input === undefined ? "inherit" : "pipe", capture ? "pipe" : "inherit", "pipe"],
     // --yes must never wait on a wrangler confirmation prompt.
     env: {
-      ...process.env,
       ...(env.CLOUDFLARE_ACCOUNT_ID && { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID }),
       ...(yes && { CI: "1" }),
     },
@@ -63,20 +65,8 @@ async function ask(question, fallback = "") {
   return answer || fallback;
 }
 
-// Keys in the example's order (parseEnv sorts them), so the file reads the same on every machine.
-const keys = [...readFileSync(`${ENV_FILE}.example`, "utf8").matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map(
-  (m) => m[1],
-);
-const env = {
-  ...Object.fromEntries(keys.map((k) => [k, ""])),
-  ...(existsSync(ENV_FILE) ? parseEnvFile(readFileSync(ENV_FILE, "utf8")) : {}),
-};
-
-function save() {
-  const header = `# Deploy values and secrets for ${env.PROJECT_NAME || "this project"}. Never commit this file.\n# Every key is explained in ${ENV_FILE}.example.\n`;
-  writeFileSync(ENV_FILE, header + serializeEnvFile(env), { mode: 0o600 });
-  chmodSync(ENV_FILE, 0o600);
-}
+const env = readEnvFile(ENV_FILE);
+const save = () => writeEnvFile(ENV_FILE, env);
 
 // 1. Cloudflare login and account.
 const who = wrangler(["whoami", "--json"], { capture: true, allowFail: true });
@@ -103,7 +93,7 @@ const defaults = {
   TRUSTED_ORIGINS: () => `${env.APP_SCHEME}://,https://appleid.apple.com`,
   INBOX_TTL_DAYS: () => "30",
 };
-for (const key of ["BETTER_AUTH_SECRET", "PUSH_API_KEY"]) env[key] ||= randomSecret();
+for (const key of GENERATED_SECRETS) env[key] ||= randomSecret();
 const missing = [];
 for (const key of [
   "PROJECT_NAME",
@@ -145,15 +135,15 @@ for (const { idKey: key, name } of dbs) {
 }
 
 // 4. Queues. `queues list` has no JSON output, so names come from its table.
-const queueNames = new Set();
+const existingQueues = new Set();
 for (let page = 1; page <= 50; page++) {
   const table = wrangler(["queues", "list", "--page", String(page)], { capture: true }).stdout;
   const names = [...table.matchAll(/│\s*[0-9a-f]{32}\s*│\s*(\S+)\s*│/g)].map((m) => m[1]);
   if (names.length === 0) break;
-  for (const n of names) queueNames.add(n);
+  for (const n of names) existingQueues.add(n);
 }
-for (const name of [`${env.PROJECT_NAME}-push`, `${env.PROJECT_NAME}-push-dlq`]) {
-  if (!queueNames.has(name)) wrangler(["queues", "create", name], { capture: true });
+for (const name of Object.values(queueNames(env.PROJECT_NAME))) {
+  if (!existingQueues.has(name)) wrangler(["queues", "create", name], { capture: true });
   console.log(`✔ Queue ${name}`);
 }
 
@@ -164,9 +154,7 @@ try {
   fail(error.message);
 }
 console.log(`✔ ${PROD_CONFIG} written`);
-for (const { binding } of dbs) {
-  wrangler(["d1", "migrations", "apply", binding, "--remote", "-c", PROD_CONFIG]);
-}
+await migrateAll(["--remote", "-c", PROD_CONFIG], wrangler);
 
 // 6. Secrets, on stdin so they never touch a temporary file. Creates a draft Worker if needed.
 let payload;

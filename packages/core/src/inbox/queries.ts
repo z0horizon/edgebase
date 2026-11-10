@@ -47,13 +47,45 @@ export function personalStatements(
   return statements;
 }
 
-export async function insertBroadcast(db: D1Database, p: PushPayload, now: number): Promise<void> {
-  await db
+export function broadcastStatement(
+  db: D1Database,
+  p: PushPayload,
+  now: number,
+): D1PreparedStatement {
+  return db
     .prepare(
       "INSERT INTO broadcast (title, body, data, category, created_at) VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(p.title, p.body, dataColumn(p), p.category, now)
-    .run();
+    .bind(p.title, p.body, dataColumn(p), p.category, now);
+}
+
+export async function insertBroadcast(db: D1Database, p: PushPayload, now: number): Promise<void> {
+  await broadcastStatement(db, p, now).run();
+}
+
+/**
+ * Runs a push's inbox inserts together with its `inbox_push` row in one transaction; a push
+ * whose row exists is skipped, so any number of retries store its inbox once.
+ */
+export async function writeInboxOnce(
+  db: D1Database,
+  pushId: number,
+  statements: D1PreparedStatement[],
+  now: number,
+): Promise<void> {
+  try {
+    await db.batch([
+      db.prepare("INSERT INTO inbox_push (id, created_at) VALUES (?, ?)").bind(pushId, now),
+      ...statements,
+    ]);
+  } catch (error) {
+    // The batch rolled back; it failed on our duplicate key only if the row is there now.
+    const stored = await db
+      .prepare("SELECT 1 AS x FROM inbox_push WHERE id = ?")
+      .bind(pushId)
+      .first();
+    if (!stored) throw error;
+  }
 }
 
 const DAY_MS = 86_400_000;
@@ -159,16 +191,17 @@ export async function listInbox(
 }
 
 export async function unreadCount(db: D1Database, q: InboxQuery): Promise<number> {
-  const readUntil = await watermark(db, q.userId);
+  // The watermark is read in the same statement, so a count is one round trip.
   const row = await db
     .prepare(
-      `SELECT
-         (SELECT count(*) FROM inbox_item WHERE user_id = ?1 AND created_at BETWEEN ?2 AND ?5
-            AND created_at > ?3 AND read_at IS NULL)
-       + (SELECT count(*) FROM broadcast WHERE created_at BETWEEN ?2 AND ?5 AND created_at > ?3
-            AND created_at > ?4${broadcastFilter(q)}) AS n`,
+      `WITH w AS (SELECT COALESCE((SELECT read_at FROM inbox_state WHERE user_id = ?1), 0) AS r)
+       SELECT
+         (SELECT count(*) FROM w, inbox_item WHERE user_id = ?1 AND created_at BETWEEN ?2 AND ?4
+            AND created_at > w.r AND read_at IS NULL)
+       + (SELECT count(*) FROM w, broadcast WHERE created_at BETWEEN ?2 AND ?4 AND created_at > w.r
+            AND created_at > ?3${broadcastFilter(q)}) AS n`,
     )
-    .bind(q.userId, cutoff(q), readUntil, q.userCreatedAt, q.now)
+    .bind(q.userId, cutoff(q), q.userCreatedAt, q.now)
     .first<number>("n");
   return row ?? 0;
 }

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
 export const PROVIDERS = [
@@ -6,6 +7,17 @@ export const PROVIDERS = [
   { id: "apple", label: "Apple" },
 ] as const;
 export type Provider = (typeof PROVIDERS)[number]["id"];
+
+/** The providers the server has credentials for; empty until it answers or when it fails. */
+export function useProviders() {
+  const [on, setOn] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    api<{ providers: string[] }>("/v1/auth/providers")
+      .then((r) => setOn(new Set(r.providers)))
+      .catch(() => setOn(new Set()));
+  }, []);
+  return PROVIDERS.filter((p) => on.has(p.id));
+}
 
 const KNOWN_ERRORS = new Set([
   "account_not_linked",

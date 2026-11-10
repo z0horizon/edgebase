@@ -1,7 +1,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { appCallback, appExchange } from "./auth/app-callback";
-import { createAuth, type SessionUser } from "./auth/auth";
+import {
+  adminNeedsTwoFactor,
+  configuredProviders,
+  createAuth,
+  type Session,
+  type SessionUser,
+  trustedOrigins,
+} from "./auth/auth";
 import {
   authRateLimit,
   requireAdminTwoFactor,
@@ -18,7 +25,10 @@ import { openRoutes } from "./push/stats";
 import { templateRoutes } from "./push/templates";
 import { topicRoutes } from "./push/topics";
 
-export type AppEnv = { Bindings: Env; Variables: { user: SessionUser } };
+export type AppEnv = {
+  Bindings: Env;
+  Variables: { user: SessionUser; session: Session["session"] };
+};
 
 export const app = new Hono<AppEnv>();
 
@@ -26,8 +36,7 @@ export const app = new Hono<AppEnv>();
 app.use("*", (c, next) =>
   cors({
     origin: (origin) =>
-      c.env.TRUSTED_ORIGINS.split(",")
-        .map((o) => o.trim())
+      trustedOrigins(c.env)
         .filter((o) => o.startsWith("https://") || o.startsWith("http://"))
         .includes(origin)
         ? origin
@@ -76,7 +85,18 @@ app.route("/v1/push", pushRoutes);
 app.route("/v1/templates", templateRoutes);
 app.route("/v1/opens", openRoutes);
 app.route("/v1/topics", topicRoutes);
-app.get("/v1/me", (c) => c.json(c.get("user")));
+// The admin page reads the two-factor rule from here instead of keeping its own copy.
+app.get("/v1/me", (c) => {
+  const user = c.get("user");
+  return c.json({
+    ...user,
+    adminNeedsTwoFactor: adminNeedsTwoFactor({ user, session: c.get("session") }),
+  });
+});
+// Sign-in pages show only the providers whose credentials are set.
+app.get("/v1/auth/providers", (c) =>
+  c.json({ providers: Object.keys(configuredProviders(c.env)) }),
+);
 app.get("/v1/auth/app-callback", appCallback);
 app.post("/v1/auth/app-exchange", appExchange);
 app.route("/v1/devices", deviceRoutes);

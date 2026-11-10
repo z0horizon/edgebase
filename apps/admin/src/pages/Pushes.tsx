@@ -1,3 +1,4 @@
+import { STATS_KEPT_DAYS, STATS_LISTED } from "@edgebase/core/limits";
 import { BellRing, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -38,7 +39,10 @@ export function PushesPage() {
 
   return (
     <>
-      <PageHeader title="Sent pushes" description="The last 50 pushes. Stats are kept for 90 days.">
+      <PageHeader
+        title="Sent pushes"
+        description={`The last ${STATS_LISTED} pushes. Stats are kept for ${STATS_KEPT_DAYS} days.`}
+      >
         <Button variant="outline" size="sm" onClick={load}>
           <RefreshCw /> Refresh
         </Button>

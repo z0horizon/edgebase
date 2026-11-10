@@ -1,4 +1,5 @@
 import * as v from "valibot";
+import { BODY_MAX, MAX_RECIPIENTS, TEMPLATE_NAME_PATTERN, TITLE_MAX } from "./limits";
 
 export const PlatformSchema = v.picklist(["web", "ios", "android"]);
 export type Platform = v.InferOutput<typeof PlatformSchema>;
@@ -9,8 +10,8 @@ export type Category = v.InferOutput<typeof CategorySchema>;
 const MAX_DATA_BYTES = 1024;
 
 const TextEntries = {
-  title: v.pipe(v.string(), v.minLength(1), v.maxLength(120)),
-  body: v.pipe(v.string(), v.maxLength(500)),
+  title: v.pipe(v.string(), v.minLength(1), v.maxLength(TITLE_MAX)),
+  body: v.pipe(v.string(), v.maxLength(BODY_MAX)),
 };
 
 // BCP 47, e.g. "vi" or "en-US".
@@ -45,7 +46,11 @@ export const TopicSchema = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9\-_.~%]{1,900}
 
 const PushTargetSchema = v.union([
   v.object({
-    userIds: v.pipe(v.array(v.pipe(v.string(), v.minLength(1))), v.minLength(1), v.maxLength(500)),
+    userIds: v.pipe(
+      v.array(v.pipe(v.string(), v.minLength(1))),
+      v.minLength(1),
+      v.maxLength(MAX_RECIPIENTS),
+    ),
   }),
   v.object({ topic: TopicSchema }),
 ]);
@@ -59,7 +64,10 @@ export const PushDispatchSchema = v.object({
 });
 export type PushDispatch = v.InferOutput<typeof PushDispatchSchema>;
 
-export const TemplateNameSchema = v.pipe(v.string(), v.regex(/^[a-z0-9_.-]{1,64}$/));
+export const TemplateNameSchema = v.pipe(
+  v.string(),
+  v.regex(new RegExp(`^${TEMPLATE_NAME_PATTERN}$`)),
+);
 
 /** A stored template: the content of a push without its target. */
 export const TemplateSchema = v.object({
