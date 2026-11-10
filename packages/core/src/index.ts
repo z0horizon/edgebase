@@ -1,5 +1,6 @@
 import { app } from "./app";
 import { runCleanup } from "./jobs/cleanup";
+import { CRONS } from "./jobs/crons";
 import { enqueueDuePushes } from "./jobs/scheduled";
 import { handlePushBatch } from "./push/consumer";
 import type { PushQueueMessage } from "./push/types";
@@ -14,8 +15,8 @@ export const worker = {
   fetch: app.fetch,
   queue: (batch, env) => handlePushBatch(batch as MessageBatch<PushQueueMessage>, env),
   async scheduled(controller, env, ctx) {
-    // Must match the crons in the app's wrangler.jsonc.
-    if (controller.cron === "* * * * *") ctx.waitUntil(enqueueDuePushes(env, Date.now()));
-    if (controller.cron === "17 * * * *") ctx.waitUntil(runCleanup(env, Date.now()));
+    // The app's wrangler.jsonc must list these; its script tests check that.
+    if (controller.cron === CRONS.dispatch) ctx.waitUntil(enqueueDuePushes(env, Date.now()));
+    if (controller.cron === CRONS.cleanup) ctx.waitUntil(runCleanup(env, Date.now()));
   },
 } satisfies ExportedHandler<Env>;

@@ -1,8 +1,9 @@
 // Turns .env.production (gitignored) and the committed wrangler.jsonc template into
 // wrangler.production.jsonc, so no deploy-specific value ever lives in a committed file.
 // Usage: node scripts/prod-config.mjs   (pnpm run deploy and db:migrate:remote call it first)
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
@@ -29,7 +30,63 @@ export const SECRET_KEYS = [
   "TURNSTILE_SECRET_KEY",
 ];
 
+/** Generated, never typed: bootstrap and ensureDevVars fill them, validate requires them. */
+export const GENERATED_SECRETS = ["BETTER_AUTH_SECRET", "PUSH_API_KEY"];
+
 export const parseEnvFile = (text) => parseEnv(text);
+
+/**
+ * `file` with every key of `<file>.example` first, in the example's order (parseEnv sorts them),
+ * so a rewrite reads the same on every machine. Missing keys are "".
+ */
+export function readEnvFile(file) {
+  const example = existsSync(`${file}.example`) ? readFileSync(`${file}.example`, "utf8") : "";
+  const keys = [...example.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]);
+  return {
+    ...Object.fromEntries(keys.map((k) => [k, ""])),
+    ...(existsSync(file) ? parseEnvFile(readFileSync(file, "utf8")) : {}),
+  };
+}
+
+/** Writes an env file only its owner can read. */
+export function writeEnvFile(file, env) {
+  const about = env.PROJECT_NAME ? `Deploy values and secrets for ${env.PROJECT_NAME}. ` : "";
+  const explained = existsSync(`${file}.example`)
+    ? `# Every key is explained in ${file}.example.\n`
+    : "";
+  writeFileSync(file, `# ${about}Never commit this file.\n${explained}${serializeEnvFile(env)}`, {
+    mode: 0o600,
+  });
+  chmodSync(file, 0o600);
+}
+
+/** Runs the project's wrangler. `capture` returns stdout instead of showing it; stderr is returned. */
+export function runWrangler(args, { capture = false, input, env = {} } = {}) {
+  return spawnSync("node_modules/.bin/wrangler", args, {
+    input,
+    encoding: "utf8",
+    stdio: [input === undefined ? "inherit" : "pipe", capture ? "pipe" : "inherit", "pipe"],
+    env: { ...process.env, ...env },
+  });
+}
+
+/**
+ * Applies migrations to every D1 database in wrangler.jsonc, so an app's own databases migrate
+ * too. Returns the first failed wrangler result, or null.
+ */
+export async function migrateAll(args, run = runWrangler) {
+  for (const { binding } of (await readTemplate()).d1_databases) {
+    const result = run(["d1", "migrations", "apply", binding, ...args]);
+    if (result.status !== 0) return result;
+  }
+  return null;
+}
+
+/** The queues of a project: `<name>-push` and its dead letter queue. */
+export const queueNames = (projectName) => ({
+  PUSH_QUEUE: `${projectName}-push`,
+  PUSH_DLQ: `${projectName}-push-dlq`,
+});
 
 /**
  * parseEnv keeps single-quoted and backtick-quoted values verbatim but has no escapes, so each
@@ -73,8 +130,7 @@ export function validate(env) {
   );
   check("MAIL_FROM", (v) => /^[^@\s]+@[^@\s]+$/.test(v), "must be an email address");
   check("INBOX_TTL_DAYS", (v) => /^[1-9]\d*$/.test(v), "must be a whole number of days");
-  for (const key of ["BETTER_AUTH_SECRET", "PUSH_API_KEY"])
-    check(key, (v) => v !== "", "must be set");
+  for (const key of GENERATED_SECRETS) check(key, (v) => v !== "", "must be set");
   return problems;
 }
 
@@ -105,7 +161,7 @@ export function renderConfig(template, env) {
   if (unset.length > 0) {
     throw new Error(`${ENV_FILE} has no ${unset.join(", ")}: run pnpm bootstrap first`);
   }
-  const queueName = { PUSH_QUEUE: `${name}-push`, PUSH_DLQ: `${name}-push-dlq` };
+  const queueName = queueNames(name);
   const out = structuredClone(template);
   out.name = name;
   if (env.CLOUDFLARE_ACCOUNT_ID) out.account_id = env.CLOUDFLARE_ACCOUNT_ID;
@@ -144,7 +200,7 @@ export function secretsPayload(env, readFile = (path) => readFileSync(path, "utf
 export function ensureDevVars(secret = () => randomBytes(32).toString("base64")) {
   const before = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : null;
   let text = before ?? readFileSync(".dev.vars.example", "utf8");
-  for (const key of ["BETTER_AUTH_SECRET", "PUSH_API_KEY"]) {
+  for (const key of GENERATED_SECRETS) {
     text = text.replace(new RegExp(`^${key}=$`, "m"), `${key}=${secret()}`);
   }
   if (text === before) return false;

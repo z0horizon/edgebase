@@ -187,6 +187,16 @@ describe("social providers", () => {
     expect((await res.json<{ url: string }>()).url).toContain("github.com");
   });
 
+  it("GET /v1/auth/providers lists only providers with credentials", async () => {
+    const providers = async (bindings: Env) =>
+      (await (await call("/v1/auth/providers", {}, bindings)).json<{ providers: string[] }>())
+        .providers;
+    expect(await providers(env)).toContain("github");
+    expect(
+      await providers({ ...env, GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" }),
+    ).not.toContain("github");
+  });
+
   it("a provider without credentials is turned off instead of breaking sign-in", async () => {
     const bindings = { ...env, GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" };
     // An unconfigured provider must look absent (404), not crash the endpoint (500).
@@ -268,6 +278,8 @@ describe("admin, two-factor, organizations, locale", () => {
     const list = await call("/api/auth/admin/list-users", authed(token));
     expect(list.status).toBe(403);
     expect(await list.json()).toMatchObject({ error: { code: "two_factor_required" } });
+    const me = await call("/v1/me", authed(token));
+    expect(await me.json()).toMatchObject({ adminNeedsTwoFactor: true });
     // Setting it up stays open, or the admin could never get in.
     const enable = await call(
       "/api/auth/two-factor/enable",
@@ -332,6 +344,9 @@ describe("admin, two-factor, organizations, locale", () => {
     expect((await call("/api/auth/admin/list-users", signUp.session)).status).toBe(200);
     expect(await (await call("/api/auth/get-session", signUp.session)).json()).toMatchObject({
       session: { signInProvider: "github" },
+    });
+    expect(await (await call("/v1/me", signUp.session)).json()).toMatchObject({
+      adminNeedsTwoFactor: false,
     });
   });
 

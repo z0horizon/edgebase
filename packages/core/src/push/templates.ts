@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { jsonError, parseBody } from "../http";
+import { PLACEHOLDER } from "./limits";
 import {
   type PushDispatch,
   PushDispatchSchema,
@@ -12,7 +13,6 @@ import {
 } from "./types";
 
 const MAX_TEMPLATES = 500;
-const PLACEHOLDER = /\{\{\s*([\w.-]+)\s*\}\}/g;
 
 async function getTemplate(db: D1Database, name: string): Promise<Template | null> {
   const content = await db

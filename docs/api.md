@@ -54,6 +54,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | GET | `/admin/` | admin (in the page) | admin web page, static assets |
 | POST | `/v1/opens` | user | report that the user opened a push |
 | POST | `/v1/topics/{topic}/subscribe`, `/unsubscribe` | user | add or remove a device token on a topic (web) |
+| GET | `/v1/auth/providers` | none | `{ providers: ["google" \| "github" \| "apple"] }`, those whose credentials are set |
 | GET | `/v1/auth/app-callback` | user (cookie) | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
 | POST | `/v1/auth/app-exchange` | none | redeem a hand-off token with its verifier for a bearer token |
 
@@ -65,7 +66,8 @@ Better Auth's endpoints are documented at https://www.better-auth.com/docs; see
 ### `GET /v1/me`
 Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `marketingOptIn`,
 `locale`, `role`, `banned`, `banReason`, `banExpires`, `twoFactorEnabled`, `createdAt`,
-`updatedAt`. `401` without a session.
+`updatedAt`, and `adminNeedsTwoFactor`: true for an admin whose session must set up TOTP before
+admin features (a password session without it). `401` without a session.
 
 ### Admin, two-factor, organizations
 Better Auth's `admin`, `twoFactor` and `organization` plugin routes under `/api/auth/admin/*`,
@@ -131,6 +133,8 @@ Answers:
 - Now: `202 { "id": n, "users": n }`, `id` for `GET /v1/push/{id}`, `users` the eligible users
   (`0` for a topic).
 - With `sendAt`: `202 { "id": n, "scheduled": true }`; dispatched within a minute of `sendAt`.
+- Now, but the send failed after being accepted: `202 { "id": n, "scheduled": true }`; the minute
+  cron sends it within about two minutes. Do not retry it.
 - `400` on invalid input (also an unknown template or a missing var), `401` on a wrong key,
   `409`/`422` on idempotency conflicts, `503` when push is not configured.
 

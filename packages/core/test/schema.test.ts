@@ -16,6 +16,18 @@ it("device rejects an unknown platform", async () => {
   ).rejects.toThrow(/CHECK constraint/);
 });
 
+it("inbox reads find broadcasts by created_at without scanning the table", async () => {
+  const plan = await env.INBOX_DB.prepare(
+    `EXPLAIN QUERY PLAN SELECT id FROM broadcast WHERE created_at BETWEEN ? AND ?
+     ORDER BY created_at DESC, id DESC LIMIT 21`,
+  )
+    .bind(0, 1)
+    .all<{ detail: string }>();
+  const details = plan.results.map((r) => r.detail).join("\n");
+  expect(details).toMatch(/USING (COVERING )?INDEX broadcast_created_at/);
+  expect(details).not.toMatch(/TEMP B-TREE/);
+});
+
 it("user.marketingOptIn defaults to off", async () => {
   const id = await seedUser();
   expect(

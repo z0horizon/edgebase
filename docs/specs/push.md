@@ -145,6 +145,13 @@ apps should keep using the SDK.
 2. A cron every minute (`packages/core/src/jobs/scheduled.ts`, `enqueueDuePushes`) takes up to 100 due rows in
    `send_at` order and runs the same dispatch as an immediate push, so opt-in and user existence
    are checked at send time. Precision is about one minute.
-3. A row is deleted after its dispatch; if dispatch throws, the row stays and is retried on the
-   next minute. Right after the inbox rows are written the stored request is rewritten with
-   `inbox: false`, so a retry sends the push without writing the inbox again. A row whose stored request no longer validates is logged and deleted.
+3. A run claims a row before sending it: it moves `send_at` to now + 90 s only if `send_at` is
+   still the value it read, so two runs never hold the same row. The claim is renewed right
+   before queueing, and only the holder of a valid claim queues and deletes the row. A row whose
+   send throws keeps its claim, waits behind the other rows and is retried once the claim runs
+   out. A row whose stored request no longer validates is logged and deleted.
+4. The inbox rows of a push are written in one transaction with an `inbox_push` row keyed by
+   the push id, so any retry stores them once.
+5. An immediate push is stored the same way, already claimed by its request, which sends it and
+   deletes the row. If that send throws, the request answers `202 { id, scheduled: true }` and
+   the cron sends it under rule 3.

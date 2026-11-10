@@ -11,11 +11,12 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 |---|---|---|---|
 | `inbox_item` | `INBOX_DB` | `created_at` older than `INBOX_TTL_DAYS` (default 30) | rowid order |
 | `broadcast` | `INBOX_DB` | same as `inbox_item` | rowid order |
+| `inbox_push` | `INBOX_DB` | same as `inbox_item` | rowid order (push ids grow with time) |
 | `session` | `DB` | `expiresAt` < now (ISO text compare) | `session_expires_at` |
 | `verification` | `DB` | `expiresAt` < now | `verification_expires_at` |
 | `device` | `DB` | `updated_at` older than 60 days | `device_updated_at` |
 | `user` (+ cascades) | `DB` | email unverified and created more than 7 days ago, with no social account | `user_unverified_created_at` (partial) |
-| `scheduled_push` | `DB` | when dispatched (minute cron) | `scheduled_push_send_at` |
+| `scheduled_push` | `DB` | when sent (by the request for an immediate push, else the minute cron) | `scheduled_push_send_at` |
 | `inbox_state` | `INBOX_DB` | when the user is deleted | primary key |
 | `invitation` | `DB` | `expiresAt` < now | `invitation_expires_at` |
 | `push_idempotency` | `DB` | `created_at` older than 24 h | `push_idempotency_created_at` |

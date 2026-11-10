@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
+import { enqueueDuePushes } from "../src/jobs/scheduled";
 import {
   authed,
   call,
@@ -112,14 +113,17 @@ describe("POST /v1/push", () => {
   it("sendAt stores scheduled_push and enqueues nothing", async () => {
     const sendAt = new Date(Date.now() + 3_600_000).toISOString();
     const { res, sent } = push({ ...base, to: { topic: "later" }, sendAt });
-    expect(await (await res).json()).toEqual({ id: expect.any(Number), scheduled: true });
+    const answer = await (await res).json<{ id: number }>();
+    expect(answer).toEqual({ id: expect.any(Number), scheduled: true });
     expect(sent).toEqual([]);
     const row = await env.DB.prepare(
-      "SELECT send_at, request FROM scheduled_push ORDER BY id DESC LIMIT 1",
+      "SELECT send_at, request, push_id FROM scheduled_push ORDER BY id DESC LIMIT 1",
     ).first<{
       send_at: number;
       request: string;
+      push_id: number;
     }>();
+    expect(row?.push_id).toBe(answer.id);
     expect(row?.send_at).toBe(Date.parse(sendAt));
     expect(JSON.parse(row?.request ?? "{}")).toEqual({ ...base, to: { topic: "later" } });
   });
@@ -160,6 +164,32 @@ describe("Idempotency-Key", () => {
     const { res, sent } = push(body, {}, withKey("k-busy"));
     expect((await res).status).toBe(409);
     expect(sent).toEqual([]);
+  });
+
+  it("a send that fails after writing the inbox is answered once and finished by the cron", async () => {
+    const u = await seedUser();
+    const body = { ...base, to: { userIds: [u] }, inbox: true };
+    const broken = fakeQueue();
+    broken.queue.sendBatch = async () => {
+      throw new Error("queue unavailable");
+    };
+    const res = await call("/v1/push", json(body, { headers: withKey("k-fail") }), {
+      ...env,
+      FCM_SERVICE_ACCOUNT: SA,
+      PUSH_QUEUE: broken.queue,
+    });
+    expect(res.status).toBe(202);
+    const answer = await res.json<{ id: number; scheduled: boolean }>();
+    expect(answer).toEqual({ id: expect.any(Number), scheduled: true });
+
+    const retry = push(body, {}, withKey("k-fail"));
+    expect(await (await retry.res).json()).toEqual(answer);
+    expect(retry.sent).toEqual([]);
+
+    const q = fakeQueue();
+    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: q.queue }, Date.now() + 120_000)).toBe(1);
+    expect(q.sent).toHaveLength(1);
+    expect(await inboxCount(u)).toBe(1);
   });
 
   it("a rejected request frees its key", async () => {

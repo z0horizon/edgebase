@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { runCleanup } from "../src/jobs/cleanup";
-import { enqueueDuePushes } from "../src/jobs/scheduled";
+import { CLAIM_MS, deliverStored, enqueueDuePushes } from "../src/jobs/scheduled";
 import { fakeQueue, seedUser, signUpVerified } from "./helpers";
 
 const DAY = 86_400_000;
@@ -201,6 +201,8 @@ describe("enqueueDuePushes", () => {
 
   it("a dispatch that fails after writing the inbox does not write it again on the next run", async () => {
     const u = await seedUser();
+    // The last run below is past every earlier test's rows too.
+    await env.DB.prepare("DELETE FROM scheduled_push").run();
     await env.DB.prepare("INSERT INTO scheduled_push (send_at, request) VALUES (?, ?)")
       .bind(
         NOW - 3,
@@ -217,13 +219,67 @@ describe("enqueueDuePushes", () => {
     broken.queue.sendBatch = async () => {
       throw new Error("queue unavailable");
     };
-    await expect(enqueueDuePushes({ ...env, PUSH_QUEUE: broken.queue }, NOW)).rejects.toThrow();
+    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: broken.queue }, NOW)).toBe(0);
+    const early = fakeQueue();
+    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: early.queue }, NOW)).toBe(0);
+    expect(early.sent).toEqual([]);
     const q = fakeQueue();
-    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: q.queue }, NOW)).toBe(1);
+    const afterClaim = Date.now() + CLAIM_MS + 1000;
+    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: q.queue }, afterClaim)).toBe(1);
     expect(q.sent).toHaveLength(1);
     expect(
       await count(env.INBOX_DB, "SELECT count(*) AS n FROM inbox_item WHERE user_id = ?", u),
     ).toBe(1);
+  });
+});
+
+describe("scheduled push claims", () => {
+  const topicRequest = {
+    to: { topic: "claims" },
+    title: "t",
+    body: "b",
+    category: "transactional",
+  } as const;
+  const store = async (sendAt: number) =>
+    (await env.DB.prepare(
+      "INSERT INTO scheduled_push (send_at, request, push_id) VALUES (?, ?, 0) RETURNING id",
+    )
+      .bind(sendAt, JSON.stringify(topicRequest))
+      .first<number>("id")) as number;
+
+  it("a run whose claim was taken over queues nothing; the new holder sends once", async () => {
+    const stale = NOW - 10;
+    const id = await store(stale);
+    const takeover = fakeQueue();
+    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: takeover.queue }, NOW)).toBeGreaterThan(0);
+    const late = fakeQueue();
+    const result = await deliverStored(
+      { ...env, PUSH_QUEUE: late.queue },
+      { id, request: topicRequest, pushId: 0, claimed: stale },
+      NOW,
+    );
+    expect(result).toBeNull();
+    expect(late.sent).toEqual([]);
+    expect(
+      takeover.sent.filter((s) => (s.body as { topic: string }).topic === "claims"),
+    ).toHaveLength(1);
+  });
+
+  it("a row that keeps failing does not hold back the rows behind it", async () => {
+    await env.DB.prepare("INSERT INTO scheduled_push (send_at, request, push_id) VALUES (?, ?, 0)")
+      .bind(NOW - 5, JSON.stringify({ ...topicRequest, to: { userIds: ["u"] } }))
+      .run();
+    await store(NOW - 4);
+    const q = fakeQueue();
+    const send = q.queue.sendBatch.bind(q.queue);
+    q.queue.sendBatch = async (messages) => {
+      if ([...messages].some((m) => (m.body as { kind: string }).kind === "users")) {
+        throw new Error("queue unavailable");
+      }
+      return send(messages);
+    };
+    expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: q.queue }, NOW)).toBeGreaterThan(0);
+    expect(q.sent.map((s) => (s.body as { topic: string }).topic)).toContain("claims");
   });
 });
 

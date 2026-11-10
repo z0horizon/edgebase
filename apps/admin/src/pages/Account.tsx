@@ -5,12 +5,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api, errorMessage } from "@/lib/api";
-import { PROVIDERS, type Provider, startOAuth } from "@/lib/oauth";
+import { type Provider, startOAuth, useProviders } from "@/lib/oauth";
 
 /** Linking happens here, from a session that passed two-factor, never by email match at sign-in. */
 export function AccountPage() {
   const [linked, setLinked] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
+  const providers = useProviders();
 
   useEffect(() => {
     api<{ providerId: string }[]>("/api/auth/list-accounts")
@@ -36,7 +37,10 @@ export function AccountPage() {
       />
       <Card className="max-w-md">
         <CardContent className="grid gap-3">
-          {PROVIDERS.map(({ id, label }) => (
+          {providers.length === 0 && (
+            <p className="text-sm text-muted-foreground">No sign-in provider is configured.</p>
+          )}
+          {providers.map(({ id, label }) => (
             <div key={id} className="flex items-center justify-between gap-3">
               <span className="text-sm font-medium">{label}</span>
               {linked?.has(id) ? (

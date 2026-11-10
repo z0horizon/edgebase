@@ -54,8 +54,9 @@ included log events.
 
 So the included 50M row writes hold about 12M personal inbox items a month (~400k a day). A
 broadcast is nearly free at any size until clients report opens: then it costs ~4 writes per user
-who opens it. Every push also writes its `push_stats` row and one update per queue message, which
-does not grow with users. TTL changes storage only: every item is written once and deleted once
+who opens it. Every push also writes its `push_stats` row, one update per queue message, a
+`scheduled_push` row (insert, claim, delete) and, with `inbox: true`, one `inbox_push` row,
+none of which grows with users. TTL changes storage only: every item is written once and deleted once
 whatever its lifetime.
 
 ## What an active user costs

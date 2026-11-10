@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { jsonError, parseBody } from "../http";
+import { STATS_LISTED } from "./limits";
 import type { Category } from "./types";
 
 /** A new stats row for a push going out at `sendAt`; its id travels in the push as `data.pushId`. */
@@ -10,12 +11,16 @@ export async function createPushStats(
   category: Category,
   sendAt: number,
 ): Promise<number> {
-  const id = await db
-    .prepare("INSERT INTO push_stats (category, send_at) VALUES (?, ?) RETURNING id")
-    .bind(category, sendAt)
-    .first<number>("id");
+  const id = await pushStatsInsert(db, category, sendAt).first<number>("id");
   if (id === null) throw new Error("push_stats insert returned no id");
   return id;
+}
+
+/** The insert of `createPushStats`, for a batch whose next statement reads `last_insert_rowid()`. */
+export function pushStatsInsert(db: D1Database, category: Category, sendAt: number) {
+  return db
+    .prepare("INSERT INTO push_stats (category, send_at) VALUES (?, ?) RETURNING id")
+    .bind(category, sendAt);
 }
 
 /**
@@ -50,7 +55,7 @@ const STATS_COLUMNS = `id, category, users, sent, failed, send_at AS sendAt,
 export const statsRoutes = new Hono<AppEnv>()
   .get("/", async (c) => {
     const rows = await c.env.DB.prepare(
-      `SELECT ${STATS_COLUMNS} FROM push_stats ORDER BY id DESC LIMIT 50`,
+      `SELECT ${STATS_COLUMNS} FROM push_stats ORDER BY id DESC LIMIT ${STATS_LISTED}`,
     ).all();
     return c.json({ pushes: rows.results });
   })

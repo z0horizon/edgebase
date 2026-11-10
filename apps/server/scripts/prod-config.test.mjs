@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { CRONS } from "@edgebase/core/crons";
 import { experimental_readRawConfig } from "wrangler";
 import {
   ensureDevVars,
   parseEnvFile,
+  readEnvFile,
   renderConfig,
   secretsPayload,
   serializeEnvFile,
   validate,
+  writeEnvFile,
 } from "./prod-config.mjs";
 
 const template = experimental_readRawConfig({ config: "wrangler.jsonc" }).rawConfig;
@@ -205,4 +208,24 @@ describe("ensureDevVars", () => {
       process.chdir(home);
     }
   });
+});
+
+it("wrangler.jsonc runs every cron EdgeBase handles; an app may add its own", () => {
+  for (const cron of Object.values(CRONS)) assert.ok(template.triggers.crons.includes(cron), cron);
+});
+
+it("an env file rewrite keeps the example's key order, then extra keys, and stays private", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "envfile-")), ".env.production");
+  writeFileSync(`${file}.example`, "PROJECT_NAME=\nBASE_URL=\nADMIN_EMAIL=\n");
+  writeFileSync(file, "ADMIN_EMAIL='a@x.io'\nEXTRA='1'\nPROJECT_NAME='myapp'\n");
+  const env = readEnvFile(file);
+  assert.deepEqual(Object.keys(env), ["PROJECT_NAME", "BASE_URL", "ADMIN_EMAIL", "EXTRA"]);
+  writeEnvFile(file, env);
+  const written = readFileSync(file, "utf8");
+  assert.deepEqual(
+    [...written.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1]),
+    Object.keys(env),
+  );
+  assert.deepEqual(parseEnvFile(readFileSync(file, "utf8")), env);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
 });

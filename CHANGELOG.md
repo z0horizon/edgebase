@@ -8,12 +8,22 @@ What changed for people building on EdgeBase. The format follows
 
 ### Added
 
+- `GET /v1/me` also answers `adminNeedsTwoFactor`, so a client gates admin features on the server's rule; the admin page uses it.
 - Pushing a `vX.Y.Z` tag publishes a GitHub release from its CHANGELOG section after CI passes.
 - The admin page signs in with Google, GitHub or Apple. Those sessions reach admin features without the account's TOTP; email + password sessions still need it. An existing admin links a provider from the page's Account view; signing in with an unlinked provider account of an admin's email is refused.
 
+### Fixed
+
+- `pnpm admin:create --remote` rewrote `.env.production` in sorted key order; it now keeps the example's order like `pnpm bootstrap`.
+- Inbox reads no longer scan every broadcast: each `GET /v1/inbox` and `unread-count` read the whole `broadcast` table, which spent D1 rows read in proportion to broadcasts kept. `unread-count` takes one D1 round trip instead of two.
+- An immediate `POST /v1/push` that failed after writing the inbox answered `500` and freed its Idempotency-Key, so the client's retry wrote the inbox again and left an extra stats row. It now answers `202 { id, scheduled: true }` and the minute cron finishes the send.
+- `POST /v1/push` stores its stats row and its push in one transaction, so a failure between them no longer leaves an empty stats row.
+- The admin page shows only the sign-in providers whose credentials are set (new `GET /v1/auth/providers`); a button for a provider that is off used to fail when clicked.
+- Scheduled pushes are claimed before they are sent, so overlapping cron runs never send one twice, and a push that keeps failing no longer holds back the ones behind it.
+
 ### Upgrade
 
-- Apply migration `0007_session_sign_in_provider.sql` (`pnpm db:migrate:remote`). Admins already signed in with a provider sign in again; until then their session counts as a password one.
+- Apply migrations `0003_broadcast_created_at.sql` and `0004_inbox_push.sql` (inbox) and `0007_session_sign_in_provider.sql` (`pnpm db:migrate:remote`). Admins already signed in with a provider sign in again; until then their session counts as a password one.
 
 ## [0.2.0] - 2026-11-09
 

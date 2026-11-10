@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
-import { api, type User } from "@/lib/api";
+import { api, type Me, type User } from "@/lib/api";
 import { takeOAuthError } from "@/lib/oauth";
 import { cn } from "@/lib/utils";
 import { AccountPage } from "./pages/Account";
@@ -33,17 +33,12 @@ const viewFromHash = (): View => {
 };
 
 export function App() {
-  const [me, setMe] = useState<User | null | undefined>(undefined);
-  const [socialSession, setSocialSession] = useState(false);
+  const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>(viewFromHash);
 
+  // The server decides who must set up TOTP; the page only follows its answer.
   const loadSession = useCallback(async () => {
-    const session = await api<{
-      user: User;
-      session: { signInProvider?: string | null };
-    } | null>("/api/auth/get-session").catch(() => null);
-    setMe(session?.user ?? null);
-    setSocialSession(Boolean(session?.session.signInProvider));
+    setMe(await api<Me>("/v1/me").catch(() => null));
   }, []);
 
   useEffect(() => {
@@ -53,7 +48,7 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, [loadSession]);
 
-  const inConsole = me?.role === "admin" && (Boolean(me.twoFactorEnabled) || socialSession);
+  const inConsole = me?.role === "admin" && !me.adminNeedsTwoFactor;
   // A failed link-social comes back here signed in; a failed sign-in is shown by SignIn instead.
   useEffect(() => {
     const error = inConsole ? takeOAuthError() : "";
@@ -85,8 +80,7 @@ export function App() {
       </>
     );
   }
-  // The provider's own sign-in stands in for TOTP; only password sessions need it here.
-  if (!me.twoFactorEnabled && !socialSession) {
+  if (me.adminNeedsTwoFactor) {
     return (
       <>
         <TwoFactorSetup email={me.email} onDone={loadSession} onSignOut={signOut} />

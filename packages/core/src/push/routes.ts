@@ -2,8 +2,8 @@ import { type Context, Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { base64url, jsonError, parseBody, sha256 } from "../http";
-import { dispatchPush } from "./dispatch";
-import { createPushStats, statsRoutes } from "./stats";
+import { CLAIM_MS, deliverStored } from "../jobs/scheduled";
+import { pushStatsInsert, statsRoutes } from "./stats";
 import { resolvePush } from "./templates";
 import { type PushRequest, PushRequestSchema } from "./types";
 
@@ -17,17 +17,32 @@ async function send(c: Context<AppEnv>, body: PushRequest, now: number): Promise
   }
   const dispatch = await resolvePush(c.env.DB, request);
   if (typeof dispatch === "string") return jsonError(400, "invalid_body", dispatch);
-  const id = await createPushStats(c.env.DB, dispatch.category, at);
+  // An immediate push is stored too, already claimed by this request: if sending it fails, the
+  // minute cron sends it once the claim runs out. One batch, so no stats row is left without it.
+  const sendAtColumn = sendAt === undefined ? now + CLAIM_MS : at;
+  const [stats, row] = await c.env.DB.batch<{ id: number }>([
+    pushStatsInsert(c.env.DB, dispatch.category, at),
+    c.env.DB.prepare(
+      `INSERT INTO scheduled_push (send_at, request, push_id)
+       VALUES (?, ?, last_insert_rowid()) RETURNING id`,
+    ).bind(sendAtColumn, JSON.stringify(dispatch)),
+  ]);
+  const id = stats?.results[0]?.id;
+  const rowId = row?.results[0]?.id;
+  if (id === undefined || rowId === undefined) throw new Error("push insert returned no id");
+  if (sendAt !== undefined) return c.json({ id, scheduled: true }, 202);
 
-  if (sendAt !== undefined) {
-    await c.env.DB.prepare(
-      "INSERT INTO scheduled_push (send_at, request, push_id) VALUES (?, ?, ?)",
-    )
-      .bind(at, JSON.stringify(dispatch), id)
-      .run();
-    return c.json({ id, scheduled: true }, 202);
+  try {
+    const sent = await deliverStored(
+      c.env,
+      { id: rowId, request: dispatch, pushId: id, claimed: sendAtColumn },
+      now,
+    );
+    if (sent) return c.json({ id, ...sent }, 202);
+  } catch (error) {
+    console.error("push dispatch failed; the minute cron retries it", { id, error: String(error) });
   }
-  return c.json({ id, ...(await dispatchPush(c.env, dispatch, now, id)) }, 202);
+  return c.json({ id, scheduled: true }, 202);
 }
 
 /**

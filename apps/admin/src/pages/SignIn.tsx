@@ -1,11 +1,12 @@
 import { KeyRound, Layers } from "lucide-react";
 import { type FormEvent, useState } from "react";
+import { FormError } from "@/components/FormError";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorMessage } from "@/lib/api";
-import { PROVIDERS, type Provider, startOAuth, takeOAuthError } from "@/lib/oauth";
+import { type Provider, startOAuth, takeOAuthError, useProviders } from "@/lib/oauth";
 
 export function SignIn({
   notAdmin,
@@ -18,6 +19,7 @@ export function SignIn({
   const [error, setError] = useState(takeOAuthError);
   const shown = error || (notAdmin ? "This account is not an admin." : "");
   const [busy, setBusy] = useState(false);
+  const providers = useProviders();
 
   const signInWith = async (provider: Provider) => {
     setBusy(true);
@@ -81,10 +83,10 @@ export function SignIn({
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
-            {step === "password" && (
+            {step === "password" && providers.length > 0 && (
               <>
                 <div className="grid gap-2">
-                  {PROVIDERS.map(({ id, label }) => (
+                  {providers.map(({ id, label }) => (
                     <Button
                       key={id}
                       type="button"
@@ -147,14 +149,7 @@ export function SignIn({
                   />
                 </div>
               )}
-              {shown && (
-                <p
-                  role="alert"
-                  className="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
-                >
-                  {shown}
-                </p>
-              )}
+              <FormError message={shown} />
               <Button type="submit" disabled={busy} className="w-full">
                 {step === "password" ? "Sign in" : "Verify"}
               </Button>
