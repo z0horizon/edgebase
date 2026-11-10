@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { socialProviderOf } from "../src/auth/auth";
 import { base64url, sha256 } from "../src/http";
 import { authed, call, freshIp, json, PASSWORD, signUpVerified } from "./helpers";
 
@@ -249,6 +250,8 @@ describe("captcha (Cloudflare Turnstile)", () => {
 });
 
 describe("admin, two-factor, organizations, locale", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("admin routes refuse a user and accept one whose role is admin", async () => {
     const { userId, token } = await signUpVerified("admin@x.io");
     const list = () => call("/api/auth/admin/list-users", authed(token));
@@ -271,6 +274,109 @@ describe("admin, two-factor, organizations, locale", () => {
       authed(token, json({ password: PASSWORD })),
     );
     expect(enable.status).toBe(200);
+  });
+
+  /** Runs GitHub OAuth through Better Auth, with github.com answering for `email`. */
+  async function githubOAuth(email: string, linkWith?: string) {
+    const headers = { "cf-connecting-ip": freshIp() };
+    const body = { provider: "github", callbackURL: "/admin/" };
+    const start = await call(
+      linkWith ? "/api/auth/link-social" : "/api/auth/sign-in/social",
+      linkWith ? authed(linkWith, json(body, { headers })) : json(body, { headers }),
+    );
+    const { url } = await start.json<{ url: string }>();
+    const state = new URL(url).searchParams.get("state");
+    const github: Record<string, unknown> = {
+      "https://github.com/login/oauth/access_token": { access_token: "gh", token_type: "bearer" },
+      // One GitHub account per email, as on github.com.
+      "https://api.github.com/user": { id: email, login: "octo", name: "Octo", email },
+      "https://api.github.com/user/emails": [{ email, primary: true, verified: true }],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new Request(input).url.split("?")[0] ?? "";
+      if (!(url in github)) throw new Error(`unexpected fetch ${url}`);
+      return Response.json(github[url]);
+    });
+    const cookie = start.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    const init = { headers: { ...headers, cookie } };
+    const callback = await call(
+      `/api/auth/callback/github?code=c&state=${state}`,
+      linkWith ? authed(linkWith, init) : init,
+    );
+    vi.restoreAllMocks();
+    const session = callback.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    return {
+      location: callback.headers.get("location") ?? "",
+      session: { headers: { cookie: session, origin: "https://web.test" } },
+    };
+  }
+
+  const githubLinked = (userId: string) =>
+    env.DB.prepare("SELECT count(*) AS n FROM account WHERE userId = ? AND providerId = 'github'")
+      .bind(userId)
+      .first("n");
+
+  it("a user who signed up with GitHub and was made admin reaches admin routes without TOTP", async () => {
+    const signUp = await githubOAuth("gh-new-admin@x.io");
+    expect(signUp.location).toBe("/admin/");
+    const me = await (await call("/api/auth/get-session", signUp.session)).json<{
+      user: { id: string };
+    }>();
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(me.user.id).run();
+    expect((await call("/api/auth/admin/list-users", signUp.session)).status).toBe(200);
+    expect(await (await call("/api/auth/get-session", signUp.session)).json()).toMatchObject({
+      session: { signInProvider: "github" },
+    });
+  });
+
+  it("GitHub joins an admin only when linked from a session that passed two-factor", async () => {
+    const email = "admin-link@x.io";
+    const { userId, token } = await signUpVerified(email);
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+
+    // Owning the inbox: a GitHub account with the admin's verified email signs in.
+    expect((await githubOAuth(email)).location).toContain("error=");
+    // Knowing the password: the password session has not passed two-factor.
+    expect((await githubOAuth(email, token)).location).toContain("error=");
+    expect(await githubLinked(userId)).toBe(0);
+
+    await env.DB.prepare("UPDATE user SET twoFactorEnabled = 1 WHERE id = ?").bind(userId).run();
+    expect((await githubOAuth(email, token)).location).toBe("/admin/");
+    expect(await githubLinked(userId)).toBe(1);
+    const signIn = await githubOAuth(email);
+    expect(signIn.location).toBe("/admin/");
+    expect((await call("/api/auth/admin/list-users", signIn.session)).status).toBe(200);
+  });
+
+  it("a client cannot mark its password session as social", async () => {
+    const { userId, token } = await signUpVerified("admin-forge@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+    const forge = await call(
+      "/api/auth/update-session",
+      authed(
+        token,
+        json({ signInProvider: "github" }, { headers: { "cf-connecting-ip": freshIp() } }),
+      ),
+    );
+    expect(forge.status).toBe(400);
+    expect((await call("/api/auth/admin/list-users", authed(token))).status).toBe(403);
+  });
+
+  it.each([
+    [{ path: "/callback/:id", params: { id: "github" } }, "github"],
+    [{ path: "/sign-in/social", body: { provider: "apple" } }, "apple"],
+    [{ path: "/callback/:id", params: { id: "evil" } }, null],
+    [{ path: "/sign-in/email", body: { provider: "google" } }, null],
+    [{ path: "/two-factor/verify-totp" }, null],
+    [null, null],
+  ])("socialProviderOf(%j) is %s", (ctx, expected) => {
+    expect(socialProviderOf(ctx)).toBe(expected);
   });
 
   it("a banned user's session stops working", async () => {

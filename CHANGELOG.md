@@ -9,6 +9,11 @@ What changed for people building on EdgeBase. The format follows
 ### Added
 
 - Pushing a `vX.Y.Z` tag publishes a GitHub release from its CHANGELOG section after CI passes.
+- The admin page signs in with Google, GitHub or Apple. Those sessions reach admin features without the account's TOTP; email + password sessions still need it. An existing admin links a provider from the page's Account view; signing in with an unlinked provider account of an admin's email is refused.
+
+### Upgrade
+
+- Apply migration `0007_session_sign_in_provider.sql` (`pnpm db:migrate:remote`). Admins already signed in with a provider sign in again; until then their session counts as a password one.
 
 ## [0.2.0] - 2026-11-09
 

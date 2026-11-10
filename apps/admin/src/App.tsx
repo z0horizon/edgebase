@@ -1,10 +1,13 @@
-import { BellRing, FileText, Layers, LogOut, Send, Users } from "lucide-react";
+import { BellRing, FileText, KeyRound, Layers, LogOut, Send, Users } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { api, type User } from "@/lib/api";
+import { takeOAuthError } from "@/lib/oauth";
 import { cn } from "@/lib/utils";
+import { AccountPage } from "./pages/Account";
 import { PushesPage } from "./pages/Pushes";
 import { SendPage } from "./pages/Send";
 import { SignIn } from "./pages/SignIn";
@@ -17,6 +20,7 @@ const VIEWS = {
   send: { label: "Send a push", icon: Send, page: SendPage },
   pushes: { label: "Sent pushes", icon: BellRing, page: PushesPage },
   templates: { label: "Templates", icon: FileText, page: TemplatesPage },
+  account: { label: "Account", icon: KeyRound, page: AccountPage },
 } satisfies Record<
   string,
   { label: string; icon: typeof Users; page: (p: { me: User }) => ReactNode }
@@ -30,11 +34,16 @@ const viewFromHash = (): View => {
 
 export function App() {
   const [me, setMe] = useState<User | null | undefined>(undefined);
+  const [socialSession, setSocialSession] = useState(false);
   const [view, setView] = useState<View>(viewFromHash);
 
   const loadSession = useCallback(async () => {
-    const session = await api<{ user: User } | null>("/api/auth/get-session").catch(() => null);
+    const session = await api<{
+      user: User;
+      session: { signInProvider?: string | null };
+    } | null>("/api/auth/get-session").catch(() => null);
     setMe(session?.user ?? null);
+    setSocialSession(Boolean(session?.session.signInProvider));
   }, []);
 
   useEffect(() => {
@@ -43,6 +52,13 @@ export function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, [loadSession]);
+
+  const inConsole = me?.role === "admin" && (Boolean(me.twoFactorEnabled) || socialSession);
+  // A failed link-social comes back here signed in; a failed sign-in is shown by SignIn instead.
+  useEffect(() => {
+    const error = inConsole ? takeOAuthError() : "";
+    if (error) toast.error(error);
+  }, [inConsole]);
 
   if (me === undefined) {
     return (
@@ -69,7 +85,8 @@ export function App() {
       </>
     );
   }
-  if (!me.twoFactorEnabled) {
+  // The provider's own sign-in stands in for TOTP; only password sessions need it here.
+  if (!me.twoFactorEnabled && !socialSession) {
     return (
       <>
         <TwoFactorSetup email={me.email} onDone={loadSession} onSignOut={signOut} />

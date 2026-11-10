@@ -12,7 +12,9 @@ user routes answer `503`.
   and `locale` (BCP 47 or null, `0006`); `role`, `banned`, `banReason`, `banExpires`,
   `twoFactorEnabled` come from the admin and twoFactor plugins (`0004`). Dates are ISO 8601 text,
   booleans 0/1.
-- **`session`**: one row per signed-in device; `expiresAt` indexed for retention.
+- **`session`**: one row per signed-in device; `expiresAt` indexed for retention. `signInProvider`
+  (`0007`) is the social provider that created it (`google`, `github`, `apple`) or null; clients
+  cannot set it.
 - **`account`**: one row per sign-in method of a user (`credential`, `google`, `apple`, `github`).
 - **`verification`**: email verification, password reset, one-time tokens and 2FA challenges; `expiresAt` indexed.
 - **`twoFactor`** (`packages/core/migrations/0004_admin_two_factor_organization.sql`): one row per user with 2FA,
@@ -64,13 +66,20 @@ user routes answer `503`.
     one machine; Turnstile stops many machines sending emails to random addresses.
 11. Roles come from the Better Auth `admin` plugin: new users get `role = "user"` (rows from before
     `0004` have null, treated the same); `admin` reaches `/api/auth/admin/*` (list, create, remove,
-    ban, set role, impersonate, revoke sessions), but only with two-factor on: until then an
-    admin's session answers `403 two_factor_required` there and on the admin-session routes of
-    api.md, so a leaked password alone reaches nothing. Setting up 2FA stays open to them.
+    ban, set role, impersonate, revoke sessions), but a password session needs two-factor on:
+    until then it answers `403 two_factor_required` there and on the admin-session routes of
+    api.md, so a leaked password alone reaches nothing. Setting up 2FA stays open to them. A
+    session from social sign-in (`signInProvider` set) passes without it, since the provider's
+    own sign-in is the second wall. So a provider account joins an admin only through
+    `POST /api/auth/link-social` from that admin's session that itself passes this check; implicit
+    linking by email at sign-in, or a link from a password session without TOTP, is refused
+    (`databaseHooks.account.create.before`). A user who signed up with a provider and is later
+    made admin keeps that provider.
     Banning deletes the user's sessions, so the next request answers `401`. The first admin comes
     from `pnpm admin:create` or bootstrap (see deployment.md). The `/admin` page (`apps/admin/`)
-    signs admins in with email, password and TOTP, walks an admin without TOTP through setting it
-    up (QR code, confirming code, backup codes), manages users through these routes, and sends pushes and edits templates with the
+    signs admins in with Google, GitHub or Apple, or with email, password and TOTP, walks an
+    admin with a password session and no TOTP through setting it up (QR code,
+    confirming code, backup codes), links providers on its Account view, manages users through these routes, and sends pushes and edits templates with the
     admin session (see api.md, Authentication). It is served with a CSP that allows only its own
     scripts, and renders user data as text.
 12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;

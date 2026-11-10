@@ -73,8 +73,24 @@ changing it in the file. `pnpm admin:create` does the same for the local databas
 values in `apps/server/.env.local` (gitignored). Further admins are granted from the Users page
 (`POST /api/auth/admin/set-role`).
 
-Admin features need two-factor: at first sign-in the page shows a QR code for an authenticator
-app and then ten backup codes. An admin who has lost both the app and the codes is reset with
+Admins can sign in to the page with Google, GitHub or Apple (whichever are configured in step 2)
+with no two-factor:
+
+- **Existing admin** (such as `ADMIN_EMAIL`): sign in with email, password and 2FA, open
+  **Account** and link the provider account (same email). Signing in with an unlinked provider
+  account fails with `unable to link account`: matching the email at sign-in never links to an
+  admin, so owning the admin's inbox is not enough.
+- **New admin**: they sign in once with the provider (this creates a plain user), then an admin
+  grants the role from the Users page.
+- **Apple** "Hide My Email" gives a relay address that matches no existing user; share the real
+  email or use another provider.
+- **Locally** the provider returns to `http://localhost:8787/admin/`, so build the page once
+  (`pnpm --filter @edgebase/admin build`) and register `http://localhost:8787/api/auth/callback/<provider>`
+  as a redirect URI of a development OAuth client.
+
+Email + password sign-in needs
+two-factor: at first sign-in the page shows a QR code for an authenticator app and then ten
+backup codes. An admin who has lost both the app and the codes is reset with
 `pnpm admin:create --remote --reset-2fa` (with their email as `ADMIN_EMAIL`), and sets it up again.
 
 ### Optional: Cloudflare Access in front of the admin page

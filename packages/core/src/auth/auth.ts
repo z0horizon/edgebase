@@ -1,5 +1,6 @@
 import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
+import { getSessionFromCtx } from "better-auth/api";
 import { admin, bearer, captcha, oneTimeToken, organization, twoFactor } from "better-auth/plugins";
 import * as v from "valibot";
 import { deleteUserInbox } from "../inbox/queries";
@@ -35,6 +36,27 @@ function configuredProviders(env: Env) {
   };
 }
 
+const SOCIAL_PROVIDERS = new Set(["google", "apple", "github"]);
+
+/**
+ * The provider behind the endpoint creating a session: the OAuth callback, or a native app's ID
+ * token sign-in. Anything else (password, TOTP, impersonation) is null.
+ */
+export function socialProviderOf(
+  ctx: {
+    path?: string | undefined;
+    params?: Record<string, string | undefined> | undefined;
+    body?: unknown;
+  } | null,
+): string | null {
+  const id = ctx?.path?.startsWith("/callback/")
+    ? ctx.params?.["id"]
+    : ctx?.path === "/sign-in/social"
+      ? (ctx.body as { provider?: unknown } | undefined)?.provider
+      : undefined;
+  return typeof id === "string" && SOCIAL_PROVIDERS.has(id) ? id : null;
+}
+
 /** Built per request: bindings only exist once a request arrives. */
 export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
   const mail = (to: string, subject: string, text: string) => {
@@ -59,7 +81,11 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     },
     socialProviders: configuredProviders(env),
     // Sessions stay in D1 with no cookie cache so a revoked session fails on the very next request.
-    session: { expiresIn: 30 * DAY_SECONDS, updateAge: DAY_SECONDS },
+    session: {
+      expiresIn: 30 * DAY_SECONDS,
+      updateAge: DAY_SECONDS,
+      additionalFields: { signInProvider: { type: "string", required: false, input: false } },
+    },
     // Its built-in limiter is per-isolate memory; AUTH_RL in middleware does this job.
     rateLimit: { enabled: false },
     user: {
@@ -71,6 +97,32 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     },
     // A database hook, not deleteUser.afterDelete, so admin remove-user cleans up too.
     databaseHooks: {
+      session: {
+        create: {
+          before: async (session, ctx) => ({
+            data: { ...session, signInProvider: socialProviderOf(ctx) },
+          }),
+        },
+      },
+      account: {
+        create: {
+          // A social session skips TOTP, so a provider account may join an admin only from that
+          // admin's own session that already passed two-factor (link-social), never by matching
+          // email at sign-in: owning the inbox, or the password alone, must not reach admin features.
+          before: async (account, ctx) => {
+            if (account.providerId === "credential") return;
+            const role = await env.DB.prepare("SELECT role FROM user WHERE id = ?")
+              .bind(account.userId)
+              .first<string | null>("role");
+            if (role !== "admin") return;
+            if (!ctx) return false;
+            const current = await getSessionFromCtx<SessionUser, Session["session"]>(ctx, {
+              disableRefresh: true,
+            }).catch(() => null);
+            if (current?.user.id !== account.userId || adminNeedsTwoFactor(current)) return false;
+          },
+        },
+      },
       user: {
         delete: {
           after: async (user) => {
@@ -118,4 +170,12 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
 }
 
 type Auth = ReturnType<typeof createAuth>;
-export type SessionUser = Auth["$Infer"]["Session"]["user"];
+type Session = Auth["$Infer"]["Session"];
+export type SessionUser = Session["user"];
+
+/**
+ * Admin features need a second factor: the account's TOTP for a password session, the provider's
+ * own sign-in for a social one. A leaked password alone must not reach users, bans or pushes.
+ */
+export const adminNeedsTwoFactor = ({ user, session }: Session) =>
+  user.role === "admin" && !user.twoFactorEnabled && !session.signInProvider;

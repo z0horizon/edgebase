@@ -1,7 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../app";
 import { jsonError, sha256 } from "../http";
-import { createAuth } from "./auth";
+import { adminNeedsTwoFactor, createAuth } from "./auth";
 
 /** Blocks every auth route while the auth secret is unset, instead of running with a blank key. */
 export const requireAuthConfig: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -40,15 +40,12 @@ export const topicRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
 const twoFactorRequired = () =>
   jsonError(403, "two_factor_required", "Turn on two-factor authentication to use admin features");
 
-/**
- * An admin without TOTP may sign in, but only to set it up: a leaked password alone must not
- * reach users, bans or pushes.
- */
+/** An admin password session without TOTP may sign in, but only to set it up. */
 export const requireAdminTwoFactor: MiddlewareHandler<AppEnv> = async (c, next) => {
   const session = await createAuth(c.env, c.executionCtx).api.getSession({
     headers: c.req.raw.headers,
   });
-  if (session?.user.role === "admin" && !session.user.twoFactorEnabled) return twoFactorRequired();
+  if (session && adminNeedsTwoFactor(session)) return twoFactorRequired();
   await next();
 };
 
@@ -71,7 +68,7 @@ export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
       ? await createAuth(c.env, c.executionCtx).api.getSession({ headers: c.req.raw.headers })
       : null;
     if (session?.user.role !== "admin") return jsonError(401, "unauthorized", "Invalid API key");
-    if (!session.user.twoFactorEnabled) return twoFactorRequired();
+    if (adminNeedsTwoFactor(session)) return twoFactorRequired();
     await next();
     return;
   }

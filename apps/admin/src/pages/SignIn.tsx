@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorMessage } from "@/lib/api";
+import { PROVIDERS, type Provider, startOAuth, takeOAuthError } from "@/lib/oauth";
 
 export function SignIn({
   notAdmin,
@@ -14,9 +15,20 @@ export function SignIn({
   onSignedIn: () => Promise<void>;
 }) {
   const [step, setStep] = useState<"password" | "code">("password");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(takeOAuthError);
   const shown = error || (notAdmin ? "This account is not an admin." : "");
   const [busy, setBusy] = useState(false);
+
+  const signInWith = async (provider: Provider) => {
+    setBusy(true);
+    setError("");
+    try {
+      await startOAuth("/api/auth/sign-in/social", provider);
+    } catch (e) {
+      setError(errorMessage(e));
+      setBusy(false);
+    }
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -64,11 +76,34 @@ export function SignIn({
             </CardTitle>
             <CardDescription className="text-pretty">
               {step === "password"
-                ? "Sign in with an admin account."
+                ? "Sign in with an admin account. Password sign-in needs two-factor."
                 : "Enter the 6-digit code from your authenticator app."}
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-4">
+            {step === "password" && (
+              <>
+                <div className="grid gap-2">
+                  {PROVIDERS.map(({ id, label }) => (
+                    <Button
+                      key={id}
+                      type="button"
+                      variant="outline"
+                      disabled={busy}
+                      className="w-full"
+                      onClick={() => signInWith(id)}
+                    >
+                      Continue with {label}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" />
+                  or
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              </>
+            )}
             <form className="grid gap-4" onSubmit={submit}>
               {step === "password" ? (
                 <>

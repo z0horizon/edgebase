@@ -6,8 +6,10 @@
 - **Servers**: `X-API-Key: <PUSH_API_KEY>` on `/v1/push`, `/v1/push/*` and `/v1/templates/*`.
   Without that header, these routes also take the session of a user with `role = "admin"` whose
   request carries the Worker's own `Origin` (`BASE_URL`), or no `Origin` on a `GET`; this is what
-  the `/admin` page uses. An admin without two-factor gets `403 two_factor_required` here and on
-  `/api/auth/admin/*`.
+  the `/admin` page uses. An admin whose session came from email + password and who has no
+  two-factor gets `403 two_factor_required` here and on `/api/auth/admin/*`; a session from
+  Google, GitHub or Apple sign-in is not asked for it. `get-session` shows which as
+  `session.signInProvider` (the provider, or `null`).
 - **Captcha** (only when `TURNSTILE_SECRET_KEY` is set): `X-Captcha-Response: <Turnstile token>` on
   `POST /api/auth/sign-up/email`, `/api/auth/request-password-reset` and
   `/api/auth/send-verification-email`. Missing answers `400`, rejected answers `403`. Mobile apps
