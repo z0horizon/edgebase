@@ -59,6 +59,10 @@ app.on(
     "/api/auth/sign-in/*",
     "/api/auth/sign-up/*",
     "/api/auth/request-password-reset",
+    "/api/auth/reset-password",
+    "/api/auth/change-password",
+    "/api/auth/verify-password",
+    "/api/auth/delete-user",
     "/api/auth/send-verification-email",
     // Six-digit codes: without a limit they are guessed in minutes.
     "/api/auth/two-factor/*",

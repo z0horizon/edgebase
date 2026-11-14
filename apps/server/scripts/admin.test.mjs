@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { describe, it } from "node:test";
-import { adminStatements } from "./admin.mjs";
+import { adminStatements, executeSql } from "./admin.mjs";
 
 const base = {
   email: "o'neil@example.com",
@@ -40,5 +41,46 @@ describe("adminStatements", () => {
       /twoFactorEnabled = 0 WHERE id = 'u1'.*DELETE FROM twoFactor WHERE userId = 'u1'/,
     );
     assert.doesNotMatch(adminStatements({ ...base, userId: "u1" }).join(";"), /twoFactor/);
+  });
+});
+
+describe("executeSql", () => {
+  it("passes SQL through a 0600 temporary --file instead of --command argv and cleans it up", () => {
+    let seenArgs = [];
+    let seenSql = "";
+    let seenMode = 0;
+    let seenFile = "";
+    const out = executeSql(
+      ["SELECT 1", "INSERT INTO account VALUES ('secret-hash')"],
+      ["--local"],
+      (args) => {
+        seenArgs = args;
+        const idx = args.indexOf("--file");
+        seenFile = args[idx + 1] ?? "";
+        seenSql = readFileSync(seenFile, "utf8");
+        seenMode = statSync(seenFile).mode & 0o777;
+        return { status: 0, stdout: '[{"results":[{"ok":1}]}]', stderr: "" };
+      },
+    );
+    assert.equal(seenArgs.includes("--command"), false);
+    assert.equal(
+      seenArgs.some((a) => a.includes("secret-hash")),
+      false,
+    );
+    assert.equal(seenMode, 0o600);
+    assert.equal(seenSql, "SELECT 1;\nINSERT INTO account VALUES ('secret-hash');\n");
+    assert.equal(existsSync(seenFile), false);
+    assert.deepEqual(out, [{ results: [{ ok: 1 }] }]);
+  });
+
+  it("removes the temporary SQL file even when wrangler fails", () => {
+    let seenFile = "";
+    assert.throws(() =>
+      executeSql(["SELECT 'secret'"], ["--local"], (args) => {
+        seenFile = args[args.indexOf("--file") + 1] ?? "";
+        return { status: 1, stdout: "", stderr: "boom" };
+      }),
+    );
+    assert.equal(existsSync(seenFile), false);
   });
 });

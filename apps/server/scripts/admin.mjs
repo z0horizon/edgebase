@@ -3,7 +3,9 @@
 // sign-in; --reset-2fa makes them set it up again (a lost phone and lost backup codes). Both live in a gitignored file: .env.local for the
 // local database, .env.production for the deployed one. An empty password is generated and saved.
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { hashPassword } from "better-auth/crypto";
@@ -56,6 +58,28 @@ export function adminStatements({
   ];
 }
 
+/**
+ * Runs D1 statements from a 0600 temporary `.sql` file instead of `--command`, so secrets such as
+ * the admin's password hash never appear in the OS process argument list.
+ */
+export function executeSql(statements, target, run = runWrangler) {
+  const dir = mkdtempSync(join(tmpdir(), "edgebase-d1-"));
+  const sqlFile = join(dir, "query.sql");
+  try {
+    writeFileSync(sqlFile, `${statements.join(";\n")};\n`, { mode: 0o600 });
+    const result = run(["d1", "execute", "DB", ...target, "--json", "--file", sqlFile], {
+      capture: true,
+      env: { CI: "1" },
+    });
+    if (result.status !== 0) {
+      throw new Error(`wrangler d1 execute failed:\n${result.stderr || result.stdout}`);
+    }
+    return JSON.parse(result.stdout);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const remote = process.argv.includes("--remote");
   const yes = process.argv.includes("--yes");
@@ -86,16 +110,15 @@ async function main() {
 
   const target = remote ? ["--remote", "-c", PROD_CONFIG] : ["--local"];
   if (remote) await writeProdConfig(env);
-  const d1 = (command) => {
-    const result = runWrangler(["d1", "execute", "DB", ...target, "--json", "--command", command], {
-      capture: true,
-      env: { CI: "1" },
-    });
-    if (result.status !== 0) fail(`wrangler d1 execute failed:\n${result.stderr || result.stdout}`);
-    return JSON.parse(result.stdout);
+  const d1 = (statements) => {
+    try {
+      return executeSql(statements, target);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
   };
 
-  const found = d1(`SELECT id FROM user WHERE email = ${sql(env.ADMIN_EMAIL)}`)[0]?.results[0];
+  const found = d1([`SELECT id FROM user WHERE email = ${sql(env.ADMIN_EMAIL)}`])[0]?.results[0];
   // Bootstrap reruns must not undo a password the admin has since changed.
   if (found && process.argv.includes("--keep-existing")) {
     console.log(`✔ ${env.ADMIN_EMAIL} already exists; left unchanged`);
@@ -108,7 +131,7 @@ async function main() {
     now: Date.now(),
     resetTwoFactor: process.argv.includes("--reset-2fa"),
   });
-  d1(statements.join("; "));
+  d1(statements);
   console.log(
     `✔ ${env.ADMIN_EMAIL} is an admin${remote ? "" : " (local)"}; the password is ADMIN_PASSWORD in apps/server/${file}`,
   );

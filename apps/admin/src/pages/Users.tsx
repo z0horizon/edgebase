@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/table";
 import { api, errorMessage, listUsers, type User } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { SEND_RECIPIENTS_KEY } from "@/lib/state";
 
 const PAGE = 20;
 
@@ -124,7 +125,7 @@ export function UsersPage({ me }: { me: User }) {
           <Button
             size="sm"
             onClick={() => {
-              sessionStorage.setItem("edgebase:send-recipients", JSON.stringify(selected));
+              sessionStorage.setItem(SEND_RECIPIENTS_KEY, JSON.stringify(selected));
               location.hash = "#send";
             }}
           >
@@ -275,7 +276,7 @@ export function UsersPage({ me }: { me: User }) {
                         <DropdownMenuItem
                           onSelect={() => {
                             sessionStorage.setItem(
-                              "edgebase:send-recipients",
+                              SEND_RECIPIENTS_KEY,
                               JSON.stringify({ [user.id]: user.email }),
                             );
                             location.hash = "#send";

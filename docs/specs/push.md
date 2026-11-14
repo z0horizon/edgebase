@@ -93,9 +93,10 @@ FCM and retries per token.
 4. `429`, `5xx`, `UNAVAILABLE`, `INTERNAL`, `QUOTA_EXCEEDED` and network errors are retried by
    enqueueing a new message holding only the failed `{ token, userId }` pairs, delayed by `Retry-After` or
    `30 s × 2^attempt` (capped at 1 h). The fifth failed attempt goes to `PUSH_DLQ` instead.
-   Before a retry is sent, each token is checked against `device` again and skipped unless it
-   still belongs to the same user, so a token removed at sign-out or moved to another user never
-   receives the earlier user's push.
+   Before a push or retry is sent, each token is checked against `device` (and `user.marketingOptIn = 1`
+   for `marketing` pushes) and skipped unless it still belongs to an eligible user, so a token
+   removed at sign-out, moved to another user, or belonging to a user who opted out never receives
+   the push.
 6. `UNAUTHENTICATED` from FCM (our access token rejected, e.g. after a service-account key
    rotation) evicts the cached access token and retries the push.
 7. The consumer takes one message per invocation (`max_batch_size: 1`): a message can fan out
@@ -149,7 +150,8 @@ apps should keep using the SDK.
    still the value it read, so two runs never hold the same row. The claim is renewed right
    before queueing, and only the holder of a valid claim queues and deletes the row. A row whose
    send throws keeps its claim, waits behind the other rows and is retried once the claim runs
-   out. A row whose stored request no longer validates is logged and deleted.
+   out (up to 24 h past its intended `send_at`, after which cleanup prunes it). A row whose stored
+   request no longer validates is logged and deleted.
 4. The inbox rows of a push are written in one transaction with an `inbox_push` row keyed by
    the push id, so any retry stores them once.
 5. An immediate push is stored the same way, already claimed by its request, which sends it and

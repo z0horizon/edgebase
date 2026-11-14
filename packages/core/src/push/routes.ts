@@ -89,9 +89,14 @@ async function sendOnce(
     throw error;
   }
   if (res.status === 202) {
-    await c.env.DB.prepare("UPDATE push_idempotency SET response = ? WHERE key = ?")
-      .bind(await res.clone().text(), key)
-      .run();
+    try {
+      await c.env.DB.prepare("UPDATE push_idempotency SET response = ? WHERE key = ?")
+        .bind(await res.clone().text(), key)
+        .run();
+    } catch (error) {
+      // The push was already accepted; returning 500 here would make the caller resend without a key.
+      console.error("failed to record idempotent push response", { key, error: String(error) });
+    }
   } else {
     // A 400 sent nothing; the corrected request may reuse the key.
     await c.env.DB.prepare("DELETE FROM push_idempotency WHERE key = ?").bind(key).run();

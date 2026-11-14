@@ -14,6 +14,58 @@ const ExchangeSchema = v.object({
 });
 
 const handoffId = async (token: string) => `app-handoff:${base64url(await sha256(token))}`;
+const callbackId = (sessionId: string) => `app-callback:${sessionId}`;
+
+// Stored in Better Auth's verification table so the scheduled expiry cleanup covers it.
+async function insertVerification(
+  db: D1Database,
+  identifier: string,
+  value: string,
+  now: number,
+): Promise<void> {
+  const iso = new Date(now).toISOString();
+  await db
+    .prepare(
+      `INSERT INTO verification (id, identifier, value, expiresAt, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      crypto.randomUUID(),
+      identifier,
+      value,
+      new Date(now + HANDOFF_TTL_MS).toISOString(),
+      iso,
+      iso,
+    )
+    .run();
+}
+
+/**
+ * Records the PKCE challenge from an OAuth callback's `callbackURL` on the session it created, so
+ * `/v1/auth/app-callback` only hands off sessions that started there with that challenge.
+ */
+export async function bindAppCallback(
+  env: Env,
+  sessionId: string,
+  location: string | null | undefined,
+  now: number,
+): Promise<void> {
+  if (!location) return;
+  let base: URL;
+  let url: URL;
+  try {
+    base = new URL(env.BASE_URL);
+    url = new URL(location, base);
+  } catch {
+    return;
+  }
+  if (url.origin !== base.origin || url.pathname !== "/v1/auth/app-callback") {
+    return;
+  }
+  const challenge = v.safeParse(ChallengeSchema, url.searchParams.get("challenge"));
+  if (!challenge.success) return;
+  await insertVerification(env.DB, callbackId(sessionId), challenge.output, now);
+}
 
 /**
  * End of a browser OAuth flow started by a native app. The app opens it with the challenge of a
@@ -28,26 +80,21 @@ export async function appCallback(c: Context<AppEnv>): Promise<Response> {
   const auth = createAuth(c.env, c.executionCtx);
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   const now = Date.now();
-  // The browser keeps its session cookie after sign-in; without this, any app could open this URL
-  // later with its own challenge and receive a token for that leftover session.
+  // Require both a fresh session and the exact single-use challenge bound at OAuth callback, so a
+  // browser session from web sign-in or another app cannot mint a hand-off token.
   if (!session || now - session.session.createdAt.getTime() > FRESH_SESSION_MS) {
     return fail("unauthorized");
   }
-  const { token } = await auth.api.generateOneTimeToken({ headers: c.req.raw.headers });
-  // Stored in Better Auth's verification table so the scheduled expiry cleanup covers it.
-  await c.env.DB.prepare(
-    `INSERT INTO verification (id, identifier, value, expiresAt, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+  const bound = await c.env.DB.prepare(
+    "DELETE FROM verification WHERE identifier = ? AND value = ? RETURNING expiresAt",
   )
-    .bind(
-      crypto.randomUUID(),
-      await handoffId(token),
-      challenge.output,
-      new Date(now + HANDOFF_TTL_MS).toISOString(),
-      new Date(now).toISOString(),
-      new Date(now).toISOString(),
-    )
-    .run();
+    .bind(callbackId(session.session.id), challenge.output)
+    .first<{ expiresAt: string }>();
+  if (!bound || bound.expiresAt < new Date(now).toISOString()) {
+    return fail("unauthorized");
+  }
+  const { token } = await auth.api.generateOneTimeToken({ headers: c.req.raw.headers });
+  await insertVerification(c.env.DB, await handoffId(token), challenge.output, now);
   return c.redirect(`${c.env.APP_SCHEME}://auth?token=${encodeURIComponent(token)}`, 302);
 }
 

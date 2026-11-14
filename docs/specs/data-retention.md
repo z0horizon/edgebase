@@ -15,8 +15,8 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 | `session` | `DB` | `expiresAt` < now (ISO text compare) | `session_expires_at` |
 | `verification` | `DB` | `expiresAt` < now | `verification_expires_at` |
 | `device` | `DB` | `updated_at` older than 60 days | `device_updated_at` |
-| `user` (+ cascades) | `DB` | email unverified and created more than 7 days ago, with no social account | `user_unverified_created_at` (partial) |
-| `scheduled_push` | `DB` | when sent (by the request for an immediate push, else the minute cron) | `scheduled_push_send_at` |
+| `user` (+ cascades, inbox & opens) | `DB`, `INBOX_DB` | email unverified and created more than 7 days ago, with no social account | `user_unverified_created_at` (partial) |
+| `scheduled_push` | `DB` | when sent (by the request for an immediate push, else the minute cron), or 24 h past intended `send_at` | `scheduled_push_send_at` + `push_stats` PK |
 | `inbox_state` | `INBOX_DB` | when the user is deleted | primary key |
 | `invitation` | `DB` | `expiresAt` < now | `invitation_expires_at` |
 | `push_idempotency` | `DB` | `created_at` older than 24 h | `push_idempotency_created_at` |
@@ -27,9 +27,9 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 | `organization` | `DB` | trigger when its last member is deleted | `member_organization_id` |
 
 1. Deletes run in chunks of 5000 rows (`deleteInChunks`) until a chunk deletes fewer than 5000
-   or the 20 s budget is spent; the rest waits for the next hour. Deleted rows are counted from
-   `RETURNING`, since D1's `meta.changes` also counts cascaded rows. Short chunks keep D1's single writer
-   free for live traffic.
+   or the 20 s budget is spent; once the budget runs out, remaining tables are skipped until the
+   next hour. Deleted rows are counted from `RETURNING`, since D1's `meta.changes` also counts
+   cascaded rows. Short chunks keep D1's single writer free for live traffic.
 2. Inbox and broadcast rowids grow with time, so every row below the first fresh rowid is
    expired. Each chunk looks up that rowid (stopping at the first fresh row) and deletes only
    below it, so cleanup never walks the fresh part of the table. A row written with a clock far

@@ -1,4 +1,4 @@
-import { BODY_MAX, MAX_RECIPIENTS, PLACEHOLDER, TITLE_MAX } from "@edgebase/core/limits";
+import { BODY_MAX, MAX_RECIPIENTS, TITLE_MAX } from "@edgebase/core/limits";
 import { BellRing, Check, Clock, Inbox, Plus, Radio, Search, Send, Users, X } from "lucide-react";
 import {
   type ClipboardEvent,
@@ -36,6 +36,7 @@ import {
   type Text,
   type User,
 } from "@/lib/api";
+import { fillPreview, SEND_RECIPIENTS_KEY } from "@/lib/state";
 import { cn } from "@/lib/utils";
 
 const NONE = "none";
@@ -53,18 +54,14 @@ function parseVars(text: string): Record<string, string> {
   return vars;
 }
 
-// Preview only: the server fills placeholders for real and refuses missing ones.
-const fill = (text: string, vars: Record<string, string>) =>
-  text.replace(PLACEHOLDER, (match, name: string) => vars[name] ?? match);
-
 export function SendPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [target, setTarget] = useState<"users" | "topic">("users");
   // Maps userId -> display label (email when picked from list, or the raw ID when pasted).
   const [recipients, setRecipients] = useState<Record<string, string>>(() => {
-    const prefill = sessionStorage.getItem("edgebase:send-recipients");
+    const prefill = sessionStorage.getItem(SEND_RECIPIENTS_KEY);
     if (!prefill) return {};
-    sessionStorage.removeItem("edgebase:send-recipients");
+    sessionStorage.removeItem(SEND_RECIPIENTS_KEY);
     try {
       const parsed = JSON.parse(prefill) as Record<string, string>;
       return Object.fromEntries(Object.entries(parsed).slice(0, MAX_RECIPIENTS));
@@ -212,7 +209,7 @@ export function SendPage() {
     return Object.fromEntries(
       Object.entries(texts).map(([key, t]) => [
         key,
-        { title: fill(t.title, values), body: fill(t.body, values) },
+        { title: fillPreview(t.title, values), body: fillPreview(t.body, values) },
       ]),
     );
   }, [template, text, vars]);

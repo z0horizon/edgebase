@@ -34,19 +34,23 @@ user routes answer `503`.
 3. GitHub on native: Expo uses `@better-auth/expo`. Flutter keeps a random `verifier`
    (43–128 chars) and opens the browser OAuth flow with
    `callbackURL = <BASE_URL>/v1/auth/app-callback?challenge=<base64url(SHA-256(verifier))>`.
-   That route stores the challenge with a one-time token (3 minutes, in `verification`) and
+   The OAuth callback binds that `challenge` to the new session (3 minutes, single-use in
+   `verification`); `/v1/auth/app-callback` consumes that binding, stores the challenge with a
+   one-time token (3 minutes, in `verification`) and
    answers `302` to `<APP_SCHEME>://auth?token=<token>`. The app redeems it at
    `POST /v1/auth/app-exchange { token, verifier }` for `{ token: <bearer>, user }`
    (`packages/core/src/auth/app-callback.ts`). Another app that claims the URL scheme gets a token it cannot
    redeem, and a hand-off started by someone else fails the real app's verifier. Failures
-   redirect to `<APP_SCHEME>://auth?error=invalid_challenge` or `?error=unauthorized` (no session, or a
-   session older than 5 minutes, so a browser's leftover session cannot be handed to another app),
+   redirect to `<APP_SCHEME>://auth?error=invalid_challenge` or `?error=unauthorized` (no session, a
+   session that did not come from an OAuth flow for that `challenge`, a second hand-off on the same
+   session, or a session older than 5 minutes, so a browser's session cannot be handed to another app),
    so the waiting app always hears back. A token is spent
    by its first redemption attempt, right or wrong. Better Auth's own
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.
 4. Sessions last 30 days and are extended at most once a day (`updateAge`), so an active session
    costs about one D1 write per day. There is no cookie cache and no secondary storage.
-5. Sign-in, sign-up, password-reset, resend-verification, two-factor, organization invite-member
+5. Sign-in, sign-up, password-reset (`request-password-reset`, `reset-password`),
+   `change-password`, `verify-password`, `delete-user`, resend-verification, two-factor, organization invite-member
    and app-exchange requests are limited
    to 10 per minute per `cf-connecting-ip` through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`packages/core/src/auth/middleware.ts`). Better Auth's own limiter is disabled.
@@ -57,7 +61,8 @@ user routes answer `503`.
 7. Users opt in to marketing pushes with `POST /api/auth/update-user { marketingOptIn: true }`.
 8. Browsers on another origin may call the API with credentials when their origin is an
    `http(s)://` entry of `TRUSTED_ORIGINS`; `set-auth-token` is exposed to them (`packages/core/src/app.ts`).
-9. Email sign-ups still unverified after 7 days are deleted by the cleanup cron, unless the user
+9. Email sign-ups still unverified after 7 days are deleted by the cleanup cron along with any
+   `inbox_item`, `inbox_state` and `push_open` rows, unless the user
    also has a social account (see data-retention).
 10. When `TURNSTILE_SECRET_KEY` is set, `sign-up/email`, `request-password-reset` and
     `send-verification-email` need an `x-captcha-response` header holding a Cloudflare Turnstile

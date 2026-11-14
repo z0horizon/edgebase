@@ -79,8 +79,8 @@ rate-limited per IP like sign-in.
 Use as the `callbackURL` of a browser OAuth flow started from a native app, with
 `c = base64url(SHA-256(verifier))` (43 chars) for a random `verifier` the app keeps. Answers `302`
 to `<APP_SCHEME>://auth?token=<ott>`. Failures also redirect to the app:
-`<APP_SCHEME>://auth?error=invalid_challenge` or `<APP_SCHEME>://auth?error=unauthorized` (no session, or
-the session was created more than 5 minutes ago).
+`<APP_SCHEME>://auth?error=invalid_challenge` or `<APP_SCHEME>://auth?error=unauthorized` (no session, the
+session did not come from an OAuth flow for `c`, was already handed off, or is older than 5 minutes).
 
 ### `POST /v1/auth/app-exchange`
 Body `{ "token": ott, "verifier": string (43–128 chars) }` → `200 { "token": <bearer>, "user": {...} }`.

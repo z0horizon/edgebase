@@ -24,11 +24,14 @@ export async function parseBody<S extends v.GenericSchema>(
   return result.output;
 }
 
+const B64_CHUNK = 8192;
+
 export function base64url(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += B64_CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + B64_CHUNK));
+  }
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 export async function sha256(text: string): Promise<Uint8Array> {

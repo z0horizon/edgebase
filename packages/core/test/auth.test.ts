@@ -18,6 +18,47 @@ async function firstLimited(attempt: () => Promise<Response>): Promise<Response 
 
 const ip = (n: number) => ({ "cf-connecting-ip": `203.0.113.${n}` });
 
+/** Runs GitHub OAuth through Better Auth, with github.com answering for `email`. */
+async function githubOAuth(email: string, opts: { linkWith?: string; callbackURL?: string } = {}) {
+  const headers = { "cf-connecting-ip": freshIp() };
+  const body = { provider: "github", callbackURL: opts.callbackURL ?? "/admin/" };
+  const start = await call(
+    opts.linkWith ? "/api/auth/link-social" : "/api/auth/sign-in/social",
+    opts.linkWith ? authed(opts.linkWith, json(body, { headers })) : json(body, { headers }),
+  );
+  const { url } = await start.json<{ url: string }>();
+  const state = new URL(url).searchParams.get("state");
+  const github: Record<string, unknown> = {
+    "https://github.com/login/oauth/access_token": { access_token: "gh", token_type: "bearer" },
+    // One GitHub account per email, as on github.com.
+    "https://api.github.com/user": { id: email, login: "octo", name: "Octo", email },
+    "https://api.github.com/user/emails": [{ email, primary: true, verified: true }],
+  };
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new Request(input).url.split("?")[0] ?? "";
+    if (!(url in github)) throw new Error(`unexpected fetch ${url}`);
+    return Response.json(github[url]);
+  });
+  const cookie = start.headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0])
+    .join("; ");
+  const init = { headers: { ...headers, cookie } };
+  const callback = await call(
+    `/api/auth/callback/github?code=c&state=${state}`,
+    opts.linkWith ? authed(opts.linkWith, init) : init,
+  );
+  vi.restoreAllMocks();
+  const session = callback.headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0])
+    .join("; ");
+  return {
+    location: callback.headers.get("location") ?? "",
+    session: { headers: { cookie: session, origin: "https://web.test" } },
+  };
+}
+
 describe("auth", () => {
   it("unverified email cannot sign in", async () => {
     await call("/api/auth/sign-up/email", json({ email: "a@x.io", password: PASSWORD, name: "A" }));
@@ -70,14 +111,21 @@ describe("auth", () => {
   describe("native app hand-off", () => {
     const VERIFIER = "v".repeat(43);
     const challengeOf = async (verifier: string) => base64url(await sha256(verifier));
+    const startOAuthHandOff = async (email: string, challenge: string) => {
+      const callbackURL = `https://api.test/v1/auth/app-callback?challenge=${challenge}`;
+      const oauth = await githubOAuth(email, { callbackURL });
+      expect(oauth.location).toBe(callbackURL);
+      const me = await (await call("/v1/me", oauth.session)).json<{ id: string }>();
+      return { userId: me.id, session: oauth.session };
+    };
     const handOff = async (email: string) => {
-      const user = await signUpVerified(email);
       const challenge = await challengeOf(VERIFIER);
-      const res = await call(`/v1/auth/app-callback?challenge=${challenge}`, authed(user.token));
+      const { userId, session } = await startOAuthHandOff(email, challenge);
+      const res = await call(`/v1/auth/app-callback?challenge=${challenge}`, session);
       expect(res.status).toBe(302);
       const location = res.headers.get("location") ?? "";
       expect(location.startsWith("edgebase://auth?token=")).toBe(true);
-      return { ...user, ott: new URL(location).searchParams.get("token") ?? "" };
+      return { userId, session, ott: new URL(location).searchParams.get("token") ?? "" };
     };
     const exchange = (token: string, verifier: string) =>
       call(
@@ -111,6 +159,37 @@ describe("auth", () => {
       expect(res.headers.get("location")).toBe(`edgebase://auth?error=${error}`);
     });
 
+    it("app-callback refuses a fresh password or web OAuth session that did not start a hand-off", async () => {
+      const challenge = await challengeOf(VERIFIER);
+      const passwordUser = await signUpVerified("pw-no-handoff@x.io");
+      const pwRes = await call(
+        `/v1/auth/app-callback?challenge=${challenge}`,
+        authed(passwordUser.token),
+      );
+      expect(pwRes.headers.get("location")).toBe("edgebase://auth?error=unauthorized");
+
+      const webOAuth = await githubOAuth("web-no-handoff@x.io", {
+        callbackURL: "https://web.test/",
+      });
+      const webRes = await call(`/v1/auth/app-callback?challenge=${challenge}`, webOAuth.session);
+      expect(webRes.headers.get("location")).toBe("edgebase://auth?error=unauthorized");
+    });
+
+    it("app-callback binds the challenge to the OAuth state and allows only one hand-off", async () => {
+      const challenge = await challengeOf(VERIFIER);
+      const otherChallenge = await challengeOf("x".repeat(43));
+      const { session } = await startOAuthHandOff("bound-handoff@x.io", challenge);
+
+      const wrong = await call(`/v1/auth/app-callback?challenge=${otherChallenge}`, session);
+      expect(wrong.headers.get("location")).toBe("edgebase://auth?error=unauthorized");
+
+      const ok = await call(`/v1/auth/app-callback?challenge=${challenge}`, session);
+      expect(ok.headers.get("location")?.startsWith("edgebase://auth?token=")).toBe(true);
+
+      const replay = await call(`/v1/auth/app-callback?challenge=${challenge}`, session);
+      expect(replay.headers.get("location")).toBe("edgebase://auth?error=unauthorized");
+    });
+
     it("an expired hand-off token is refused even with the right verifier", async () => {
       const { ott } = await handOff("expired@x.io");
       await env.DB.prepare(
@@ -121,14 +200,26 @@ describe("auth", () => {
       expect((await exchange(ott, VERIFIER)).status).toBe(401);
     });
 
+    it("app-callback refuses an expired OAuth challenge binding even while the session is fresh", async () => {
+      const challenge = await challengeOf(VERIFIER);
+      const { session } = await startOAuthHandOff("expired-cb@x.io", challenge);
+      await env.DB.prepare(
+        "UPDATE verification SET expiresAt = ? WHERE identifier LIKE 'app-callback:%'",
+      )
+        .bind(new Date(Date.now() - 1000).toISOString())
+        .run();
+      const res = await call(`/v1/auth/app-callback?challenge=${challenge}`, session);
+      expect(res.headers.get("location")).toBe("edgebase://auth?error=unauthorized");
+    });
+
     it("app-callback refuses a session that was not just created", async () => {
-      const { userId, token } = await signUpVerified("stale@x.io");
+      const challenge = await challengeOf(VERIFIER);
+      const { userId, session } = await startOAuthHandOff("stale@x.io", challenge);
       const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString();
       await env.DB.prepare("UPDATE session SET createdAt = ? WHERE userId = ?")
         .bind(tenMinutesAgo, userId)
         .run();
-      const challenge = await challengeOf(VERIFIER);
-      const res = await call(`/v1/auth/app-callback?challenge=${challenge}`, authed(token));
+      const res = await call(`/v1/auth/app-callback?challenge=${challenge}`, session);
       expect(res.headers.get("location")).toBe("edgebase://auth?error=unauthorized");
     });
 
@@ -158,10 +249,17 @@ describe("auth", () => {
   });
 });
 
-it.each(["/api/auth/send-verification-email", "/v1/auth/app-exchange"])(
+it.each([
+  "/api/auth/send-verification-email",
+  "/api/auth/reset-password",
+  "/api/auth/change-password",
+  "/api/auth/verify-password",
+  "/api/auth/delete-user",
+  "/v1/auth/app-exchange",
+])(
   "11th call to %s within a minute from one IP answers 429",
   async (path) => {
-    const headers = { "cf-connecting-ip": `203.0.113.${path.length}` };
+    const headers = { "cf-connecting-ip": freshIp() };
     const attempt = () =>
       call(path, json({ email: "victim@x.io", token: "x", verifier: "x" }, { headers }));
     expect((await firstLimited(attempt))?.status).toBe(429);
@@ -288,47 +386,6 @@ describe("admin, two-factor, organizations, locale", () => {
     expect(enable.status).toBe(200);
   });
 
-  /** Runs GitHub OAuth through Better Auth, with github.com answering for `email`. */
-  async function githubOAuth(email: string, linkWith?: string) {
-    const headers = { "cf-connecting-ip": freshIp() };
-    const body = { provider: "github", callbackURL: "/admin/" };
-    const start = await call(
-      linkWith ? "/api/auth/link-social" : "/api/auth/sign-in/social",
-      linkWith ? authed(linkWith, json(body, { headers })) : json(body, { headers }),
-    );
-    const { url } = await start.json<{ url: string }>();
-    const state = new URL(url).searchParams.get("state");
-    const github: Record<string, unknown> = {
-      "https://github.com/login/oauth/access_token": { access_token: "gh", token_type: "bearer" },
-      // One GitHub account per email, as on github.com.
-      "https://api.github.com/user": { id: email, login: "octo", name: "Octo", email },
-      "https://api.github.com/user/emails": [{ email, primary: true, verified: true }],
-    };
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = new Request(input).url.split("?")[0] ?? "";
-      if (!(url in github)) throw new Error(`unexpected fetch ${url}`);
-      return Response.json(github[url]);
-    });
-    const cookie = start.headers
-      .getSetCookie()
-      .map((c) => c.split(";")[0])
-      .join("; ");
-    const init = { headers: { ...headers, cookie } };
-    const callback = await call(
-      `/api/auth/callback/github?code=c&state=${state}`,
-      linkWith ? authed(linkWith, init) : init,
-    );
-    vi.restoreAllMocks();
-    const session = callback.headers
-      .getSetCookie()
-      .map((c) => c.split(";")[0])
-      .join("; ");
-    return {
-      location: callback.headers.get("location") ?? "",
-      session: { headers: { cookie: session, origin: "https://web.test" } },
-    };
-  }
-
   const githubLinked = (userId: string) =>
     env.DB.prepare("SELECT count(*) AS n FROM account WHERE userId = ? AND providerId = 'github'")
       .bind(userId)
@@ -358,11 +415,11 @@ describe("admin, two-factor, organizations, locale", () => {
     // Owning the inbox: a GitHub account with the admin's verified email signs in.
     expect((await githubOAuth(email)).location).toContain("error=");
     // Knowing the password: the password session has not passed two-factor.
-    expect((await githubOAuth(email, token)).location).toContain("error=");
+    expect((await githubOAuth(email, { linkWith: token })).location).toContain("error=");
     expect(await githubLinked(userId)).toBe(0);
 
     await env.DB.prepare("UPDATE user SET twoFactorEnabled = 1 WHERE id = ?").bind(userId).run();
-    expect((await githubOAuth(email, token)).location).toBe("/admin/");
+    expect((await githubOAuth(email, { linkWith: token })).location).toBe("/admin/");
     expect(await githubLinked(userId)).toBe(1);
     const signIn = await githubOAuth(email);
     expect(signIn.location).toBe("/admin/");

@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { api, type Me, type User } from "@/lib/api";
 import { takeOAuthError } from "@/lib/oauth";
+import { clearSessionDrafts, viewKeyFromHash } from "@/lib/state";
 import { cn } from "@/lib/utils";
 import { AccountPage } from "./pages/Account";
 import { PushesPage } from "./pages/Pushes";
@@ -27,10 +28,7 @@ const VIEWS = {
 >;
 type View = keyof typeof VIEWS;
 
-const viewFromHash = (): View => {
-  const hash = location.hash.slice(1);
-  return hash in VIEWS ? (hash as View) : "users";
-};
+const viewFromHash = (): View => viewKeyFromHash(location.hash, VIEWS, "users");
 
 export function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
@@ -69,6 +67,7 @@ export function App() {
     );
   }
   const signOut = async () => {
+    clearSessionDrafts(sessionStorage);
     await api("/api/auth/sign-out", { method: "POST", body: {} }).catch(() => {});
     setMe(null);
   };

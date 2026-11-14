@@ -20,6 +20,11 @@ What changed for people building on EdgeBase. The format follows
 - `POST /v1/push` stores its stats row and its push in one transaction, so a failure between them no longer leaves an empty stats row.
 - The admin page shows only the sign-in providers whose credentials are set (new `GET /v1/auth/providers`); a button for a provider that is off used to fail when clicked.
 - Scheduled pushes are claimed before they are sent, so overlapping cron runs never send one twice, and a push that keeps failing no longer holds back the ones behind it.
+- `/v1/auth/app-callback` binds the PKCE `challenge` to the OAuth callback that created the session and allows one hand-off per session, so another app claiming `APP_SCHEME` cannot mint a token from a shared browser session.
+- `POST /api/auth/reset-password`, `/change-password`, `/verify-password` and `/delete-user` now share the per-IP auth rate limit (`429 rate_limited`).
+- Marketing push delivery and per-token retries re-check `marketingOptIn`, and template placeholder filling checks own properties only.
+- Hourly cleanup skips remaining tables once its 20 s budget runs out, deletes inbox and push-open rows of expired unverified users, and prunes `scheduled_push` rows stuck more than 24 h past their send time.
+- `pnpm admin:create` passes D1 statements through a `0600` temporary `--file` instead of `--command` CLI arguments, and `/admin` clears queued recipient drafts on sign-out.
 
 ### Upgrade
 

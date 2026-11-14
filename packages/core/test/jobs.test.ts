@@ -115,28 +115,69 @@ describe("runCleanup bounds", () => {
   it("does not scan fresh rows when nothing has expired", async () => {
     await seedInbox("fresh-many", 2000, NOW);
     const u = await seedUser();
-    await env.DB.prepare(
-      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 2000)
-       INSERT INTO device (token, user_id, platform, updated_at) SELECT 'fresh-' || x, ?, 'ios', ? FROM n`,
-    )
-      .bind(u, NOW)
-      .run();
-    const report = await runCleanup(env, NOW);
-    expect(report.inbox + report.device).toBe(0);
-    expect(report.rowsRead).toBeLessThan(200);
+    await env.DB.batch([
+      env.DB.prepare(
+        `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 2000)
+         INSERT INTO device (token, user_id, platform, updated_at) SELECT 'fresh-' || x, ?, 'ios', ? FROM n`,
+      ).bind(u, NOW),
+      env.DB.prepare(
+        `WITH RECURSIVE n(x) AS (SELECT 10001 UNION ALL SELECT x + 1 FROM n WHERE x < 12000)
+         INSERT INTO push_stats (id, category, send_at) SELECT x, 'transactional', ? FROM n`,
+      ).bind(NOW + 10 * DAY),
+      env.DB.prepare(
+        `WITH RECURSIVE n(x) AS (SELECT 10001 UNION ALL SELECT x + 1 FROM n WHERE x < 12000)
+         INSERT INTO scheduled_push (id, send_at, request, push_id) SELECT x, ?, '{}', x FROM n`,
+      ).bind(NOW + 10 * DAY),
+    ]);
+    try {
+      const report = await runCleanup(env, NOW);
+      expect(report.inbox + report.device + report.scheduledPush).toBe(0);
+      expect(report.rowsRead).toBeLessThan(200);
+    } finally {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM scheduled_push WHERE id BETWEEN 10001 AND 12000"),
+        env.DB.prepare("DELETE FROM push_stats WHERE id BETWEEN 10001 AND 12000"),
+      ]);
+    }
   });
 
-  it("reports an incomplete run when the time budget runs out", async () => {
+  it("skips remaining tables when a small step finishes past the time budget", async () => {
+    const u = await seedUser();
+    await env.DB.prepare(
+      "INSERT INTO session (id, expiresAt, token, createdAt, updatedAt, userId) VALUES ('s-small-budget', ?, 'tok-small-budget', ?, ?, ?)",
+    )
+      .bind(iso(NOW - 1), iso(NOW - DAY), iso(NOW - DAY), u)
+      .run();
+    const report = await runCleanup(env, NOW, -1);
+    expect(report.complete).toBe(false);
+    expect(report.session).toBe(0);
+    expect(
+      await count(env.DB, "SELECT count(*) AS n FROM session WHERE id = 's-small-budget'"),
+    ).toBe(1);
+    expect((await runCleanup(env, NOW)).session).toBe(1);
+  });
+
+  it("reports an incomplete run when the time budget runs out and skips remaining tables", async () => {
+    const u = await seedUser();
+    await env.DB.prepare(
+      "INSERT INTO session (id, expiresAt, token, createdAt, updatedAt, userId) VALUES ('s-budget', ?, 'tok-budget', ?, ?, ?)",
+    )
+      .bind(iso(NOW - 1), iso(NOW - DAY), iso(NOW - DAY), u)
+      .run();
     await seedInbox("old-2", 5001, NOW - 40 * DAY);
     // Far enough ahead that every inbox row in this file has expired: well over one chunk.
     const later = NOW + 100 * DAY;
     const report = await runCleanup(env, later, 0);
     expect(report.complete).toBe(false);
     expect(report.inbox).toBe(5000);
-    expect((await runCleanup(env, later)).complete).toBe(true);
+    expect(report.session).toBe(0);
+    expect(await count(env.DB, "SELECT count(*) AS n FROM session WHERE id = 's-budget'")).toBe(1);
+    const next = await runCleanup(env, later);
+    expect(next.complete).toBe(true);
+    expect(await count(env.DB, "SELECT count(*) AS n FROM session WHERE id = 's-budget'")).toBe(0);
   });
 
-  it("removes week-old unverified email sign-ups but keeps verified and social users", async () => {
+  it("removes week-old unverified email sign-ups with their inbox/open rows, keeping verified and social users", async () => {
     const user = (id: string, verified: number, createdAt: number) =>
       env.DB.prepare(
         "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
@@ -148,12 +189,19 @@ describe("runCleanup bounds", () => {
     await env.DB.batch([
       user("stale-unverified", 0, NOW - 8 * DAY),
       account("stale-unverified", "credential"),
+      env.DB.prepare("INSERT INTO push_open VALUES (77, 'stale-unverified')"),
       user("recent-unverified", 0, NOW - 6 * DAY),
       account("recent-unverified", "credential"),
       user("old-verified", 1, NOW - 30 * DAY),
       account("old-verified", "credential"),
       user("github-unverified", 0, NOW - 30 * DAY),
       account("github-unverified", "github"),
+    ]);
+    await env.INBOX_DB.batch([
+      env.INBOX_DB.prepare(
+        "INSERT INTO inbox_item (user_id, title, body, category, created_at) VALUES ('stale-unverified', 't', 'b', 'transactional', ?)",
+      ).bind(NOW),
+      env.INBOX_DB.prepare("INSERT INTO inbox_state VALUES ('stale-unverified', ?)").bind(NOW),
     ]);
     const report = await runCleanup(env, NOW);
     expect(report.unverifiedUsers).toBe(1);
@@ -165,6 +213,50 @@ describe("runCleanup bounds", () => {
       "old-verified",
       "recent-unverified",
     ]);
+    expect(
+      await count(
+        env.INBOX_DB,
+        "SELECT count(*) AS n FROM inbox_item WHERE user_id = 'stale-unverified'",
+      ),
+    ).toBe(0);
+    expect(
+      await count(
+        env.INBOX_DB,
+        "SELECT count(*) AS n FROM inbox_state WHERE user_id = 'stale-unverified'",
+      ),
+    ).toBe(0);
+    expect(
+      await count(env.DB, "SELECT count(*) AS n FROM push_open WHERE user_id = 'stale-unverified'"),
+    ).toBe(0);
+  });
+
+  it("prunes scheduled_push rows stuck for more than 24 h past their intended send time", async () => {
+    const valid = JSON.stringify({
+      to: { topic: "t" },
+      title: "t",
+      body: "b",
+      category: "transactional",
+    });
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO push_stats (id, category, send_at) VALUES (9101, 'transactional', ?), (9102, 'transactional', ?)",
+      ).bind(NOW - DAY - 1, NOW - 1000),
+      env.DB.prepare(
+        "INSERT INTO scheduled_push (id, send_at, request, push_id) VALUES (9101, ?, ?, 9101), (9102, ?, ?, 9102)",
+      ).bind(NOW + CLAIM_MS, valid, NOW + CLAIM_MS, valid),
+    ]);
+    try {
+      const report = await runCleanup(env, NOW);
+      expect(report).toMatchObject({ scheduledPush: 1 });
+      expect(await count(env.DB, "SELECT count(*) AS n FROM scheduled_push WHERE id = 9101")).toBe(
+        0,
+      );
+      expect(await count(env.DB, "SELECT count(*) AS n FROM scheduled_push WHERE id = 9102")).toBe(
+        1,
+      );
+    } finally {
+      await env.DB.prepare("DELETE FROM scheduled_push WHERE id IN (9101, 9102)").run();
+    }
   });
 });
 

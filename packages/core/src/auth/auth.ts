@@ -1,12 +1,13 @@
 import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
-import { getSessionFromCtx } from "better-auth/api";
+import { createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { admin, bearer, captcha, oneTimeToken, organization, twoFactor } from "better-auth/plugins";
 import * as v from "valibot";
 import { deleteUserInbox } from "../inbox/queries";
 import { sendMail } from "../mail";
 import { deleteUserOpens } from "../push/stats";
 import { LocaleSchema } from "../push/types";
+import { bindAppCallback } from "./app-callback";
 
 const DAY_SECONDS = 86_400;
 
@@ -97,6 +98,19 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
         locale: { type: "string", required: false, validator: { input: v.nullable(LocaleSchema) } },
       },
       deleteUser: { enabled: true },
+    },
+    hooks: {
+      after: createAuthMiddleware(async (ctx) => {
+        if (!ctx.path.startsWith("/callback/")) return;
+        const sessionId = ctx.context.newSession?.session.id;
+        if (!sessionId) return;
+        await bindAppCallback(
+          env,
+          sessionId,
+          ctx.context.responseHeaders?.get("location"),
+          Date.now(),
+        );
+      }),
     },
     // A database hook, not deleteUser.afterDelete, so admin remove-user cleans up too.
     databaseHooks: {

@@ -200,6 +200,31 @@ describe("Idempotency-Key", () => {
     const { res } = push({ ...base, to: { topic: "a" } }, {}, withKey("k-fix"));
     expect((await res).status).toBe(202);
   });
+
+  it("still answers 202 if saving the idempotent response fails after the push was accepted", async () => {
+    const db = new Proxy(env.DB, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            if (sql.startsWith("UPDATE push_idempotency")) {
+              return {
+                bind: () => ({
+                  run: async () => {
+                    throw new Error("d1 write glitch");
+                  },
+                }),
+              };
+            }
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const { res } = push({ ...base, to: { topic: "a" } }, { DB: db }, withKey("k-post-update"));
+    expect((await res).status).toBe(202);
+  });
 });
 
 describe("templates and translations", () => {
@@ -262,6 +287,10 @@ describe("templates and translations", () => {
   it.each([
     ["an unknown template", { template: "nope" }],
     ["a missing var", { template: "needs-var" }],
+    [
+      "an Object.prototype placeholder without an own var",
+      { ...base, title: "Hi {{toString}}", vars: {} },
+    ],
     ["a rendered title over 120 chars", { template: "needs-var", vars: { v: "x".repeat(130) } }],
   ])("%s → 400", async (_name, patch) => {
     await putTemplate("needs-var", { title: "Hi {{v}}", body: "", category: "transactional" });

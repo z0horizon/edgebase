@@ -27,7 +27,7 @@ class MissingVar extends Error {}
 /** `text` with every `{{name}}` filled from `vars`; a placeholder without a var is an error. */
 export function render(text: string, vars: Record<string, string>): string {
   return text.replace(PLACEHOLDER, (_match, name: string) => {
-    const value = vars[name];
+    const value = Object.hasOwn(vars, name) ? vars[name] : undefined;
     if (value === undefined) throw new MissingVar(name);
     return value;
   });

@@ -123,6 +123,26 @@ describe("handlePushBatch", () => {
     expect(asked).toEqual(["stays"]);
   });
 
+  it("marketing pushes skip users who opted out after enqueue or before retry", async () => {
+    const [optedIn, optedOut] = [await seedUser(), await seedUser()];
+    await env.DB.prepare("UPDATE user SET marketingOptIn = 1 WHERE id = ?").bind(optedIn).run();
+    await addDevice("m-in", optedIn);
+    await addDevice("m-out", optedOut);
+    const marketing = { ...payload, category: "marketing" as const };
+
+    const askedUsers = stubFcm();
+    await run({ kind: "users", userIds: [optedIn, optedOut], payload: marketing, attempt: 0 });
+    expect(askedUsers).toEqual(["m-in"]);
+
+    const askedRetry = stubFcm();
+    const targets = [
+      { token: "m-in", userId: optedIn },
+      { token: "m-out", userId: optedOut },
+    ];
+    await run({ kind: "tokens", targets, payload: marketing, attempt: 1 });
+    expect(askedRetry).toEqual(["m-in"]);
+  });
+
   it("a topic message is sent once to the topic", async () => {
     const asked = stubFcm();
     await run({ kind: "topic", topic: "all", payload, attempt: 0 });

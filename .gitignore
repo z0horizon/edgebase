@@ -6,7 +6,11 @@ docs/superpowers/
 .superpowers/
 .env.production
 .env.local
+*.p8
+*service-account*.json
+*firebase-adminsdk*.json
 wrangler.production.jsonc
 # Built by `pnpm deploy` from apps/admin/.
 apps/server/public/admin/
 .DS_Store
+graphify-out/

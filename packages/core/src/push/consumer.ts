@@ -26,23 +26,24 @@ async function mapLimit<T, R>(
 }
 
 /**
- * The current device rows behind a message. Retries re-check ownership, so a token that was
- * removed or moved to another user while the retry waited never gets the old user's push.
+ * The current device rows behind a message. Delivery and retries re-check ownership and marketing
+ * opt-in, so a removed/reassigned token or an opted-out user never gets the push.
  */
 async function targetsOf(db: D1Database, message: UserTargets): Promise<PushTarget[]> {
-  if (message.kind === "users") {
-    const rows = await db
-      .prepare(
-        `SELECT token, user_id FROM device WHERE user_id IN (SELECT value FROM json_each(?))`,
-      )
-      .bind(JSON.stringify(message.userIds))
-      .all<{ token: string; user_id: string }>();
-    return rows.results.map((r) => ({ token: r.token, userId: r.user_id }));
-  }
+  const marketing = message.payload.category === "marketing";
+  const col = message.kind === "users" ? "d.user_id" : "d.token";
+  const keys = message.kind === "users" ? message.userIds : message.targets.map((t) => t.token);
+  const join = marketing ? "JOIN user u ON u.id = d.user_id" : "";
+  const optIn = marketing ? "AND u.marketingOptIn = 1" : "";
   const rows = await db
-    .prepare(`SELECT token, user_id FROM device WHERE token IN (SELECT value FROM json_each(?))`)
-    .bind(JSON.stringify(message.targets.map((t) => t.token)))
+    .prepare(
+      `SELECT d.token, d.user_id FROM device d ${join}
+       WHERE ${col} IN (SELECT value FROM json_each(?)) ${optIn}`,
+    )
+    .bind(JSON.stringify(keys))
     .all<{ token: string; user_id: string }>();
+  if (message.kind === "users")
+    return rows.results.map((r) => ({ token: r.token, userId: r.user_id }));
   const owner = new Map(rows.results.map((r) => [r.token, r.user_id]));
   return message.targets.filter((t) => owner.get(t.token) === t.userId);
 }
