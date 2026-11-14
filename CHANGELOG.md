@@ -6,6 +6,8 @@ What changed for people building on EdgeBase. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-14
+
 ### Added
 
 - `GET /v1/me` also answers `adminNeedsTwoFactor`, so a client gates admin features on the server's rule; the admin page uses it.
@@ -89,6 +91,7 @@ First version.
   - 10% log sampling;
   - per-IP rate limits on auth and per-user limits on topic changes.
 
-[Unreleased]: https://github.com/z0horizon/edgebase/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/z0horizon/edgebase/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/z0horizon/edgebase/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/z0horizon/edgebase/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/z0horizon/edgebase/releases/tag/v0.1.0
