@@ -1,5 +1,5 @@
 import { BODY_MAX, MAX_RECIPIENTS, TITLE_MAX } from "@edgebase/core/limits";
-import { BellRing, Check, Clock, Inbox, Plus, Radio, Search, Send, Users, X } from "lucide-react";
+import { Check, Plus, Radio, Search, Send, Users, X } from "lucide-react";
 import {
   type ClipboardEvent,
   type FormEvent,
@@ -14,11 +14,9 @@ import { FormError } from "@/components/FormError";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -28,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  ApiError,
   api,
   type Category,
   errorMessage,
@@ -36,6 +35,7 @@ import {
   type Text,
   type User,
 } from "@/lib/api";
+import { formatDate } from "@/lib/format";
 import { fillPreview, SEND_RECIPIENTS_KEY } from "@/lib/state";
 import { cn } from "@/lib/utils";
 
@@ -82,14 +82,24 @@ export function SendPage() {
   const [sendAt, setSendAt] = useState("");
   const [locale, setLocale] = useState("");
   const [error, setError] = useState("");
+  const [pushUnconfigured, setPushUnconfigured] = useState(false);
   const [busy, setBusy] = useState(false);
   // One key per message, so a retry after a timeout is not sent twice; a new message gets a new key.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     api<{ templates: Template[] }>("/v1/templates")
-      .then((r) => setTemplates(r.templates))
-      .catch((e) => toast.error(errorMessage(e)));
+      .then((r) => {
+        setTemplates(r.templates);
+        setPushUnconfigured(false);
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 503) {
+          setPushUnconfigured(true);
+          return;
+        }
+        toast.error(errorMessage(e));
+      });
   }, []);
 
   useEffect(() => {
@@ -146,7 +156,7 @@ export function SendPage() {
     }
     if (unresolvedEmail) {
       setError(
-        `Click a matching user in the search dropdown for "${unresolvedEmail}", or paste user IDs.`,
+        `Select a matching user from the dropdown for "${unresolvedEmail}", or paste user IDs.`,
       );
       return;
     }
@@ -227,7 +237,7 @@ export function SendPage() {
     setError("");
     if (target === "users") {
       if (userQuery.trim()) {
-        setError("Select a matching user from the search list or click 'Add ID' before sending.");
+        setError("Select a matching user from the dropdown or click 'Add ID' before sending.");
         return;
       }
       if (recipientIds.length === 0) {
@@ -271,508 +281,523 @@ export function SendPage() {
   return (
     <>
       <PageHeader
-        title="Send a push"
-        description="Notify chosen users or everyone subscribed to a topic."
+        title="Send push"
+        description="Dispatch an immediate or scheduled FCM notification to selected accounts or a broadcast topic."
       />
-      <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <Card className="shadow-xs">
-          <CardContent>
-            <form className="grid gap-6" onSubmit={submit}>
-              <fieldset className="grid gap-3">
-                <legend className="mb-2 text-sm font-medium">Send to</legend>
-                <RadioGroup
-                  value={target}
-                  onValueChange={(v) => setTarget(v as "users" | "topic")}
-                  className="grid gap-3 sm:grid-cols-2"
+
+      {pushUnconfigured && (
+        <div
+          role="status"
+          className="mb-4 rounded-md border border-amber-600/30 bg-amber-500/10 px-3.5 py-2.5 text-xs leading-relaxed text-amber-900 dark:border-amber-400/25 dark:text-amber-200"
+        >
+          FCM push delivery is not configured on this environment. Set{" "}
+          <code className="font-mono font-medium">FCM_SERVICE_ACCOUNT</code> in Worker secrets to
+          dispatch live notifications.
+        </div>
+      )}
+
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_348px]">
+        <form className="divide-y overflow-hidden rounded-md border bg-card" onSubmit={submit}>
+          <section className="grid gap-3 px-4 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="grid gap-0.5">
+                <h2 className="text-[13px] font-semibold text-foreground">Audience</h2>
+                <p className="text-xs text-muted-foreground">
+                  {target === "users"
+                    ? `Target up to ${MAX_RECIPIENTS} specific accounts.`
+                    : "Broadcast to every device subscribed to a topic."}
+                </p>
+              </div>
+              <fieldset
+                aria-label="Send target"
+                className="inline-flex gap-0.5 rounded-md border bg-background p-0.5 dark:bg-background/80"
+              >
+                <label
+                  className={cn(
+                    "inline-flex cursor-pointer items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring",
+                    target === "users"
+                      ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary dark:ring-input"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
                 >
-                  <Label
-                    htmlFor="target-users"
-                    className={cn(
-                      "cursor-pointer items-start gap-3 rounded-xl border p-3.5 font-normal transition-colors",
-                      target === "users"
-                        ? "border-primary/40 bg-accent/60 shadow-2xs"
-                        : "hover:bg-secondary/50",
-                    )}
-                  >
-                    <RadioGroupItem id="target-users" value="users" className="mt-0.5" />
-                    <div className="grid gap-1 leading-snug">
-                      <span className="flex items-center gap-1.5 font-medium text-foreground">
-                        <Users className="size-3.5 text-primary" /> Chosen users
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        Pick accounts by email or paste user IDs
-                      </span>
-                    </div>
-                  </Label>
-                  <Label
-                    htmlFor="target-topic"
-                    className={cn(
-                      "cursor-pointer items-start gap-3 rounded-xl border p-3.5 font-normal transition-colors",
-                      target === "topic"
-                        ? "border-primary/40 bg-accent/60 shadow-2xs"
-                        : "hover:bg-secondary/50",
-                    )}
-                  >
-                    <RadioGroupItem id="target-topic" value="topic" className="mt-0.5" />
-                    <div className="grid gap-1 leading-snug">
-                      <span className="flex items-center gap-1.5 font-medium text-foreground">
-                        <Radio className="size-3.5 text-primary" /> A topic
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        Broadcast to topic subscribers
-                      </span>
-                    </div>
-                  </Label>
-                </RadioGroup>
+                  <input
+                    type="radio"
+                    name="send-target"
+                    value="users"
+                    checked={target === "users"}
+                    onChange={() => setTarget("users")}
+                    className="sr-only"
+                  />
+                  <Users className="size-3.5" /> Selected users
+                </label>
+                <label
+                  className={cn(
+                    "inline-flex cursor-pointer items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring",
+                    target === "topic"
+                      ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary dark:ring-input"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="send-target"
+                    value="topic"
+                    checked={target === "topic"}
+                    onChange={() => setTarget("topic")}
+                    className="sr-only"
+                  />
+                  <Radio className="size-3.5" /> Broadcast topic
+                </label>
+              </fieldset>
+            </div>
 
-                {target === "users" ? (
-                  <div className="overflow-hidden rounded-xl border bg-card">
-                    <div className="relative flex items-center px-3">
-                      <Search className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
-                      <input
-                        type="text"
-                        aria-label="User IDs"
-                        placeholder={`Type email to search (2+ chars), or paste up to ${MAX_RECIPIENTS} user IDs…`}
-                        value={userQuery}
-                        onChange={(e) => setUserQuery(e.target.value)}
-                        onKeyDown={onRecipientKeyDown}
-                        onPaste={onRecipientPaste}
-                        spellCheck={false}
-                        className="h-10 w-full bg-transparent px-2.5 text-sm outline-none placeholder:text-muted-foreground"
-                      />
-                      {userQuery.trim() && (
-                        <Button
+            {target === "users" ? (
+              <div className="overflow-hidden rounded-md border border-input bg-background/40">
+                <div className="relative flex items-center px-2.5">
+                  <Search className="pointer-events-none size-3.5 shrink-0 text-muted-foreground" />
+                  <input
+                    type="text"
+                    aria-label="User IDs"
+                    placeholder={`Search by email (2+ chars), or paste up to ${MAX_RECIPIENTS} user IDs…`}
+                    value={userQuery}
+                    onChange={(e) => setUserQuery(e.target.value)}
+                    onKeyDown={onRecipientKeyDown}
+                    onPaste={onRecipientPaste}
+                    spellCheck={false}
+                    className="h-8 w-full bg-transparent px-2 text-[13px] outline-none placeholder:text-muted-foreground"
+                  />
+                  {userQuery.trim() && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="xs"
+                      onClick={() => addRawIds(userQuery)}
+                    >
+                      <Plus /> Add ID
+                    </Button>
+                  )}
+                </div>
+
+                {userQuery.trim().length >= 2 && (
+                  <div
+                    className="max-h-48 divide-y overflow-y-auto border-t bg-card"
+                    role="listbox"
+                    aria-label="Matching users"
+                    aria-multiselectable="true"
+                  >
+                    {directory === null && (
+                      <p className="px-3 py-2 text-xs text-muted-foreground">Searching users…</p>
+                    )}
+                    {directory && directory.users.length === 0 && (
+                      <p className="px-3 py-2 text-xs text-muted-foreground">
+                        No email matches &ldquo;{userQuery.trim()}&rdquo;. Press Enter to add as a
+                        raw user ID.
+                      </p>
+                    )}
+                    {directory?.users.map((u) => {
+                      const selected = u.id in recipients;
+                      return (
+                        <button
+                          key={u.id}
                           type="button"
-                          variant="secondary"
-                          size="xs"
-                          onClick={() => addRawIds(userQuery)}
+                          role="option"
+                          aria-selected={selected}
+                          onClick={() => toggleUser(u)}
+                          className={cn(
+                            "flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/60",
+                            selected && "bg-accent/50",
+                          )}
                         >
-                          <Plus /> Add ID
-                        </Button>
-                      )}
-                    </div>
-
-                    {userQuery.trim().length >= 2 && (
-                      <div
-                        className="max-h-52 divide-y overflow-y-auto border-t bg-muted/20"
-                        role="listbox"
-                        aria-label="Matching users"
-                        aria-multiselectable="true"
-                      >
-                        {directory === null && (
-                          <p className="px-3.5 py-2.5 text-xs text-muted-foreground">
-                            Searching users…
-                          </p>
-                        )}
-                        {directory && directory.users.length === 0 && (
-                          <p className="px-3.5 py-2.5 text-xs text-muted-foreground">
-                            No email matches &ldquo;{userQuery.trim()}&rdquo;. Press Enter to add it
-                            as a user ID.
-                          </p>
-                        )}
-                        {directory?.users.map((u) => {
-                          const selected = u.id in recipients;
-                          const initial = (u.name || u.email).trim().charAt(0).toUpperCase() || "U";
-                          return (
-                            <button
-                              key={u.id}
-                              type="button"
-                              role="option"
-                              aria-selected={selected}
-                              onClick={() => toggleUser(u)}
-                              className={cn(
-                                "flex w-full items-center gap-3 px-3.5 py-2 text-left text-sm transition-colors hover:bg-secondary/70",
-                                selected && "bg-accent/50",
-                              )}
-                            >
-                              <span
-                                aria-hidden="true"
-                                className={cn(
-                                  "grid size-4 shrink-0 place-items-center rounded border transition-colors",
-                                  selected
-                                    ? "border-primary bg-primary text-primary-foreground"
-                                    : "border-input bg-card",
-                                )}
-                              >
-                                {selected && <Check className="size-3" />}
-                              </span>
-                              <span
-                                aria-hidden="true"
-                                className="grid size-6 shrink-0 place-items-center rounded-full border bg-secondary text-[11px] font-semibold text-secondary-foreground"
-                              >
-                                {initial}
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <span className="truncate text-xs font-medium text-foreground">
-                                  {u.email}
-                                </span>
-                                {u.name && (
-                                  <span className="ml-2 truncate text-xs text-muted-foreground">
-                                    {u.name}
-                                  </span>
-                                )}
-                              </div>
-                              <code className="shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                                {u.id.slice(0, 8)}…
-                              </code>
-                            </button>
-                          );
-                        })}
-                        {directory && directory.total > directory.users.length && (
-                          <p className="bg-muted/40 px-3.5 py-1.5 text-[11px] tabular-nums text-muted-foreground">
-                            Showing top {directory.users.length} of {directory.total} matches — keep
-                            typing to narrow down.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="flex flex-col gap-2 border-t bg-muted/25 px-3 py-2.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="tabular-nums text-muted-foreground">
-                          <strong className="font-medium text-foreground">
-                            {recipientIds.length}
-                          </strong>{" "}
-                          / {MAX_RECIPIENTS} recipients
-                        </span>
-                        {recipientIds.length > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => setRecipients({})}
-                            className="font-medium text-muted-foreground transition-colors hover:text-destructive"
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "grid size-3.5 shrink-0 place-items-center rounded-[3px] border transition-colors",
+                              selected
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-input bg-card",
+                            )}
                           >
-                            Clear all
-                          </button>
-                        ) : (
-                          <span className="text-muted-foreground">
-                            Over {MAX_RECIPIENTS} users? Switch to a topic.
+                            {selected && <Check className="size-2.5" />}
                           </span>
-                        )}
-                      </div>
+                          <div className="min-w-0 flex-1">
+                            <span className="truncate font-medium text-foreground">{u.email}</span>
+                            {u.name && (
+                              <span className="ml-2 truncate text-muted-foreground">{u.name}</span>
+                            )}
+                          </div>
+                          <code className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                            {u.id.slice(0, 8)}…
+                          </code>
+                        </button>
+                      );
+                    })}
+                    {directory && directory.total > directory.users.length && (
+                      <p className="bg-muted/40 px-3 py-1.5 text-[11px] tabular-nums text-muted-foreground">
+                        Showing top {directory.users.length} of {directory.total} matches.
+                      </p>
+                    )}
+                  </div>
+                )}
 
-                      {recipientIds.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {visibleChipIds.map((id) => {
-                            const label = recipients[id] ?? id;
-                            const isEmail = label.includes("@");
-                            return (
-                              <span
-                                key={id}
-                                className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/20 bg-accent py-0.5 pr-1.5 pl-2.5 text-xs font-medium text-accent-foreground"
-                              >
-                                <span
-                                  className={cn("truncate", !isEmail && "font-mono text-[11px]")}
-                                  title={id}
-                                >
-                                  {label}
-                                </span>
-                                <button
-                                  type="button"
-                                  aria-label={`Remove ${label}`}
-                                  onClick={() => removeRecipient(id)}
-                                  className="grid size-4 shrink-0 place-items-center rounded-full text-accent-foreground/70 transition-colors hover:bg-primary/15 hover:text-accent-foreground"
-                                >
-                                  <X className="size-3" />
-                                </button>
-                              </span>
-                            );
-                          })}
-                          {hiddenChipCount > 0 && (
+                <div className="flex flex-col gap-2 border-t bg-muted/30 px-2.5 py-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="tabular-nums text-muted-foreground">
+                      <strong className="font-medium text-foreground">{recipientIds.length}</strong>{" "}
+                      / {MAX_RECIPIENTS} recipients
+                    </span>
+                    {recipientIds.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setRecipients({})}
+                        className="font-medium text-muted-foreground hover:text-destructive"
+                      >
+                        Clear all
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        Exceeds {MAX_RECIPIENTS}? Switch to Broadcast topic.
+                      </span>
+                    )}
+                  </div>
+
+                  {recipientIds.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1">
+                      {visibleChipIds.map((id) => {
+                        const label = recipients[id] ?? id;
+                        const isEmail = label.includes("@");
+                        return (
+                          <span
+                            key={id}
+                            className="inline-flex max-w-full items-center gap-1 rounded-sm border bg-card py-0.5 pr-1 pl-2 text-xs text-foreground"
+                          >
+                            <span
+                              className={cn("truncate", !isEmail && "font-mono text-[11px]")}
+                              title={id}
+                            >
+                              {label}
+                            </span>
                             <button
                               type="button"
-                              onClick={() => setShowAllChips(true)}
-                              className="rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium tabular-nums text-muted-foreground transition-colors hover:text-foreground"
+                              aria-label={`Remove ${label}`}
+                              onClick={() => removeRecipient(id)}
+                              className="grid size-4 shrink-0 place-items-center rounded-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
                             >
-                              +{hiddenChipCount} more
+                              <X className="size-3" />
                             </button>
-                          )}
-                          {showAllChips && recipientIds.length > COLLAPSED_CHIP_LIMIT && (
-                            <button
-                              type="button"
-                              onClick={() => setShowAllChips(false)}
-                              className="rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                            >
-                              Collapse
-                            </button>
-                          )}
-                        </div>
+                          </span>
+                        );
+                      })}
+                      {hiddenChipCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllChips(true)}
+                          className="rounded-sm border bg-card px-2 py-0.5 text-xs font-medium tabular-nums text-muted-foreground hover:text-foreground"
+                        >
+                          +{hiddenChipCount} more
+                        </button>
+                      )}
+                      {showAllChips && recipientIds.length > COLLAPSED_CHIP_LIMIT && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllChips(false)}
+                          className="rounded-sm border bg-card px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+                        >
+                          Collapse
+                        </button>
                       )}
                     </div>
-                  </div>
-                ) : (
-                  <div className="grid gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Input
-                        aria-label="Topic"
-                        value={topic}
-                        onChange={(e) => setTopic(e.target.value)}
-                        spellCheck={false}
-                        placeholder="all"
-                        className="flex-1 font-mono text-sm"
-                        required
-                      />
-                      {(["all", "promotions"] as const).map((preset) => (
-                        <Button
-                          key={preset}
-                          type="button"
-                          size="xs"
-                          variant={topic.trim() === preset ? "default" : "outline"}
-                          className="font-mono"
-                          onClick={() => setTopic(preset)}
-                        >
-                          #{preset}
-                        </Button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Subscribers to{" "}
-                      <code className="rounded bg-secondary px-1 py-0.5 font-mono">
-                        {topic.trim() || "all"}
-                      </code>{" "}
-                      will receive this push (unlimited audience).
-                    </p>
-                  </div>
-                )}
-              </fieldset>
-
-              <div className="grid gap-4 border-t pt-6">
-                <div className="grid gap-2">
-                  <Label htmlFor="template">Template</Label>
-                  <Select value={templateName} onValueChange={chooseTemplate}>
-                    <SelectTrigger id="template" className="w-full bg-card">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={NONE}>None, write the message here</SelectItem>
-                      {templates.map((t) => (
-                        <SelectItem key={t.name} value={t.name}>
-                          {t.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  )}
                 </div>
-
-                {template ? (
-                  <div className="grid gap-2">
-                    <Label htmlFor="vars">Values</Label>
-                    <Textarea
-                      id="vars"
-                      placeholder={"order=1042\neta=tomorrow"}
-                      value={vars}
-                      onChange={(e) => setVars(e.target.value)}
-                      spellCheck={false}
-                      className="font-mono text-sm"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      One{" "}
-                      <code className="rounded bg-secondary px-1 py-0.5 font-mono">name=value</code>{" "}
-                      per line, for each{" "}
-                      <code className="rounded bg-secondary px-1 py-0.5 font-mono">
-                        {"{{name}}"}
-                      </code>{" "}
-                      in the template.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid gap-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="title">Title</Label>
-                        <span className="text-xs tabular-nums text-muted-foreground">
-                          {text.title.length}/{TITLE_MAX}
-                        </span>
-                      </div>
-                      <Input
-                        id="title"
-                        maxLength={TITLE_MAX}
-                        placeholder="Order shipped"
-                        value={text.title}
-                        onChange={(e) => setText({ ...text, title: e.target.value })}
-                        required
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="body">Message</Label>
-                        <span className="text-xs tabular-nums text-muted-foreground">
-                          {text.body.length}/{BODY_MAX}
-                        </span>
-                      </div>
-                      <Textarea
-                        id="body"
-                        maxLength={BODY_MAX}
-                        placeholder="Your package is on its way."
-                        value={text.body}
-                        onChange={(e) => setText({ ...text, body: e.target.value })}
-                      />
-                    </div>
-                  </>
-                )}
               </div>
-
-              <fieldset className="grid gap-3 border-t pt-6">
-                <legend className="mb-2 text-sm font-medium">Kind</legend>
-                <RadioGroup
-                  value={category}
-                  onValueChange={(v) => setCategory(v as Category)}
-                  className="grid gap-3 sm:grid-cols-2"
-                >
-                  <Label
-                    htmlFor="kind-transactional"
-                    className={cn(
-                      "cursor-pointer items-start gap-3 rounded-xl border p-3.5 font-normal transition-colors",
-                      category === "transactional"
-                        ? "border-primary/40 bg-accent/60 shadow-2xs"
-                        : "hover:bg-secondary/50",
-                    )}
-                  >
-                    <RadioGroupItem
-                      id="kind-transactional"
-                      value="transactional"
-                      className="mt-0.5"
-                    />
-                    <div className="grid gap-1 leading-snug">
-                      <span className="font-medium text-foreground">Transactional</span>
-                      <span className="text-xs text-muted-foreground">
-                        Account, order, or security updates
-                      </span>
-                    </div>
-                  </Label>
-                  <Label
-                    htmlFor="kind-marketing"
-                    className={cn(
-                      "cursor-pointer items-start gap-3 rounded-xl border p-3.5 font-normal transition-colors",
-                      category === "marketing"
-                        ? "border-primary/40 bg-accent/60 shadow-2xs"
-                        : "hover:bg-secondary/50",
-                    )}
-                  >
-                    <RadioGroupItem id="kind-marketing" value="marketing" className="mt-0.5" />
-                    <div className="grid gap-1 leading-snug">
-                      <span className="font-medium text-foreground">Marketing</span>
-                      <span className="text-xs text-muted-foreground">
-                        Only sent to users who opted in
-                      </span>
-                    </div>
-                  </Label>
-                </RadioGroup>
-              </fieldset>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Label
-                  htmlFor="inbox-toggle"
-                  className="cursor-pointer items-start gap-3 rounded-xl border bg-muted/30 p-3.5 font-normal"
-                >
-                  <Checkbox
-                    id="inbox-toggle"
-                    checked={inbox}
-                    onCheckedChange={(v) => setInbox(v === true)}
-                    className="mt-0.5"
-                  />
-                  <div className="grid gap-1 leading-snug">
-                    <span className="flex items-center gap-1.5 font-medium text-foreground">
-                      <Inbox className="size-3.5 text-muted-foreground" /> Also add it to the inbox
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      Persists in the user&apos;s in-app inbox
-                    </span>
-                  </div>
-                </Label>
-                <div className="grid gap-2">
-                  <Label htmlFor="sendAt" className="flex items-center gap-1.5">
-                    <Clock className="size-3.5 text-muted-foreground" /> Send later (optional)
-                  </Label>
+            ) : (
+              <div className="grid gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <Input
-                    id="sendAt"
-                    type="datetime-local"
-                    value={sendAt}
-                    onChange={(e) => setSendAt(e.target.value)}
+                    aria-label="Topic"
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    spellCheck={false}
+                    placeholder="all"
+                    className="flex-1 font-mono"
+                    required
+                  />
+                  {(["all", "promotions"] as const).map((preset) => (
+                    <Button
+                      key={preset}
+                      type="button"
+                      size="sm"
+                      variant={topic.trim() === preset ? "default" : "outline"}
+                      className="font-mono"
+                      onClick={() => setTopic(preset)}
+                    >
+                      #{preset}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Dispatches to all FCM tokens subscribed to{" "}
+                  <code className="rounded-xs border bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">
+                    {topic.trim() || "all"}
+                  </code>
+                  .
+                </p>
+              </div>
+            )}
+          </section>
+
+          <section className="grid gap-3.5 px-4 py-4">
+            <div className="grid gap-1.5">
+              <Label htmlFor="template">Payload source</Label>
+              <Select value={templateName} onValueChange={chooseTemplate}>
+                <SelectTrigger id="template" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>Inline copy (write message below)</SelectItem>
+                  {templates.map((t) => (
+                    <SelectItem key={t.name} value={t.name}>
+                      {t.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {template ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="vars">Template variables</Label>
+                <Textarea
+                  id="vars"
+                  placeholder={"order=1042\neta=tomorrow"}
+                  value={vars}
+                  onChange={(e) => setVars(e.target.value)}
+                  spellCheck={false}
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs text-muted-foreground">
+                  One <code className="font-mono text-foreground">name=value</code> pair per line
+                  for each <code className="font-mono text-foreground">{"{{name}}"}</code> token.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="title">Title</Label>
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {text.title.length}/{TITLE_MAX}
+                    </span>
+                  </div>
+                  <Input
+                    id="title"
+                    maxLength={TITLE_MAX}
+                    placeholder="Order #1042 shipped"
+                    value={text.title}
+                    onChange={(e) => setText({ ...text, title: e.target.value })}
+                    required
                   />
                 </div>
+                <div className="grid gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="body">Body</Label>
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {text.body.length}/{BODY_MAX}
+                    </span>
+                  </div>
+                  <Textarea
+                    id="body"
+                    maxLength={BODY_MAX}
+                    placeholder="Your package has been handed to the carrier."
+                    value={text.body}
+                    onChange={(e) => setText({ ...text, body: e.target.value })}
+                  />
+                </div>
+              </>
+            )}
+          </section>
+
+          <section className="grid gap-4 px-4 py-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <span className="text-xs leading-none font-medium text-foreground">Category</span>
+                <fieldset
+                  aria-label="Notification category"
+                  className="grid grid-cols-2 gap-0.5 rounded-md border bg-background p-0.5 dark:bg-background/80"
+                >
+                  <label
+                    className={cn(
+                      "cursor-pointer rounded-sm px-2.5 py-1 text-center text-xs font-medium transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring",
+                      category === "transactional"
+                        ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary dark:ring-input"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="push-category"
+                      value="transactional"
+                      checked={category === "transactional"}
+                      onChange={() => setCategory("transactional")}
+                      className="sr-only"
+                    />
+                    Transactional
+                  </label>
+                  <label
+                    className={cn(
+                      "cursor-pointer rounded-sm px-2.5 py-1 text-center text-xs font-medium transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring",
+                      category === "marketing"
+                        ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary dark:ring-input"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="push-category"
+                      value="marketing"
+                      checked={category === "marketing"}
+                      onChange={() => setCategory("marketing")}
+                      className="sr-only"
+                    />
+                    Marketing
+                  </label>
+                </fieldset>
+                <p className="text-[11px] text-muted-foreground">
+                  {category === "marketing"
+                    ? "Delivered only to users who opted in to marketing."
+                    : "Account, order, or security updates."}
+                </p>
               </div>
 
-              <FormError message={error} />
-              <Button type="submit" disabled={busy} className="justify-self-start">
+              <div className="grid gap-1.5">
+                <Label htmlFor="sendAt">Schedule (optional)</Label>
+                <Input
+                  id="sendAt"
+                  type="datetime-local"
+                  value={sendAt}
+                  onChange={(e) => setSendAt(e.target.value)}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Leave empty to enqueue immediately.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2.5 border-t pt-3.5">
+              <Checkbox
+                id="inbox-toggle"
+                checked={inbox}
+                onCheckedChange={(v) => setInbox(v === true)}
+                className="mt-0.5"
+              />
+              <div className="grid gap-0.5 leading-snug">
+                <Label htmlFor="inbox-toggle" className="cursor-pointer">
+                  Persist copy to in-app D1 inbox
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Writes a durable inbox entry alongside the FCM push notification.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <div className="grid gap-3 bg-muted/35 px-4 py-3">
+            <FormError message={error} />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-mono text-[11px] text-muted-foreground">
+                Idempotency-Key: {idempotencyKey.slice(0, 8)}…
+              </span>
+              <Button type="submit" disabled={busy}>
                 <Send /> {sendAt ? "Schedule push" : "Send push"}
               </Button>
-            </form>
-          </CardContent>
-        </Card>
+            </div>
+          </div>
+        </form>
 
-        <aside className="grid gap-3 lg:sticky lg:top-8" aria-label="Preview">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Lock screen preview</span>
+        <aside
+          className="divide-y overflow-hidden rounded-md border bg-card lg:sticky lg:top-6"
+          aria-label="Preview"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/35 px-3.5 py-2.5">
+            <span className="text-xs font-semibold text-foreground">Payload inspector</span>
             <div className="flex flex-wrap gap-1" role="tablist" aria-label="Language">
               {Object.keys(preview).map((key) => (
-                <Button
+                <button
                   key={key || "default"}
                   type="button"
                   role="tab"
                   aria-selected={key === locale}
-                  size="xs"
-                  variant={key === locale ? "default" : "outline"}
-                  className="rounded-full px-2.5"
                   onClick={() => setLocale(key)}
+                  className={cn(
+                    "rounded-sm border px-2 py-0.5 font-mono text-[11px] transition-colors",
+                    key === locale
+                      ? "border-primary/30 bg-accent font-medium text-accent-foreground"
+                      : "border-border bg-card text-muted-foreground hover:text-foreground",
+                  )}
                 >
-                  {key || "Default"}
-                </Button>
+                  {key || "default"}
+                </button>
               ))}
             </div>
           </div>
 
-          <div
-            className="relative overflow-hidden rounded-[2.25rem] border-[7px] border-slate-900 px-3.5 pt-4 pb-20 shadow-xl ring-1 ring-black/10 dark:border-slate-700"
-            style={{
-              background:
-                "radial-gradient(125% 80% at 20% 0%, #2563eb 0%, #1e3a8a 45%, #0f172a 100%)",
-            }}
-          >
-            <div className="mx-auto mb-5 h-5 w-24 rounded-full bg-black/80" aria-hidden="true" />
-            <p className="text-center text-xs font-medium text-white/75">Monday, November 9</p>
-            <p className="mb-7 text-center text-5xl font-light tracking-tight tabular-nums text-white">
-              9:41
-            </p>
-            <div className="grid grid-cols-[38px_1fr] gap-3 rounded-2xl border border-white/30 bg-white/90 p-3.5 text-slate-900 shadow-lg backdrop-blur-md">
-              <span className="grid size-9.5 place-items-center rounded-xl bg-primary text-white shadow-xs">
-                <BellRing className="size-4" />
-              </span>
-              <div className="min-w-0">
-                <p className="flex items-center justify-between text-[11px] font-medium text-slate-500">
-                  <span>EdgeBase</span>
-                  <span>now</span>
-                </p>
-                <p
-                  className={cn(
-                    "mt-0.5 text-sm font-semibold leading-snug break-words",
-                    !shown.title && "font-normal text-slate-400",
-                  )}
-                >
-                  {shown.title || "Title"}
-                </p>
-                <p
-                  className={cn(
-                    "mt-0.5 text-xs leading-relaxed break-words text-slate-700",
-                    !shown.body && "text-slate-400",
-                  )}
-                >
-                  {shown.body || "Your notification message will appear here."}
-                </p>
+          <div className="bg-muted/25 p-3.5">
+            <div className="rounded-md border bg-card p-3 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)]">
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="font-medium text-foreground">EdgeBase</span>
+                <span className="ml-auto font-mono text-[10px]">now</span>
               </div>
+              <p
+                className={cn(
+                  "mt-1.5 text-[13px] leading-snug font-semibold break-words text-foreground",
+                  !shown.title && "font-normal text-muted-foreground",
+                )}
+              >
+                {shown.title || "Notification title"}
+              </p>
+              <p className="mt-0.5 text-xs leading-relaxed break-words text-muted-foreground">
+                {shown.body || "Notification body preview renders here as you type."}
+              </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
-            <Badge variant={category === "marketing" ? "warning" : "secondary"}>
-              {category === "marketing" ? "Marketing" : "Transactional"}
-            </Badge>
-            <Badge variant="outline">{inbox ? "Push + Inbox" : "Push only"}</Badge>
-            {sendAt && <Badge variant="default">Scheduled</Badge>}
-          </div>
+          <dl className="divide-y text-xs">
+            <div className="flex items-center justify-between gap-2 px-3.5 py-2">
+              <dt className="text-muted-foreground">Target</dt>
+              <dd className="font-mono tabular-nums text-foreground">
+                {target === "users"
+                  ? `${recipientIds.length} ${recipientIds.length === 1 ? "user" : "users"}`
+                  : `topic:${topic.trim() || "all"}`}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-2 px-3.5 py-2">
+              <dt className="text-muted-foreground">Source</dt>
+              <dd className="font-mono text-foreground">
+                {template ? `template:${template.name}` : "inline"}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-2 px-3.5 py-2">
+              <dt className="text-muted-foreground">Category</dt>
+              <dd>
+                <Badge variant={category === "marketing" ? "warning" : "secondary"}>
+                  {category === "marketing" ? "Marketing" : "Transactional"}
+                </Badge>
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-2 px-3.5 py-2">
+              <dt className="text-muted-foreground">Persistence</dt>
+              <dd className="text-foreground">{inbox ? "FCM + D1 Inbox" : "FCM only"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-2 px-3.5 py-2">
+              <dt className="text-muted-foreground">Dispatch</dt>
+              <dd className="tabular-nums text-foreground">
+                {sendAt ? formatDate(sendAt) : "Immediate"}
+              </dd>
+            </div>
+          </dl>
 
-          <p className="text-xs text-pretty text-muted-foreground">
-            Each user sees the language in their profile, or the default text. Topic pushes always
-            use the default text.
+          <p className="bg-muted/20 px-3.5 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+            Per-user pushes resolve each recipient&apos;s profile locale before falling back to
+            default copy. Topic broadcasts always use default copy.
           </p>
         </aside>
       </div>

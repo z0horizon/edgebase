@@ -1,12 +1,33 @@
-import { BellRing, FileText, KeyRound, Layers, LogOut, Send, Users } from "lucide-react";
+import {
+  BellRing,
+  ChevronsUpDown,
+  FileText,
+  KeyRound,
+  LogOut,
+  Monitor,
+  Moon,
+  Send,
+  Sun,
+  Users,
+} from "lucide-react";
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { api, type Me, type User } from "@/lib/api";
 import { takeOAuthError } from "@/lib/oauth";
 import { clearSessionDrafts, viewKeyFromHash } from "@/lib/state";
+import { type ThemePreference, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { SignIn } from "./pages/SignIn";
 
@@ -22,24 +43,130 @@ const TwoFactorSetup = lazy(() =>
 const UsersPage = lazy(() => import("./pages/Users").then((m) => ({ default: m.UsersPage })));
 
 const VIEWS = {
-  users: { label: "Users", icon: Users, page: UsersPage },
-  send: { label: "Send a push", icon: Send, page: SendPage },
-  pushes: { label: "Sent pushes", icon: BellRing, page: PushesPage },
-  templates: { label: "Templates", icon: FileText, page: TemplatesPage },
-  account: { label: "Account", icon: KeyRound, page: AccountPage },
+  users: { label: "Users", shortLabel: "Users", icon: Users, group: "ops", page: UsersPage },
+  send: { label: "Send push", shortLabel: "Send", icon: Send, group: "ops", page: SendPage },
+  pushes: {
+    label: "Sent pushes",
+    shortLabel: "Pushes",
+    icon: BellRing,
+    group: "ops",
+    page: PushesPage,
+  },
+  templates: {
+    label: "Templates",
+    shortLabel: "Templates",
+    icon: FileText,
+    group: "ops",
+    page: TemplatesPage,
+  },
+  account: {
+    label: "Account & Security",
+    shortLabel: "Security",
+    icon: KeyRound,
+    group: "security",
+    page: AccountPage,
+  },
 } satisfies Record<
   string,
-  { label: string; icon: typeof Users; page: (p: { me: User }) => ReactNode }
+  {
+    label: string;
+    shortLabel: string;
+    icon: typeof Users;
+    group: "ops" | "security";
+    page: (p: { me: User }) => ReactNode;
+  }
 >;
 type View = keyof typeof VIEWS;
 
+const OPS_KEYS: View[] = ["users", "send", "pushes", "templates"];
+const SECURITY_KEYS: View[] = ["account"];
+
 const viewFromHash = (): View => viewKeyFromHash(location.hash, VIEWS, "users");
+
+function AccountMenu({
+  me,
+  side,
+  align,
+  onSignOut,
+  className,
+}: {
+  me: User;
+  side: "top" | "bottom";
+  align: "start" | "end";
+  onSignOut: () => void;
+  className?: string;
+}) {
+  const { preference, setPreference } = useTheme();
+  const hasDistinctName = Boolean(
+    me.name &&
+      me.name !== me.email &&
+      me.name.toLowerCase() !== me.email.split("@")[0]?.toLowerCase(),
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Account menu"
+          className={cn(
+            "flex items-center justify-between gap-2 rounded-md text-left transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none data-[state=open]:bg-sidebar-accent",
+            className,
+          )}
+        >
+          <span className="truncate font-medium text-sidebar-foreground">{me.email}</span>
+          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side={side} align={align} className="w-56">
+        <div className="px-2 py-1.5">
+          {hasDistinctName && (
+            <p className="truncate text-xs font-medium text-foreground">{me.name}</p>
+          )}
+          <p className="truncate text-xs text-muted-foreground" title={me.email}>
+            {me.email}
+          </p>
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={() => {
+            location.hash = "#account";
+          }}
+        >
+          <KeyRound /> Account & Security
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+          Appearance
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={preference}
+          onValueChange={(v) => setPreference(v as ThemePreference)}
+        >
+          <DropdownMenuRadioItem value="system">
+            <Monitor /> System
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="light">
+            <Sun /> Light
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="dark">
+            <Moon /> Dark
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onSelect={onSignOut}>
+          <LogOut /> Log out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 export function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>(viewFromHash);
 
-  // The server decides who must set up TOTP; the page only follows its answer.
+  // The server decides who must set up a second factor; the page only follows its answer.
   const loadSession = useCallback(async () => {
     setMe(await api<Me>("/v1/me").catch(() => null));
   }, []);
@@ -61,21 +188,20 @@ export function App() {
   if (me === undefined) {
     return (
       <div className="grid min-h-screen place-items-center bg-background p-4">
-        <div className="flex items-center gap-3 rounded-xl border bg-card px-5 py-4 shadow-xs">
-          <Skeleton className="size-8 rounded-lg" />
-          <div className="grid gap-1.5">
-            <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-3 w-40" />
-          </div>
+        <div className="flex w-56 flex-col gap-2 rounded-md border bg-card px-4 py-3.5">
+          <Skeleton className="h-3.5 w-24" />
+          <Skeleton className="h-2.5 w-36" />
         </div>
       </div>
     );
   }
+
   const signOut = async () => {
     clearSessionDrafts(sessionStorage);
     await api("/api/auth/sign-out", { method: "POST", body: {} }).catch(() => {});
     setMe(null);
   };
+
   if (me?.role !== "admin") {
     return (
       <>
@@ -84,6 +210,7 @@ export function App() {
       </>
     );
   }
+
   if (me.adminNeedsTwoFactor) {
     return (
       <Suspense fallback={null}>
@@ -92,89 +219,84 @@ export function App() {
       </Suspense>
     );
   }
+
   const Page = VIEWS[view].page;
-  const initial = (me.name || me.email).trim().charAt(0).toUpperCase() || "A";
+
+  const renderNavItem = (key: View) => {
+    const { label, shortLabel, icon: Icon } = VIEWS[key];
+    const active = view === key;
+    return (
+      <a
+        key={key}
+        href={`#${key}`}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "group flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none md:h-8 md:gap-2 md:px-2.5 md:text-[13px]",
+          active
+            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+            : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+        )}
+      >
+        <Icon
+          className={cn(
+            "size-3.5 shrink-0 transition-colors",
+            active
+              ? "text-primary-ink"
+              : "text-muted-foreground group-hover:text-sidebar-foreground",
+          )}
+        />
+        <span className="md:hidden">{shortLabel}</span>
+        <span className="hidden md:inline">{label}</span>
+      </a>
+    );
+  };
 
   return (
-    <div className="min-h-screen bg-background md:grid md:grid-cols-[252px_1fr]">
-      <aside className="flex flex-col gap-3 border-b bg-sidebar p-3 text-sidebar-foreground md:sticky md:top-0 md:h-screen md:border-r md:border-b-0 md:p-4">
-        <div className="flex items-center justify-between gap-2 px-1.5 py-1">
-          <div className="flex items-center gap-2.5">
-            <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-xs">
-              <Layers className="size-4" />
-            </span>
-            <div className="grid leading-tight">
-              <span className="text-sm font-semibold tracking-tight">EdgeBase</span>
-              <span className="text-[11px] text-muted-foreground">Admin console</span>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="md:hidden"
-            onClick={signOut}
-            aria-label="Sign out"
+    <div className="min-h-screen bg-background md:grid md:grid-cols-[224px_minmax(0,1fr)]">
+      <aside className="flex flex-col border-b border-sidebar-border bg-sidebar text-sidebar-foreground md:sticky md:top-0 md:h-screen md:border-r md:border-b-0">
+        <div className="flex h-12 items-center justify-between gap-2 border-b border-sidebar-border px-3.5">
+          <a
+            href="#users"
+            className="text-sm font-semibold tracking-tight text-sidebar-foreground focus-visible:outline-none"
           >
-            <LogOut className="size-4" />
-          </Button>
+            EdgeBase
+          </a>
+          <AccountMenu
+            me={me}
+            side="bottom"
+            align="end"
+            onSignOut={signOut}
+            className="h-7 max-w-[200px] border border-sidebar-border bg-card px-2.5 text-xs md:hidden"
+          />
         </div>
 
-        <nav className="flex gap-1 overflow-x-auto md:mt-2 md:flex-col" aria-label="Sections">
-          {(Object.keys(VIEWS) as View[]).map((key) => {
-            const { label, icon: Icon } = VIEWS[key];
-            const active = view === key;
-            return (
-              <a
-                key={key}
-                href={`#${key}`}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "group relative flex items-center gap-2.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring",
-                  active
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:bg-secondary/80 hover:text-foreground",
-                )}
-              >
-                {active && (
-                  <span
-                    aria-hidden="true"
-                    className="hidden h-4 w-1 rounded-full bg-primary md:absolute md:left-0 md:block"
-                  />
-                )}
-                <Icon
-                  className={cn(
-                    "size-4 shrink-0 transition-colors",
-                    active ? "text-primary" : "text-muted-foreground group-hover:text-foreground",
-                  )}
-                />
-                {label}
-              </a>
-            );
-          })}
+        <nav
+          className="flex items-center gap-1 overflow-x-auto px-2.5 py-2 md:flex-1 md:flex-col md:items-stretch md:gap-0.5 md:py-3"
+          aria-label="Sections"
+        >
+          {OPS_KEYS.map(renderNavItem)}
+          <div
+            aria-hidden="true"
+            className="hidden bg-sidebar-border md:my-2 md:block md:h-px md:w-full"
+          />
+          <div className="hidden md:flex md:flex-col md:gap-0.5">
+            {SECURITY_KEYS.map(renderNavItem)}
+          </div>
         </nav>
 
-        <div className="mt-auto hidden rounded-xl border bg-background/60 p-2.5 md:grid md:gap-2.5">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span
-              aria-hidden="true"
-              className="grid size-8 shrink-0 place-items-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
-            >
-              {initial}
-            </span>
-            <div className="min-w-0 flex-1">
-              {me.name && <p className="truncate text-xs font-medium">{me.name}</p>}
-              <p className="truncate text-xs text-muted-foreground" title={me.email}>
-                {me.email}
-              </p>
-            </div>
-          </div>
-          <Button variant="outline" size="sm" className="w-full justify-center" onClick={signOut}>
-            <LogOut /> Sign out
-          </Button>
+        <div className="mt-auto hidden border-t border-sidebar-border p-2 md:block">
+          <AccountMenu
+            me={me}
+            side="top"
+            align="start"
+            onSignOut={signOut}
+            className="h-9 w-full px-2.5 text-[13px] hover:bg-sidebar-accent"
+          />
         </div>
       </aside>
-      <main className="mx-auto w-full max-w-6xl p-4 sm:p-6 md:p-8 lg:py-10">
-        <Suspense fallback={<Skeleton className="h-48 w-full rounded-xl" />}>
+
+      <main className="mx-auto w-full max-w-[1140px] px-4 py-5 sm:px-8 sm:py-7">
+        <Suspense fallback={<Skeleton className="h-44 w-full rounded-md" />}>
           <Page me={me} />
         </Suspense>
       </main>

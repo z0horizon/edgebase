@@ -1,24 +1,16 @@
-import { Copy, ShieldCheck } from "lucide-react";
+import { Copy, Fingerprint } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import { renderSVG } from "uqr";
+import { AuthShell, FloatingInput } from "@/components/AuthShell";
 import { FormError } from "@/components/FormError";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { api, errorMessage } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { api, errorMessage, registerPasskey } from "@/lib/api";
+import { supportsPasskeys } from "@/lib/webauthn";
 
 type Enrolment = { totpURI: string; backupCodes: string[] };
 
-const STEPS = [
-  { key: "password", label: "Password" },
-  { key: "scan", label: "Scan QR" },
-  { key: "codes", label: "Backup codes" },
-] as const;
-
-/** Admin features stay off on the server until TOTP is on, so a first sign-in lands here. */
+/** Admin routes stay gated on the server until a passkey or TOTP factor is active. */
 export function TwoFactorSetup({
   email,
   onDone,
@@ -30,8 +22,24 @@ export function TwoFactorSetup({
 }) {
   const [step, setStep] = useState<"password" | "scan" | "codes">("password");
   const [enrolment, setEnrolment] = useState<Enrolment | null>(null);
+  const [passkeyName, setPasskeyName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const canPasskey = supportsPasskeys();
+
+  const enrollPasskey = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await registerPasskey(passkeyName);
+      toast.success("Passkey registered");
+      await onDone();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const run =
     (action: (form: FormData) => Promise<void>) => async (event: FormEvent<HTMLFormElement>) => {
@@ -70,151 +78,179 @@ export function TwoFactorSetup({
   const qr = enrolment
     ? `data:image/svg+xml;utf8,${encodeURIComponent(renderSVG(enrolment.totpURI))}`
     : "";
-  const activeStepIndex = STEPS.findIndex((s) => s.key === step);
 
   return (
-    <main className="grid min-h-screen place-items-center bg-background p-4">
-      <div className="w-full max-w-md">
-        <div className="mb-6 flex flex-col items-center gap-2 text-center">
-          <span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <ShieldCheck className="size-5" />
-          </span>
-          <ol className="mt-1 flex items-center gap-2 text-xs" aria-label="Setup steps">
-            {STEPS.map((s, idx) => (
-              <li
-                key={s.key}
-                className={cn(
-                  "flex items-center gap-1.5",
-                  idx <= activeStepIndex ? "font-medium text-foreground" : "text-muted-foreground",
-                )}
-              >
-                <span
-                  className={cn(
-                    "grid size-5 place-items-center rounded-full text-[11px] tabular-nums",
-                    idx < activeStepIndex
-                      ? "bg-primary/15 text-primary"
-                      : idx === activeStepIndex
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-secondary text-muted-foreground",
-                  )}
+    <AuthShell
+      title={
+        step === "password"
+          ? "Secure your account"
+          : step === "scan"
+            ? "Scan QR code"
+            : "Save recovery codes"
+      }
+      subtitle={
+        step === "password" ? (
+          <>
+            Add a passkey or authenticator app for{" "}
+            <span className="font-medium text-foreground">{email}</span> to continue.
+          </>
+        ) : step === "scan" ? (
+          "Scan with Google Authenticator, 1Password, or Authy, then enter its 6-digit code."
+        ) : (
+          "Store these single-use recovery codes safely. Each code works once if you lose your device."
+        )
+      }
+    >
+      {step === "password" && (
+        <div>
+          {canPasskey && (
+            <>
+              <div className="grid gap-3">
+                <FloatingInput
+                  id="passkey-label"
+                  label="Device label (optional)"
+                  maxLength={64}
+                  value={passkeyName}
+                  onChange={(e) => setPasskeyName(e.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={enrollPasskey}
+                  className="inline-flex h-[50px] w-full items-center justify-center gap-2 rounded-[4px] bg-primary px-4 text-[15px] font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
                 >
-                  {idx + 1}
+                  <Fingerprint className="size-4" />
+                  <span>Continue with a passkey</span>
+                </button>
+              </div>
+
+              <div className="my-6 flex items-center gap-4">
+                <span className="h-px flex-1 bg-border" />
+                <span className="text-[12px] font-medium tracking-[0.06em] text-muted-foreground">
+                  OR
                 </span>
-                <span>{s.label}</span>
-                {idx < STEPS.length - 1 && (
-                  <span aria-hidden="true" className="mx-1 h-px w-4 bg-border" />
-                )}
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            </>
+          )}
+
+          <form className="grid gap-3.5" onSubmit={start}>
+            <FloatingInput
+              id="password"
+              name="password"
+              type="password"
+              label="Current password (for TOTP)"
+              requiredMark
+              autoComplete="current-password"
+              required
+            />
+            <FormError message={error} />
+            <button
+              type="submit"
+              disabled={busy}
+              className={
+                canPasskey
+                  ? "flex h-[50px] w-full items-center justify-center rounded-[4px] border border-[#c2c8d0] bg-card px-4 text-[15px] font-normal text-foreground transition-colors duration-150 hover:bg-secondary/65 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 dark:border-input"
+                  : "inline-flex h-[50px] w-full items-center justify-center rounded-[4px] bg-primary px-4 text-[15px] font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+              }
+            >
+              Set up authenticator app
+            </button>
+          </form>
+        </div>
+      )}
+
+      {step === "scan" && (
+        <form className="grid min-w-0 gap-4" onSubmit={confirm}>
+          <div className="grid min-w-0 place-items-center gap-3 rounded-[4px] border bg-muted/35 p-4">
+            <img
+              src={qr}
+              alt="QR code for your authenticator app"
+              className="size-40 rounded-[4px] border bg-white p-2"
+            />
+            <div className="flex w-full min-w-0 items-center justify-between gap-2 rounded-[4px] border bg-card px-2.5 py-1.5">
+              <code className="min-w-0 flex-1 truncate font-mono text-xs text-foreground select-all">
+                {secret}
+              </code>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() =>
+                  navigator.clipboard
+                    .writeText(secret)
+                    .then(() => toast.success("Setup key copied"))
+                }
+              >
+                <Copy /> Copy
+              </Button>
+            </div>
+          </div>
+
+          <FloatingInput
+            id="code"
+            name="code"
+            label="6-digit code"
+            requiredMark
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9 ]{6,7}"
+            className="font-mono tracking-[0.25em] tabular-nums"
+            required
+            autoFocus
+          />
+
+          <FormError message={error} />
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="inline-flex h-[50px] w-full items-center justify-center rounded-[4px] bg-primary px-4 text-[15px] font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+          >
+            Continue
+          </button>
+        </form>
+      )}
+
+      {step === "codes" && enrolment && (
+        <div className="grid gap-4">
+          <ul className="grid grid-cols-2 divide-x divide-y overflow-hidden rounded-[4px] border bg-muted/25 font-mono text-xs tabular-nums">
+            {enrolment.backupCodes.map((code) => (
+              <li key={code} className="px-3 py-2 text-center font-medium tracking-wider">
+                {code}
               </li>
             ))}
-          </ol>
+          </ul>
+          <button
+            type="button"
+            onClick={() =>
+              navigator.clipboard
+                .writeText(enrolment.backupCodes.join("\n"))
+                .then(() => toast.success("Recovery codes copied"))
+            }
+            className="flex h-[46px] w-full items-center justify-center gap-2 rounded-[4px] border border-[#c2c8d0] bg-card px-4 text-[14px] font-normal text-foreground transition-colors hover:bg-secondary/65 dark:border-input"
+          >
+            <Copy className="size-4" /> Copy recovery codes
+          </button>
+          <button
+            type="button"
+            onClick={onDone}
+            className="inline-flex h-[50px] w-full items-center justify-center rounded-[4px] bg-primary px-4 text-[15px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            I have saved these codes
+          </button>
         </div>
+      )}
 
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-xl tracking-tight">Turn on two-factor</CardTitle>
-            <CardDescription className="text-pretty">
-              {step === "password" &&
-                `Admin features need an authenticator app for ${email}. Confirm your password to start.`}
-              {step === "scan" &&
-                "Scan the code with an authenticator app, then enter the 6-digit code it shows."}
-              {step === "codes" &&
-                "Save these backup codes somewhere safe. Each one signs you in once if you lose the app."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {step === "password" && (
-              <form className="grid gap-4" onSubmit={start}>
-                <div className="grid gap-2">
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    name="password"
-                    type="password"
-                    autoComplete="current-password"
-                    required
-                    autoFocus
-                  />
-                </div>
-                <FormError message={error} />
-                <Button type="submit" disabled={busy}>
-                  Continue
-                </Button>
-              </form>
-            )}
-
-            {step === "scan" && (
-              <form className="grid gap-4" onSubmit={confirm}>
-                <div className="grid place-items-center gap-3 rounded-xl border bg-muted/40 p-4">
-                  <img
-                    src={qr}
-                    alt="QR code for your authenticator app"
-                    className="size-44 rounded-lg border bg-white p-2.5 shadow-2xs"
-                  />
-                  <div className="w-full text-center">
-                    <p className="text-xs text-muted-foreground">
-                      Or enter this setup key manually:
-                    </p>
-                    <code className="mt-1 inline-block rounded bg-background px-2 py-1 font-mono text-xs break-all select-all">
-                      {secret}
-                    </code>
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="code">6-digit code</Label>
-                  <Input
-                    id="code"
-                    name="code"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    pattern="[0-9 ]{6,7}"
-                    placeholder="000000"
-                    className="h-11 text-center font-mono text-lg tracking-[0.35em] tabular-nums"
-                    required
-                    autoFocus
-                  />
-                </div>
-                <FormError message={error} />
-                <Button type="submit" disabled={busy}>
-                  Turn on two-factor
-                </Button>
-              </form>
-            )}
-
-            {step === "codes" && enrolment && (
-              <div className="grid gap-4">
-                <ul className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/40 p-3.5 text-center font-mono text-sm tabular-nums">
-                  {enrolment.backupCodes.map((code) => (
-                    <li
-                      key={code}
-                      className="rounded border bg-card py-1.5 text-xs font-medium tracking-wider"
-                    >
-                      {code}
-                    </li>
-                  ))}
-                </ul>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() =>
-                    navigator.clipboard
-                      .writeText(enrolment.backupCodes.join("\n"))
-                      .then(() => toast.success("Backup codes copied"))
-                  }
-                >
-                  <Copy /> Copy codes
-                </Button>
-                <Button type="button" onClick={onDone}>
-                  I saved them
-                </Button>
-              </div>
-            )}
-
-            <Button type="button" variant="link" className="mt-2 w-full" onClick={onSignOut}>
-              Sign out
-            </Button>
-          </CardContent>
-        </Card>
+      <div className="mt-5 text-center">
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Log out
+        </button>
       </div>
-    </main>
+    </AuthShell>
   );
 }

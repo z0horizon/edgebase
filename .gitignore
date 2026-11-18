@@ -12,5 +12,7 @@ docs/superpowers/
 wrangler.production.jsonc
 # Built by `pnpm deploy` from apps/admin/.
 apps/server/public/admin/
+apps/admin/.impeccable/review/
+apps/admin/.impeccable/mocks/
 .DS_Store
 graphify-out/

@@ -1,5 +1,5 @@
 import { STATS_KEPT_DAYS, STATS_LISTED } from "@edgebase/core/limits";
-import { BellRing, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
@@ -14,20 +14,27 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api, errorMessage, type PushStats } from "@/lib/api";
+import { ApiError, api, errorMessage, type PushStats } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 
 export function PushesPage() {
   const [pushes, setPushes] = useState<PushStats[] | null>(null);
+  const [pushUnconfigured, setPushUnconfigured] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setPushes((await api<{ pushes: PushStats[] }>("/v1/push")).pushes);
+      setPushUnconfigured(false);
     } catch (e) {
       setPushes([]);
+      if (e instanceof ApiError && e.status === 503) {
+        setPushUnconfigured(true);
+        return;
+      }
       toast.error(errorMessage(e));
     }
   }, []);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -41,84 +48,92 @@ export function PushesPage() {
     <>
       <PageHeader
         title="Sent pushes"
-        description={`The last ${STATS_LISTED} pushes. Stats are kept for ${STATS_KEPT_DAYS} days.`}
+        description={`Recent ${STATS_LISTED} dispatches with ${STATS_KEPT_DAYS}-day delivery and open retention.`}
       >
         <Button variant="outline" size="sm" onClick={load}>
           <RefreshCw /> Refresh
         </Button>
       </PageHeader>
 
+      {pushUnconfigured && (
+        <div
+          role="status"
+          className="mb-4 rounded-md border border-amber-600/30 bg-amber-500/10 px-3.5 py-2.5 text-xs leading-relaxed text-amber-900 dark:border-amber-400/25 dark:text-amber-200"
+        >
+          Push delivery is disabled on this environment. Configure{" "}
+          <code className="font-mono font-medium">FCM_SERVICE_ACCOUNT</code> in Worker secrets to
+          record and inspect push dispatches.
+        </div>
+      )}
+
       {pushes && pushes.length > 0 && (
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-xl border bg-card px-4 py-3 shadow-2xs">
-            <p className="text-xs text-muted-foreground">Batches</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums">{pushes.length}</p>
+        <div className="mb-4 grid grid-cols-2 overflow-hidden rounded-md border bg-card sm:grid-cols-4">
+          <div className="flex items-baseline justify-between gap-2 border-r border-b px-3.5 py-2.5 sm:border-b-0">
+            <span className="text-xs text-muted-foreground">Batches</span>
+            <span className="text-sm font-semibold tabular-nums text-foreground">
+              {pushes.length}
+            </span>
           </div>
-          <div className="rounded-xl border bg-card px-4 py-3 shadow-2xs">
-            <p className="text-xs text-muted-foreground">Delivered</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
-              {totalSent}
-            </p>
+          <div className="flex items-baseline justify-between gap-2 border-b px-3.5 py-2.5 sm:border-r sm:border-b-0">
+            <span className="text-xs text-muted-foreground">Delivered</span>
+            <span className="text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+              {totalSent.toLocaleString()}
+            </span>
           </div>
-          <div className="rounded-xl border bg-card px-4 py-3 shadow-2xs">
-            <p className="text-xs text-muted-foreground">Failed</p>
-            <p
-              className={`mt-1 text-xl font-semibold tabular-nums ${totalFailed ? "text-destructive" : ""}`}
+          <div className="flex items-baseline justify-between gap-2 border-r px-3.5 py-2.5">
+            <span className="text-xs text-muted-foreground">Failed</span>
+            <span
+              className={`text-sm font-semibold tabular-nums ${totalFailed ? "text-destructive" : "text-foreground"}`}
             >
-              {totalFailed}
-            </p>
+              {totalFailed.toLocaleString()}
+            </span>
           </div>
-          <div className="rounded-xl border bg-card px-4 py-3 shadow-2xs">
-            <p className="text-xs text-muted-foreground">Opened</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums">
-              {totalOpened}
+          <div className="flex items-baseline justify-between gap-2 px-3.5 py-2.5">
+            <span className="text-xs text-muted-foreground">Opened</span>
+            <span className="text-sm font-semibold tabular-nums text-foreground">
+              {totalOpened.toLocaleString()}
               {totalUsers > 0 && (
-                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
                   ({Math.round(Math.min(totalOpened / totalUsers, 1) * 100)}%)
                 </span>
               )}
-            </p>
+            </span>
           </div>
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
+      <div className="overflow-hidden rounded-md border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-16">#</TableHead>
-              <TableHead>Sent</TableHead>
-              <TableHead className="hidden sm:table-cell">Kind</TableHead>
-              <TableHead className="text-right">Users</TableHead>
+              <TableHead className="w-16">Batch</TableHead>
+              <TableHead>Dispatched</TableHead>
+              <TableHead className="hidden sm:table-cell">Category</TableHead>
+              <TableHead className="text-right">Audience</TableHead>
               <TableHead className="text-right">Delivered</TableHead>
               <TableHead className="text-right">Failed</TableHead>
-              <TableHead className="w-52">Opened</TableHead>
+              <TableHead className="w-48">Open rate</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {pushes === null &&
-              [1, 2, 3].map((key) => (
+              [1, 2, 3, 4].map((key) => (
                 <TableRow key={key}>
                   <TableCell colSpan={7}>
-                    <Skeleton className="h-8 w-full" />
+                    <Skeleton className="h-6 w-full" />
                   </TableCell>
                 </TableRow>
               ))}
             {pushes?.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
-                  <div className="mx-auto flex flex-col items-center gap-1.5">
-                    <BellRing className="size-5 text-muted-foreground/60" />
-                    <p>
-                      Nothing sent yet.{" "}
-                      <a
-                        href="#send"
-                        className="font-medium text-primary underline underline-offset-4"
-                      >
-                        Send a push
-                      </a>
-                    </p>
-                  </div>
+                <TableCell colSpan={7} className="h-28 text-center text-xs text-muted-foreground">
+                  No push batches recorded yet.{" "}
+                  <a
+                    href="#send"
+                    className="font-medium text-primary-ink underline underline-offset-4"
+                  >
+                    Dispatch a push
+                  </a>
                 </TableCell>
               </TableRow>
             )}
@@ -130,8 +145,8 @@ export function PushesPage() {
                   <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">
                     #{p.id}
                   </TableCell>
-                  <TableCell className="tabular-nums">
-                    <span className="mr-2">{formatDate(p.sendAt)}</span>
+                  <TableCell className="text-xs tabular-nums">
+                    <span className="mr-2 text-foreground">{formatDate(p.sendAt)}</span>
                     {scheduled && <Badge variant="warning">Scheduled</Badge>}
                   </TableCell>
                   <TableCell className="hidden sm:table-cell">
@@ -139,28 +154,34 @@ export function PushesPage() {
                       {p.category === "marketing" ? "Marketing" : "Transactional"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{p.users || "—"}</TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">{p.sent}</TableCell>
+                  <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+                    {p.users ? p.users.toLocaleString() : "Topic"}
+                  </TableCell>
+                  <TableCell className="text-right text-xs font-medium tabular-nums text-foreground">
+                    {p.sent.toLocaleString()}
+                  </TableCell>
                   <TableCell
-                    className={`text-right tabular-nums ${p.failed ? "font-medium text-destructive" : "text-muted-foreground"}`}
+                    className={`text-right text-xs tabular-nums ${p.failed ? "font-medium text-destructive" : "text-muted-foreground"}`}
                   >
-                    {p.failed}
+                    {p.failed.toLocaleString()}
                   </TableCell>
                   <TableCell>
                     {rate === null ? (
-                      <span className="tabular-nums">{p.opened}</span>
+                      <span className="text-xs tabular-nums text-muted-foreground">
+                        {p.opened.toLocaleString()}
+                      </span>
                     ) : (
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-2">
                         <div
-                          className="h-2 flex-1 overflow-hidden rounded-full bg-secondary"
+                          className="h-1.5 flex-1 overflow-hidden rounded-xs bg-secondary"
                           role="presentation"
                         >
                           <div
-                            className="h-full rounded-full bg-primary transition-[width] duration-300"
+                            className="h-full bg-primary transition-[width] duration-200"
                             style={{ width: `${rate * 100}%` }}
                           />
                         </div>
-                        <span className="w-20 text-right text-xs font-medium tabular-nums">
+                        <span className="w-20 text-right font-mono text-[11px] tabular-nums text-foreground">
                           {p.opened} · {Math.round(rate * 100)}%
                         </span>
                       </div>

@@ -8,15 +8,16 @@ What changed for people building on EdgeBase. The format follows
 
 ### Added
 
+- WebAuthn / FIDO2 Passkeys (`@better-auth/passkey` at `/api/auth/passkey/*`, migration `0009_passkey.sql`): hardware and platform biometric credentials with `userVerification: "required"`, 15-minute `freshAge` step-up on passkey add/rename/delete, a 20-passkey per-user cap (`name <= 64` chars), email + transactional inbox alerts on registration, bootstrap first-passkey enrollment for new admins (blocking plain-password sessions from adding a second passkey), and `passkey` cleanup in `pnpm admin:create --reset-2fa`.
 - Session network & activity telemetry: sessions record Cloudflare edge IP (`cf-connecting-ip`), `asn`, `asOrganization`, `country`, `city` at sign-in (`created*`) and on activity (`lastActiveAt`, refreshed in the background every 15 minutes or on ASN/country shift, capped at 30 active sessions per user), plus `twoFactorMethod` and `twoFactorVerifiedAt`, inspected and revoked via `GET /v1/sessions`, `DELETE /v1/sessions/{id}`, `POST /v1/sessions/revoke-others`, and admin `GET / DELETE /v1/admin/users/{userId}/sessions[/{sessionId}]` without exposing raw session tokens (`/api/auth/list-sessions` and `/api/auth/admin/list-user-sessions` now answer `404`).
 - Account security timestamps (`twoFactorEnabledAt`, `passwordChangedAt`) on `user` and `GET /v1/me`, a 15-minute `freshAge` step-up window on passwordless sensitive actions, and email + transactional inbox alerts (capped at 3/hour per user) when an established user signs in from a new `(asn, country)` network.
-- D1-backed 30-day 2FA trusted devices (`trusted_device`, capped at 20 per user and cleaned up hourly) supporting both web cookies and native `Set-Trust-Device-Token` / `X-Trust-Device-Token` headers, managed via `GET / DELETE /v1/trusted-devices` and `DELETE /v1/trusted-devices/{id}`, and wiped automatically on password change/reset, 2FA disable, or ban.
+- D1-backed 30-day 2FA trusted devices (`trusted_device`, capped at 20 per user and cleaned up hourly) supporting both web cookies and native `Set-Trust-Device-Token` / `X-Trust-Device-Token` headers, single-use token rotation on every sign-in (without extending the 30-day expiry), adaptive country and OS-family anomaly rejection, managed via `GET / DELETE /v1/trusted-devices` and `DELETE /v1/trusted-devices/{id}`, and wiped automatically on password change/reset, 2FA disable, or ban.
 - Boundary & anti-bloat hardening: 64 KB global request body cap (`413 payload_too_large`), `Origin` CSRF validation on cookie-authenticated `/v1/*` mutations (`403 forbidden_origin`), length caps on `user` and `organization` fields, and a unique index on `twoFactor(userId)`.
-- Admin console (`/admin/`): backup code and 30-day device trust options at 2FA sign-in, active session and trusted-device management on **Account**, per-user session telemetry & revocation on **Users**, and split vendor chunks.
+- Admin console (`/admin/`): redesigned enterprise interface (`AuthShell` Universal Login with border-notched floating labels, `1px` hairline ledger tables across **Users**, **Sent pushes**, **Templates**, and **Account & Security**, live OS-neutral notification + payload `<dl>` inspector on **Send push**, unified sidebar `Account` menu with `System` / `Light` / `Dark` appearance switching), zero-dependency Passkey sign-in, bootstrap enrollment and management, backup code and 30-day device trust options at 2FA sign-in, active session and trusted-device management, per-user session telemetry & revocation, and split vendor chunks.
 
 ### Upgrade
 
-- Apply migration `0008_session_security_and_trusted_device.sql` (`pnpm db:migrate:remote`).
+- Apply migrations `0008_session_security_and_trusted_device.sql` and `0009_passkey.sql` (`pnpm db:migrate:remote`).
 
 ## [0.3.0] - 2026-11-14
 

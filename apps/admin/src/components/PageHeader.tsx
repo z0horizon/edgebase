@@ -10,16 +10,14 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   return (
-    <header className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-border/80 pb-5">
-      <div className="grid gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-balance text-foreground">
-          {title}
-        </h1>
+    <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="grid gap-0.5">
+        <h1 className="text-lg font-semibold tracking-tight text-foreground">{title}</h1>
         {description && (
-          <p className="max-w-2xl text-sm text-pretty text-muted-foreground">{description}</p>
+          <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">{description}</p>
         )}
       </div>
-      {children && <div className="flex flex-wrap items-center gap-2.5">{children}</div>}
+      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
     </header>
   );
 }

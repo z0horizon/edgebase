@@ -9,6 +9,13 @@ import {
   SEND_RECIPIENTS_KEY,
   viewKeyFromHash,
 } from "../src/lib/state.ts";
+import {
+  base64urlToBytes,
+  bytesToBase64url,
+  describePasskey,
+  toCreationOptions,
+  toRequestOptions,
+} from "../src/lib/webauthn.ts";
 
 const VIEWS = { users: 1, send: 1, pushes: 1, templates: 1, account: 1 };
 
@@ -90,5 +97,68 @@ describe("describeDevice, describeNetwork, networkShifted", () => {
       false,
     );
     assert.equal(networkShifted({ createdAsn: null, asn: 45899 }), false);
+  });
+});
+
+describe("webauthn helpers", () => {
+  it("round-trips binary bytes through unpadded base64url", () => {
+    const sample = new Uint8Array([0, 1, 2, 62, 63, 253, 254, 255]);
+    const encoded = bytesToBase64url(sample);
+    assert.equal(encoded.includes("+"), false);
+    assert.equal(encoded.includes("/"), false);
+    assert.equal(encoded.includes("="), false);
+    assert.deepEqual(Array.from(base64urlToBytes(encoded)), Array.from(sample));
+  });
+
+  it("converts JSON WebAuthn creation and request options into ArrayBuffer options", () => {
+    const createOpts = toCreationOptions({
+      challenge: bytesToBase64url(new Uint8Array([9, 8, 7])),
+      rp: { name: "EdgeBase", id: "api.test" },
+      user: {
+        id: bytesToBase64url(new Uint8Array([1, 2, 3, 4])),
+        name: "a@x.io",
+        displayName: "a@x.io",
+      },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      excludeCredentials: [
+        { id: bytesToBase64url(new Uint8Array([5, 6])), type: "public-key", transports: ["usb"] },
+      ],
+    });
+    assert.deepEqual(Array.from(new Uint8Array(createOpts.challenge)), [9, 8, 7]);
+    assert.deepEqual(Array.from(new Uint8Array(createOpts.user.id)), [1, 2, 3, 4]);
+    assert.deepEqual(
+      Array.from(new Uint8Array(createOpts.excludeCredentials?.[0]?.id ?? new ArrayBuffer(0))),
+      [5, 6],
+    );
+
+    const reqOpts = toRequestOptions({
+      challenge: bytesToBase64url(new Uint8Array([11, 22])),
+      rpId: "api.test",
+      allowCredentials: [{ id: bytesToBase64url(new Uint8Array([33, 44])), type: "public-key" }],
+    });
+    assert.deepEqual(Array.from(new Uint8Array(reqOpts.challenge)), [11, 22]);
+    assert.deepEqual(
+      Array.from(new Uint8Array(reqOpts.allowCredentials?.[0]?.id ?? new ArrayBuffer(0))),
+      [33, 44],
+    );
+  });
+
+  it("labels passkeys by custom name, known AAGUID provider, or fallback", () => {
+    assert.equal(
+      describePasskey({ name: "Work MacBook", aaguid: "bada5566-a7aa-401f-bd96-45619a55120d" }),
+      "Work MacBook",
+    );
+    assert.equal(
+      describePasskey({ name: null, aaguid: "bada5566-a7aa-401f-bd96-45619a55120d" }),
+      "1Password",
+    );
+    assert.equal(
+      describePasskey({ name: null, aaguid: "b84e4048-15dc-4dd0-8640-f4f60813c8af" }),
+      "NordPass",
+    );
+    assert.equal(
+      describePasskey({ name: "", aaguid: "00000000-0000-0000-0000-000000000000" }),
+      "Passkey",
+    );
   });
 });

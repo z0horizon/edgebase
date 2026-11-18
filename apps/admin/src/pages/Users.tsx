@@ -9,7 +9,7 @@ import {
   ShieldCheck,
   ShieldOff,
   Undo2,
-  Users,
+  X,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -55,6 +55,7 @@ export function UsersPage({ me }: { me: User }) {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [query, setQuery] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [banning, setBanning] = useState<User | null>(null);
   const [inspecting, setInspecting] = useState<User | null>(null);
   const [userSessions, setUserSessions] = useState<SessionRecord[] | null>(null);
@@ -145,7 +146,13 @@ export function UsersPage({ me }: { me: User }) {
   const search = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setOffset(0);
-    setQuery(String(new FormData(event.currentTarget).get("q") ?? "").trim());
+    setQuery(searchInput.trim());
+  };
+
+  const clearSearch = () => {
+    setSearchInput("");
+    setOffset(0);
+    setQuery("");
   };
 
   const last = Math.min(offset + PAGE, total);
@@ -176,83 +183,114 @@ export function UsersPage({ me }: { me: User }) {
 
   return (
     <>
-      <PageHeader title="Users" description="Everyone who has signed up, newest first.">
-        {selectedCount > 0 && (
-          <Button
-            size="sm"
-            onClick={() => {
-              sessionStorage.setItem(SEND_RECIPIENTS_KEY, JSON.stringify(selected));
-              location.hash = "#send";
-            }}
-          >
-            <Send /> Send push ({selectedCount})
-          </Button>
-        )}
-        {users !== null && (
-          <Badge variant="secondary" className="tabular-nums">
-            {total} {total === 1 ? "account" : "accounts"}
-          </Badge>
-        )}
-        <search>
-          <form onSubmit={search} className="relative w-full sm:w-72">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              name="q"
-              type="search"
-              placeholder="Search by email"
-              aria-label="Search by email"
-              className="pl-9"
-            />
-          </form>
-        </search>
-      </PageHeader>
+      <PageHeader
+        title="Users"
+        description="Registered accounts, role grants, verification state, and active edge sessions."
+      />
 
-      <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
+      <div className="overflow-hidden rounded-md border bg-card">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3.5 py-2.5">
+          <search className="w-full sm:w-auto">
+            <form onSubmit={search} className="relative flex items-center gap-1.5 sm:w-72">
+              <Search className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
+              <Input
+                name="q"
+                type="search"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Filter by email…"
+                aria-label="Search by email"
+                className="h-7 pr-7 pl-8 text-xs"
+              />
+              {(query || searchInput) && (
+                <button
+                  type="button"
+                  onClick={clearSearch}
+                  aria-label="Clear filter"
+                  className="absolute right-2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </form>
+          </search>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedCount > 0 && (
+              <>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {selectedCount} selected
+                </span>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    sessionStorage.setItem(SEND_RECIPIENTS_KEY, JSON.stringify(selected));
+                    location.hash = "#send";
+                  }}
+                >
+                  <Send /> Send push ({selectedCount})
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setSelected({})}>
+                  Clear
+                </Button>
+              </>
+            )}
+            {users !== null && (
+              <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                {total} {total === 1 ? "account" : "accounts"}
+              </span>
+            )}
+          </div>
+        </div>
+
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-10">
+              <TableHead className="w-8 pr-0">
                 <Checkbox
                   aria-label="Select all on this page"
                   checked={pageAllSelected}
                   onCheckedChange={(v) => togglePage(v === true)}
                 />
               </TableHead>
-              <TableHead>User</TableHead>
-              <TableHead className="hidden md:table-cell">Joined</TableHead>
-              <TableHead>Role</TableHead>
+              <TableHead>Account</TableHead>
+              <TableHead className="hidden lg:table-cell">User ID</TableHead>
+              <TableHead className="hidden sm:table-cell">Role</TableHead>
+              <TableHead className="hidden md:table-cell">2FA</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="w-12 text-right">
+              <TableHead className="hidden text-right md:table-cell">Joined</TableHead>
+              <TableHead className="w-9 px-2 text-right">
                 <span className="sr-only">Actions</span>
               </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {users === null &&
-              [1, 2, 3, 4].map((key) => (
+              [1, 2, 3, 4, 5].map((key) => (
                 <TableRow key={key}>
-                  <TableCell colSpan={6}>
-                    <Skeleton className="h-10 w-full" />
+                  <TableCell colSpan={8}>
+                    <Skeleton className="h-6 w-full" />
                   </TableCell>
                 </TableRow>
               ))}
             {users?.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                  <div className="mx-auto flex flex-col items-center gap-1.5">
-                    <Users className="size-5 text-muted-foreground/60" />
-                    <p>{query ? "No user matches that email." : "No users yet."}</p>
-                  </div>
+                <TableCell colSpan={8} className="h-28 text-center text-xs text-muted-foreground">
+                  {query ? `No account matches "${query}".` : "No accounts registered yet."}
                 </TableCell>
               </TableRow>
             )}
             {users?.map((user) => {
               const isAdmin = user.role === "admin";
-              const initial = (user.name || user.email).trim().charAt(0).toUpperCase() || "U";
               const isSelected = user.id in selected;
+              const showDistinctName = Boolean(
+                user.name &&
+                  user.name !== user.email &&
+                  user.name.toLowerCase() !== user.email.split("@")[0]?.toLowerCase(),
+              );
               return (
                 <TableRow key={user.id} data-state={isSelected ? "selected" : undefined}>
-                  <TableCell>
+                  <TableCell className="pr-0">
                     <Checkbox
                       aria-label={`Select ${user.email}`}
                       checked={isSelected}
@@ -270,35 +308,52 @@ export function UsersPage({ me }: { me: User }) {
                       }}
                     />
                   </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      <span
-                        aria-hidden="true"
-                        className="grid size-8 shrink-0 place-items-center rounded-full border bg-secondary/70 text-xs font-semibold text-secondary-foreground"
-                      >
-                        {initial}
-                      </span>
-                      <div className="grid min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate font-medium">{user.name || user.email}</span>
-                          {user.id === me.id && (
-                            <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                              You
-                            </span>
-                          )}
-                        </div>
-                        <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+                  <TableCell className="max-w-[175px] sm:max-w-none">
+                    <div className="grid min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate font-medium text-foreground">{user.email}</span>
+                        {user.id === me.id && (
+                          <Badge variant="outline" className="hidden sm:inline-flex">
+                            You
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                        {showDistinctName && <span className="truncate">{user.name}</span>}
+                        <span className="sm:hidden">
+                          {showDistinctName ? "· " : ""}
+                          {isAdmin ? "Admin" : "User"}
+                          {user.id === me.id ? " (You)" : ""}
+                        </span>
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell className="hidden tabular-nums text-muted-foreground md:table-cell">
-                    {formatDate(user.createdAt)}
+                  <TableCell className="hidden lg:table-cell">
+                    <button
+                      type="button"
+                      title={`Copy ${user.id}`}
+                      onClick={() =>
+                        navigator.clipboard
+                          .writeText(user.id)
+                          .then(() => toast.success("User ID copied"))
+                      }
+                      className="inline-flex items-center gap-1 rounded-sm border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground transition-colors hover:border-input hover:text-foreground"
+                    >
+                      <span>{user.id.slice(0, 10)}…</span>
+                      <Copy className="size-2.5" />
+                    </button>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="hidden sm:table-cell">
                     <Badge variant={isAdmin ? "default" : "secondary"}>
-                      {isAdmin && <ShieldCheck />}
                       {isAdmin ? "Admin" : "User"}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">
+                    {user.twoFactorEnabled ? (
+                      <Badge variant="outline">TOTP</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     {user.banned ? (
@@ -317,7 +372,10 @@ export function UsersPage({ me }: { me: User }) {
                       <Badge variant="warning">Unverified</Badge>
                     )}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="hidden text-right text-xs tabular-nums text-muted-foreground md:table-cell">
+                    {formatDate(user.createdAt)}
+                  </TableCell>
+                  <TableCell className="px-2 text-right">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -350,7 +408,7 @@ export function UsersPage({ me }: { me: User }) {
                           <Copy /> Copy user ID
                         </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => openSessions(user)}>
-                          <Laptop /> View sessions
+                          <Laptop /> Inspect sessions
                         </DropdownMenuItem>
                         {user.id !== me.id && (
                           <>
@@ -365,7 +423,7 @@ export function UsersPage({ me }: { me: User }) {
                                   )
                                 }
                               >
-                                <ShieldOff /> Remove admin
+                                <ShieldOff /> Revoke admin
                               </DropdownMenuItem>
                             ) : (
                               <DropdownMenuItem
@@ -377,7 +435,7 @@ export function UsersPage({ me }: { me: User }) {
                                   )
                                 }
                               >
-                                <ShieldCheck /> Make admin
+                                <ShieldCheck /> Grant admin
                               </DropdownMenuItem>
                             )}
                             {user.banned ? (
@@ -386,14 +444,14 @@ export function UsersPage({ me }: { me: User }) {
                                   act("unban-user", { userId: user.id }, `Unbanned ${user.email}`)
                                 }
                               >
-                                <Undo2 /> Unban
+                                <Undo2 /> Unban account
                               </DropdownMenuItem>
                             ) : (
                               <DropdownMenuItem
                                 variant="destructive"
                                 onSelect={() => setBanning(user)}
                               >
-                                <Ban /> Ban
+                                <Ban /> Ban account
                               </DropdownMenuItem>
                             )}
                           </>
@@ -408,7 +466,7 @@ export function UsersPage({ me }: { me: User }) {
         </Table>
 
         {total > 0 && (
-          <footer className="flex items-center gap-2 border-t bg-muted/30 px-4 py-3">
+          <footer className="flex items-center gap-2 border-t bg-muted/35 px-3.5 py-2">
             <p className="mr-auto text-xs tabular-nums text-muted-foreground">
               Showing <span className="font-medium text-foreground">{offset + 1}</span>–
               <span className="font-medium text-foreground">{last}</span> of{" "}
@@ -453,19 +511,24 @@ export function UsersPage({ me }: { me: User }) {
             <DialogHeader>
               <DialogTitle>Ban {banning?.email}</DialogTitle>
               <DialogDescription>
-                They are signed out everywhere and cannot sign in until you unban them.
+                Immediately revokes active sessions and blocks future sign-ins until unbanned.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-2">
-              <Label htmlFor="reason">Reason, for other admins</Label>
-              <Input id="reason" name="reason" maxLength={200} />
+            <div className="grid gap-1.5">
+              <Label htmlFor="reason">Audit reason (optional)</Label>
+              <Input
+                id="reason"
+                name="reason"
+                maxLength={200}
+                placeholder="Policy violation or compromised account"
+              />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setBanning(null)}>
                 Cancel
               </Button>
               <Button type="submit" variant="destructive">
-                Ban user
+                Ban account
               </Button>
             </DialogFooter>
           </form>
@@ -483,22 +546,22 @@ export function UsersPage({ me }: { me: User }) {
       >
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Sessions — {inspecting?.email}</DialogTitle>
+            <DialogTitle>Active sessions — {inspecting?.email}</DialogTitle>
             <DialogDescription>
               {inspecting?.twoFactorEnabled
-                ? `2FA enabled${inspecting.twoFactorEnabledAt ? ` (${formatDate(inspecting.twoFactorEnabledAt)})` : ""}`
-                : "2FA off"}
+                ? `TOTP enabled${inspecting.twoFactorEnabledAt ? ` (${formatDate(inspecting.twoFactorEnabledAt)})` : ""}`
+                : "TOTP disabled"}
               {" · "}
               Password changed:{" "}
               {inspecting?.passwordChangedAt ? formatDate(inspecting.passwordChangedAt) : "—"}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-3">
+          <div className="divide-y overflow-hidden rounded-md border bg-background/50">
             {userSessions === null && (
-              <p className="text-sm text-muted-foreground">Loading sessions…</p>
+              <p className="px-4 py-3 text-xs text-muted-foreground">Loading sessions…</p>
             )}
             {userSessions?.length === 0 && (
-              <p className="text-sm text-muted-foreground">No active sessions.</p>
+              <p className="px-4 py-3 text-xs text-muted-foreground">No active sessions.</p>
             )}
             {userSessions?.map((s) => (
               <SessionCard

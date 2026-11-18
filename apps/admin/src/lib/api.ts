@@ -1,3 +1,12 @@
+import {
+  type CreationOptionsJSON,
+  type RequestOptionsJSON,
+  serializeAssertion,
+  serializeAttestation,
+  toCreationOptions,
+  toRequestOptions,
+} from "./webauthn";
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -95,7 +104,16 @@ export type TrustedDevice = {
   current: boolean;
 };
 
-/** `GET /v1/me`: the signed-in user, and whether admin features first need TOTP set up. */
+export type PasskeyRecord = {
+  id: string;
+  name?: string | null;
+  deviceType: string;
+  backedUp: boolean;
+  aaguid?: string | null;
+  createdAt?: string | null;
+};
+
+/** `GET /v1/me`: the signed-in user, and whether admin features first need TOTP or a passkey. */
 export type Me = User & { adminNeedsTwoFactor: boolean };
 
 export type Text = { title: string; body: string };
@@ -141,6 +159,60 @@ export function listUsers({
     params.set("searchValue", email);
   }
   return api<{ users: User[]; total: number }>(`/api/auth/admin/list-users?${params}`);
+}
+
+function normalizeWebAuthnError(err: unknown, ceremony: "register" | "authenticate"): Error {
+  if (err instanceof DOMException) {
+    if (err.name === "NotAllowedError" || err.name === "AbortError") {
+      return new Error("Passkey prompt was cancelled or timed out");
+    }
+    if (ceremony === "register" && err.name === "InvalidStateError") {
+      return new Error("This passkey is already registered on your account");
+    }
+  }
+  return err instanceof Error ? err : new Error("Passkey operation failed");
+}
+
+export async function registerPasskey(name?: string): Promise<PasskeyRecord> {
+  const trimmed = name?.trim();
+  const options = await api<CreationOptionsJSON>("/api/auth/passkey/generate-register-options");
+  let credential: Credential | null;
+  try {
+    credential = await navigator.credentials.create({
+      publicKey: toCreationOptions(options),
+    });
+  } catch (err) {
+    throw normalizeWebAuthnError(err, "register");
+  }
+  if (!(credential instanceof PublicKeyCredential)) {
+    throw new Error("Passkey creation was cancelled");
+  }
+  return api<PasskeyRecord>("/api/auth/passkey/verify-registration", {
+    method: "POST",
+    body: {
+      response: serializeAttestation(credential),
+      ...(trimmed && { name: trimmed }),
+    },
+  });
+}
+
+export async function authenticateWithPasskey(): Promise<void> {
+  const options = await api<RequestOptionsJSON>("/api/auth/passkey/generate-authenticate-options");
+  let credential: Credential | null;
+  try {
+    credential = await navigator.credentials.get({
+      publicKey: toRequestOptions(options),
+    });
+  } catch (err) {
+    throw normalizeWebAuthnError(err, "authenticate");
+  }
+  if (!(credential instanceof PublicKeyCredential)) {
+    throw new Error("Passkey sign-in was cancelled");
+  }
+  await api("/api/auth/passkey/verify-authentication", {
+    method: "POST",
+    body: { response: serializeAssertion(credential) },
+  });
 }
 
 export const errorMessage = (error: unknown) =>
