@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@better-auth/expo": "^1.7.18",
+    "@better-auth/passkey": "1.7.18",
     "better-auth": "^1.7.18",
     "hono": "^4.13.17",
     "valibot": "^1.5.0"

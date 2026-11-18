@@ -25,7 +25,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
 
 | Binding | Kind | Holds |
 |---|---|---|
-| `DB` | D1 `edgebase-db` | Better Auth tables (incl. admin, twoFactor, organization), `trusted_device`, `device`, `scheduled_push`, `push_stats`, `push_open`, `push_template`, `push_idempotency` |
+| `DB` | D1 `edgebase-db` | Better Auth tables (incl. admin, twoFactor, passkey, organization), `trusted_device`, `device`, `scheduled_push`, `push_stats`, `push_open`, `push_template`, `push_idempotency` |
 | `INBOX_DB` | D1 `edgebase-inbox` | `inbox_item`, `broadcast`, `inbox_state`, `inbox_push` |
 | `PUSH_QUEUE` | Queue `edgebase-push` | push messages (producer and consumer) |
 | `PUSH_DLQ` | Queue `edgebase-push-dlq` | pushes that failed 5 attempts |

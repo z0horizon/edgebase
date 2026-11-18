@@ -98,3 +98,40 @@ it("twoFactor enforces at most one row per user", async () => {
       .run(),
   ).rejects.toThrow(/UNIQUE constraint/);
 });
+
+it("deleting a user cascades to its passkeys and credentialID is unique", async () => {
+  const id = await seedUser();
+  await env.DB.prepare(
+    `INSERT INTO passkey (id, name, publicKey, userId, credentialID, counter, deviceType, backedUp, createdAt)
+     VALUES ('pk1', 'MacBook', 'pub1', ?, 'cred-1', 0, 'multiDevice', 1, '2026-11-18T00:00:00.000Z')`,
+  )
+    .bind(id)
+    .run();
+  await expect(
+    env.DB.prepare(
+      `INSERT INTO passkey (id, name, publicKey, userId, credentialID, counter, deviceType, backedUp, createdAt)
+       VALUES ('pk2', 'Other', 'pub2', ?, 'cred-1', 0, 'singleDevice', 0, '2026-11-18T00:00:00.000Z')`,
+    )
+      .bind(id)
+      .run(),
+  ).rejects.toThrow(/UNIQUE constraint/);
+
+  await env.DB.prepare("DELETE FROM user WHERE id = ?").bind(id).run();
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM passkey").first("n")).toBe(0);
+});
+
+it("passkey lookups by userId and credentialID use indexes without scanning", async () => {
+  const byUser = await env.DB.prepare("EXPLAIN QUERY PLAN SELECT * FROM passkey WHERE userId = ?")
+    .bind("u1")
+    .all<{ detail: string }>();
+  expect(byUser.results.map((r) => r.detail).join("\n")).toMatch(/USING INDEX passkey_user_id/);
+
+  const byCred = await env.DB.prepare(
+    "EXPLAIN QUERY PLAN SELECT * FROM passkey WHERE credentialID = ?",
+  )
+    .bind("cred-1")
+    .all<{ detail: string }>();
+  expect(byCred.results.map((r) => r.detail).join("\n")).toMatch(
+    /USING INDEX passkey_credential_id/,
+  );
+});

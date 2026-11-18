@@ -34,13 +34,13 @@ describe("adminStatements", () => {
     assert.match(account, /'new-account', 'u1', 'credential', 'u1', 'salt:hash'/);
   });
 
-  it("drops an existing admin's TOTP only when asked", () => {
+  it("drops an existing admin's TOTP and passkeys only when asked", () => {
     const resetSql = adminStatements({ ...base, userId: "u1", resetTwoFactor: true }).join(";");
     assert.match(
       resetSql,
-      /twoFactorEnabled = 0, twoFactorEnabledAt = NULL WHERE id = 'u1'.*DELETE FROM twoFactor WHERE userId = 'u1'.*DELETE FROM trusted_device WHERE user_id = 'u1'/,
+      /twoFactorEnabled = 0, twoFactorEnabledAt = NULL WHERE id = 'u1'.*DELETE FROM twoFactor WHERE userId = 'u1'.*DELETE FROM passkey WHERE userId = 'u1'.*DELETE FROM trusted_device WHERE user_id = 'u1'/,
     );
-    assert.doesNotMatch(adminStatements({ ...base, userId: "u1" }).join(";"), /twoFactor/);
+    assert.doesNotMatch(adminStatements({ ...base, userId: "u1" }).join(";"), /twoFactor|passkey/);
   });
 
   it("stamps passwordChangedAt and revokes prior sessions and trusted devices when resetting an admin's password", () => {

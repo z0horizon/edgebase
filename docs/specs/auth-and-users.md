@@ -13,11 +13,14 @@ user routes answer `503`.
   `banned`, `banReason`, `banExpires`, `twoFactorEnabled` come from the admin and twoFactor plugins
   (`0004`). Dates are ISO 8601 text, booleans 0/1.
 - **`session`**: one row per signed-in device; `expiresAt` indexed for retention. `signInProvider`
-  (`0007`) is the social provider that created it (`google`, `github`, `apple`) or null; `0008`
+  (`0007`) is the passwordless provider that created it (`google`, `github`, `apple`, `passkey`) or null; `0008`
   adds current edge network (`asn`, `asOrganization`, `country`, `city`), initial sign-in network
   (`createdIp`, `createdAsn`, `createdAsOrganization`, `createdCountry`, `createdCity`),
   `lastActiveAt`, and 2FA provenance (`twoFactorMethod`: `totp` | `backup_code` | `trusted_device`
   | null, `twoFactorVerifiedAt`). Clients cannot set any of these columns.
+- **`passkey`** (`0009`): one row per WebAuthn / FIDO2 credential (`@better-auth/passkey`, capped at
+  20 per user, `credentialID` unique, `userId` indexed, cascades with `user`); holds `name` (`<= 64`
+  chars), `publicKey`, `counter`, `deviceType`, `backedUp`, `transports`, `aaguid`, `createdAt`.
 - **`trusted_device`** (`0008`): one row per 30-day 2FA-trusted browser or native app (capped at 20
   per user, `expires_at` indexed for cleanup, cascades with `user`); stores only `base64url(SHA-256(token))`
   plus user agent, origin network (`created_ip`, `created_asn`, `created_country`), last-used
@@ -68,12 +71,12 @@ user routes answer `503`.
    present among their other unexpired sessions or trusted devices, a transactional inbox alert and
    email are sent via `ctx.waitUntil` (capped at 3 alerts per hour per user).
 5. Sign-in, sign-up, password-reset (`request-password-reset`, `reset-password`),
-   `change-password`, `verify-password`, `delete-user`, resend-verification, two-factor, organization invite-member
-   and app-exchange requests are limited
-   to 10 per minute per `cf-connecting-ip` through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
+   `change-password`, `verify-password`, `delete-user`, resend-verification, two-factor, passkey
+   ceremony (`generate-*`, `verify-*`), organization invite-member and app-exchange requests are limited
+   to 10 per minute per `cf-connecting-ip` (normalized to `/64` on IPv6) through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`packages/core/src/auth/middleware.ts`). Better Auth's own limiter is disabled.
 6. `POST /api/auth/delete-user` and admin `remove-user` delete the user; `session`, `account`,
-   `device`, `trusted_device`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
+   `device`, `trusted_device`, `passkey`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
    hook removes the user's `inbox_item` and `inbox_state` rows from `INBOX_DB`, which has no
    foreign keys (`packages/core/src/inbox/queries.ts`), and their `push_open` rows.
 7. Users opt in to marketing pushes with `POST /api/auth/update-user { marketingOptIn: true }`.
@@ -96,29 +99,35 @@ user routes answer `503`.
     `0004` have null, treated the same); `admin` reaches `/api/auth/admin/*` (list, create, remove,
     ban, set role, impersonate, revoke sessions), but a password session needs two-factor on:
     until then it answers `403 two_factor_required` there and on the admin-session routes of
-    api.md, so a leaked password alone reaches nothing. Setting up 2FA stays open to them. A
-    session from social sign-in (`signInProvider` set) passes without it, since the provider's
-    own sign-in is the second wall. So a provider account joins an admin only through
+    api.md, so a leaked password alone reaches nothing. Setting up 2FA or registering the admin's
+    very first passkey (when `0` passkeys exist) stays open to them; once at least one passkey is
+    registered, a plain password session cannot add another passkey (`403 TWO_FACTOR_REQUIRED`). A
+    session from social sign-in or a WebAuthn passkey (`signInProvider` set to `google`, `github`,
+    `apple` or `passkey`) passes without TOTP, since the provider's own sign-in or hardware/biometric
+    `userVerification: "required"` is the second wall. So a provider account joins an admin only through
     `POST /api/auth/link-social` from that admin's session that itself passes this check; implicit
     linking by email at sign-in, or a link from a password session without TOTP, is refused
     (`databaseHooks.account.create.before`). A user who signed up with a provider and is later
     made admin keeps that provider.
     Banning deletes the user's sessions and `trusted_device` rows, so the next request answers `401`. The first admin comes
     from `pnpm admin:create` or bootstrap (see deployment.md). The `/admin` page (`apps/admin/`)
-    signs admins in with Google, GitHub or Apple, or with email, password and TOTP (or backup code,
+    signs admins in with a Passkey, Google, GitHub or Apple, or with email, password and TOTP (or backup code,
     with optional 30-day device trust), walks an
-    admin with a password session and no TOTP through setting it up (QR code,
-    confirming code, backup codes), links providers and manages active sessions and trusted devices
+    admin with a password session and no TOTP/passkey through registering a passkey or setting up TOTP (QR code,
+    confirming code, backup codes), links providers and manages passkeys, active sessions and trusted devices
     on its Account view, inspects/revokes user sessions on Users, and sends pushes and edits templates with the
     admin session (see api.md, Authentication). It is served with a CSP that allows only its own
     scripts, and renders user data as text.
 12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;
-    social sign-in is not challenged. `POST /api/auth/two-factor/enable { password }` returns the
+    social and passkey sign-ins are not challenged. `POST /api/auth/two-factor/enable { password }` returns the
     TOTP URI (issuer: the `BASE_URL` host) and backup codes; 2FA is on once a code is confirmed
     with `verify-totp` (which stamps `user.twoFactorEnabledAt`). A sign-in of a user with 2FA
     answers `{ twoFactorRedirect: true }` with no session and a 10-minute `two_factor` cookie unless
     the caller presents a valid unrevoked D1 `trusted_device` token (cookie `[__Secure-]edgebase_td`
-    or header `X-Trust-Device-Token`); `verify-totp` or `verify-backup-code` with that `two_factor`
+    or header `X-Trust-Device-Token`) from the same country and OS family; on country or OS-family
+    shift, 2FA bypass is refused. Every successful `trusted_device` sign-in rotates `token_hash`
+    (emitting a fresh cookie and `Set-Trust-Device-Token` while keeping the original 30-day
+    `expires_at` ceiling) so a copied token cannot be replayed. `verify-totp` or `verify-backup-code` with that `two_factor`
     cookie creates the session (`twoFactorMethod` set to `totp` or `backup_code`, or `trusted_device`
     when bypassed). Passing `trustDevice: true` during sign-in verification mints a 30-day
     `trusted_device` row (at most 20 per user, listed and revoked at `/v1/trusted-devices`); D1 is
@@ -127,6 +136,12 @@ user routes answer `503`.
     rows and other sessions (`change-password` and `reset-password` update `user.passwordChangedAt`;
     `two-factor/disable` clears `user.twoFactorEnabledAt`). `/api/auth/two-factor/*` shares rule 5's
     per-IP limit, and Better Auth locks the challenge after repeated wrong codes.
+12a. Passkeys (`@better-auth/passkey` at `/api/auth/passkey/*`): WebAuthn registration and
+     authentication enforce `userVerification: "required"`, `rpID = hostname(BASE_URL)`, and
+     expected origins from `BASE_URL`, `http(s)://` `TRUSTED_ORIGINS`, plus optional `PASSKEY_ORIGINS`.
+     Adding, renaming or deleting a passkey requires a fresh session (`freshAge <= 15m`), caps each
+     user at 20 passkeys (`name <= 64` chars), strips `createSession` on registration, and sends an
+     email + transactional inbox security alert on registration (sharing the 3/hour alert cap).
 13. Organizations (`organization` plugin): a user belongs to at most 10, an organization has at
     most 100 members and 100 pending invitations, and invitations expire after 48 h. Invitations
     are mailed with `<APP_SCHEME>://invitation?id=<id>`; the app accepts with

@@ -48,12 +48,14 @@ export function adminStatements({
       ? [
           `UPDATE user SET twoFactorEnabled = 0, twoFactorEnabledAt = NULL WHERE id = ${sql(id)}`,
           `DELETE FROM twoFactor WHERE userId = ${sql(id)}`,
+          `DELETE FROM passkey WHERE userId = ${sql(id)}`,
         ]
       : [];
   const revoke = userId
     ? [
         `DELETE FROM session WHERE userId = ${sql(id)}`,
         `DELETE FROM trusted_device WHERE user_id = ${sql(id)}`,
+        `DELETE FROM verification WHERE identifier GLOB 'trust-device-*' AND value = ${sql(id)}`,
       ]
     : [];
   return [

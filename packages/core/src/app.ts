@@ -91,6 +91,17 @@ app.on(
   ],
   authRateLimit,
 );
+// Passkey ceremony option generators are GETs that write challenges to `verification`; guard both GET and POST.
+app.on(
+  ["GET", "POST"],
+  [
+    "/api/auth/passkey/generate-register-options",
+    "/api/auth/passkey/generate-authenticate-options",
+    "/api/auth/passkey/verify-registration",
+    "/api/auth/passkey/verify-authentication",
+  ],
+  authRateLimit,
+);
 // Native apps redeem one-time tokens only through /v1/auth/app-exchange, which checks the verifier.
 app.post("/api/auth/one-time-token/verify", () => jsonError(404, "not_found", "Route not found"));
 // Better Auth's session list endpoints include raw `session.token` bearer secrets; callers use

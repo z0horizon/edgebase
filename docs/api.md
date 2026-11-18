@@ -39,7 +39,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/health` | none | liveness, answers `{ "ok": true }` |
-| ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, verify email, reset password, delete user, update user, admin, two-factor, organization |
+| ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, passkey, verify email, reset password, delete user, update user, admin, two-factor, organization |
 | GET | `/v1/me` | user | the signed-in user |
 | GET | `/v1/sessions` | user | list active sessions of the caller (without raw tokens or `freshAge` lockout) |
 | DELETE | `/v1/sessions/{id}` | user | revoke one session of the caller by opaque id |
@@ -78,7 +78,7 @@ Better Auth's endpoints are documented at https://www.better-auth.com/docs; see
 Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `marketingOptIn`,
 `locale`, `role`, `banned`, `banReason`, `banExpires`, `twoFactorEnabled`, `twoFactorEnabledAt`,
 `passwordChangedAt`, `createdAt`, `updatedAt`, and `adminNeedsTwoFactor`: true for an admin whose
-session must set up TOTP before admin features (a password session without it). `401` without a session.
+session must set up TOTP or a passkey before admin features (a password session without it). `401` without a session.
 
 ### Sessions & trusted devices
 Active sessions are inspected and revoked through `/v1/sessions` (works throughout the 30-day
@@ -91,17 +91,19 @@ session lifetime without the 15-minute `freshAge` gate and never exposes raw ses
 Passing `trustDevice: true` to `POST /api/auth/two-factor/verify-totp` or `/verify-backup-code`
 during sign-in records a 30-day trusted device in D1 (capped at 20 per user), sets an `HttpOnly`
 cookie for web clients, and exposes `Set-Trust-Device-Token` for native apps (send back as
-`X-Trust-Device-Token` on `POST /api/auth/sign-in/email`).
+`X-Trust-Device-Token` on `POST /api/auth/sign-in/email`). Each successful trusted-device sign-in
+rotates the token (emitting a new cookie and `Set-Trust-Device-Token` without extending the 30-day
+expiry), and refuses 2FA bypass if `country` or OS family shifts.
 
-- `GET /v1/trusted-devices` → `{ "devices": [{ id, userAgent, ipAddress, asn, asOrganization, country, city, createdIp, createdAsn, createdCountry, createdAt, lastUsedAt, expiresAt, current }] }`.
+- `GET /v1/trusted-devices` → `{ "devices": [{ id, userAgent, ipAddress, asn, asOrganization, country, city, createdIp, createdAsn, createdAsOrganization, createdCountry, createdCity, createdAt, lastUsedAt, expiresAt, current }] }`.
 - `DELETE /v1/trusted-devices/{id}` → `204`, or `404` when unknown or owned by another user.
 - `DELETE /v1/trusted-devices` → `204` (revokes every trusted device of the caller).
 
-### Admin, two-factor, organizations
-Better Auth's `admin`, `twoFactor` and `organization` plugin routes under `/api/auth/admin/*`,
-`/api/auth/two-factor/*` and `/api/auth/organization/*`; limits and flows are in
-[specs/auth-and-users.md](specs/auth-and-users.md) rules 11–13. `/api/auth/two-factor/*` is
-rate-limited per IP like sign-in.
+### Passkeys, admin, two-factor, organizations
+Better Auth's `passkey`, `admin`, `twoFactor` and `organization` plugin routes under
+`/api/auth/passkey/*`, `/api/auth/admin/*`, `/api/auth/two-factor/*` and `/api/auth/organization/*`;
+limits and flows are in [specs/auth-and-users.md](specs/auth-and-users.md) rules 11–13.
+`/api/auth/two-factor/*` and `/api/auth/passkey/generate-*` / `/verify-*` are rate-limited per IP like sign-in.
 
 ### `GET /v1/auth/app-callback?challenge=<c>`
 Use as the `callbackURL` of a browser OAuth flow started from a native app, with

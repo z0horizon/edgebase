@@ -88,10 +88,11 @@ with no two-factor:
   (`pnpm --filter @edgebase/admin build`) and register `http://localhost:8787/api/auth/callback/<provider>`
   as a redirect URI of a development OAuth client.
 
-Email + password sign-in needs
-two-factor: at first sign-in the page shows a QR code for an authenticator app and then ten
-backup codes. An admin who has lost both the app and the codes is reset with
-`pnpm admin:create --remote --reset-2fa` (with their email as `ADMIN_EMAIL`), and sets it up again.
+Email + password sign-in needs a passkey or
+two-factor: at first sign-in the page lets the admin register a WebAuthn passkey (Touch ID, Face ID,
+Windows Hello or security key) or scan a QR code for an authenticator app and save ten
+backup codes. An admin who has lost their passkey, authenticator app and backup codes is reset with
+`pnpm admin:create --remote --reset-2fa` (with their email as `ADMIN_EMAIL`), and sets one up again.
 
 ### Optional: Cloudflare Access in front of the admin page
 
@@ -125,8 +126,9 @@ other calls (`/v1/push`, `/v1/templates`) stay guarded by the admin session and 
 - 2FA: a sign-in answering `{ twoFactorRedirect: true }` sets a short-lived `better-auth.two_factor`
   cookie; send it back with `POST /api/auth/two-factor/verify-totp { code, trustDevice? }` (or
   `verify-backup-code`). Expo's client keeps cookies; Flutter must store and resend the `two_factor`
-  cookie, and when `trustDevice: true` is used, store the `Set-Trust-Device-Token` header and send
-  it as `X-Trust-Device-Token` on later `POST /api/auth/sign-in/email` calls.
+  cookie, and when `trustDevice: true` is used, store the `Set-Trust-Device-Token` header, send it
+  as `X-Trust-Device-Token` on later `POST /api/auth/sign-in/email` calls, and overwrite the stored
+  token with the rotated `Set-Trust-Device-Token` returned by each successful sign-in.
 
 Calls that keep requests (the cost that grows with users) low:
 

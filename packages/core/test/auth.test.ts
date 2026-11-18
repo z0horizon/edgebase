@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { socialProviderOf } from "../src/auth/auth";
 import { base64url, sha256 } from "../src/http";
 import { authed, call, freshIp, json, PASSWORD, signUpVerified } from "./helpers";
+import { createVirtualPasskey } from "./webauthn-helper";
 
 /**
  * Calls until one answers 429, at most 21 times. The limiter's window may reset while a test
@@ -844,16 +845,18 @@ describe("2FA audit timestamps, trusted devices, and new-network alerts", () => 
     const mobileBody = await mobileSignIn.json<Record<string, unknown>>();
     expect(mobileBody["twoFactorRedirect"]).toBeUndefined();
     const mobileBearer = mobileSignIn.headers.get("set-auth-token") ?? "";
+    const rotatedTrustToken = mobileSignIn.headers.get("set-trust-device-token") ?? "";
+    expect(rotatedTrustToken).not.toBe(trustToken);
     const tdSession = await (await call("/api/auth/get-session", authed(mobileBearer))).json<{
       session: Record<string, unknown>;
     }>();
     expect(tdSession.session["twoFactorMethod"]).toBe("trusted_device");
     expect(typeof tdSession.session["twoFactorVerifiedAt"]).toBe("string");
 
-    // GET /v1/trusted-devices lists the device, marking current = true when token matches.
+    // GET /v1/trusted-devices lists the device, marking current = true when rotated token matches.
     const listRes = await call(
       "/v1/trusted-devices",
-      authed(mobileBearer, { headers: { "x-trust-device-token": trustToken } }),
+      authed(mobileBearer, { headers: { "x-trust-device-token": rotatedTrustToken } }),
     );
     expect(listRes.status).toBe(200);
     const { devices } = await listRes.json<{ devices: Array<Record<string, unknown>> }>();
@@ -1763,5 +1766,520 @@ describe("audit hardening: token isolation, CSRF, body/column/session/alert life
         .bind(userId)
         .first("n"),
     ).toBe(3);
+  });
+
+  it("rotates trusted_device token on use (preserving 30d expiry) and refuses 2FA bypass on country or OS-family shift", async () => {
+    const email = "adaptive-td@x.io";
+    const macUa = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36";
+    const linuxUa = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36";
+    const { userId, token } = await signUpVerified(email);
+
+    const enableRes = await call(
+      "/api/auth/two-factor/enable",
+      authed(token, json({ password: PASSWORD })),
+    );
+    const { totpURI } = await enableRes.json<{ totpURI: string }>();
+    expect(
+      (
+        await call(
+          "/api/auth/two-factor/verify-totp",
+          authed(token, json({ code: await totpFromUri(totpURI) })),
+        )
+      ).status,
+    ).toBe(200);
+
+    // Mint initial trusted device on macOS in VN.
+    const ch1 = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        { headers: { "cf-connecting-ip": freshIp(), "user-agent": macUa } },
+      ),
+      cf: { asn: 45899, asOrganization: "VNPT", country: "VN", city: "Hanoi" },
+    });
+    const verify1 = await call("/api/auth/two-factor/verify-totp", {
+      ...json(
+        { code: await totpFromUri(totpURI), trustDevice: true },
+        {
+          headers: {
+            "cf-connecting-ip": freshIp(),
+            "user-agent": macUa,
+            cookie: cookiesOf(ch1),
+          },
+        },
+      ),
+      cf: { asn: 45899, asOrganization: "VNPT", country: "VN", city: "Hanoi" },
+    });
+    expect(verify1.status).toBe(200);
+    const trustToken1 = verify1.headers.get("set-trust-device-token") ?? "";
+    expect(trustToken1.length).toBeGreaterThan(30);
+
+    const origExp = await env.DB.prepare("SELECT expires_at FROM trusted_device WHERE user_id = ?")
+      .bind(userId)
+      .first<number>("expires_at");
+    expect(origExp).toBeTypeOf("number");
+
+    // 1. Country shift (VN -> DE) on same OS -> MUST refuse 2FA bypass!
+    const countryShift = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        {
+          headers: {
+            "cf-connecting-ip": freshIp(),
+            "user-agent": macUa,
+            "x-trust-device-token": trustToken1,
+          },
+        },
+      ),
+      cf: { asn: 14061, asOrganization: "DigitalOcean", country: "DE", city: "Frankfurt" },
+    });
+    expect(countryShift.status).toBe(200);
+    expect(await countryShift.json()).toMatchObject({ twoFactorRedirect: true });
+
+    // 2. OS-family shift (macOS -> Linux) in same country -> MUST refuse 2FA bypass!
+    const osShift = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        {
+          headers: {
+            "cf-connecting-ip": freshIp(),
+            "user-agent": linuxUa,
+            "x-trust-device-token": trustToken1,
+          },
+        },
+      ),
+      cf: { asn: 45899, asOrganization: "VNPT", country: "VN", city: "Hanoi" },
+    });
+    expect(osShift.status).toBe(200);
+    expect(await osShift.json()).toMatchObject({ twoFactorRedirect: true });
+
+    // 3. Legitimate mobile/ISP roam within VN on macOS -> bypasses 2FA AND rotates token while keeping origExp!
+    const validRoam = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        {
+          headers: {
+            "cf-connecting-ip": freshIp(),
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/537.36",
+            "x-trust-device-token": trustToken1,
+          },
+        },
+      ),
+      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" },
+    });
+    expect(validRoam.status).toBe(200);
+    const roamBody = await validRoam.json<{ twoFactorRedirect?: boolean; user?: { id: string } }>();
+    expect(roamBody.twoFactorRedirect).toBeUndefined();
+    expect(roamBody.user?.id).toBe(userId);
+
+    const trustToken2 = validRoam.headers.get("set-trust-device-token") ?? "";
+    expect(trustToken2.length).toBeGreaterThan(30);
+    expect(trustToken2).not.toBe(trustToken1);
+    expect(cookiesOf(validRoam)).toContain(encodeURIComponent(trustToken2));
+
+    const afterExp = await env.DB.prepare("SELECT expires_at FROM trusted_device WHERE user_id = ?")
+      .bind(userId)
+      .first<number>("expires_at");
+    expect(afterExp).toBe(origExp);
+
+    // 4. Replaying old trustToken1 now fails to bypass 2FA, while trustToken2 works!
+    const replayOld = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        {
+          headers: {
+            "cf-connecting-ip": freshIp(),
+            "user-agent": macUa,
+            "x-trust-device-token": trustToken1,
+          },
+        },
+      ),
+      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" },
+    });
+    expect(await replayOld.json()).toMatchObject({ twoFactorRedirect: true });
+
+    const useRotated = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        {
+          headers: {
+            "cf-connecting-ip": freshIp(),
+            "user-agent": macUa,
+            "x-trust-device-token": trustToken2,
+          },
+        },
+      ),
+      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" },
+    });
+    expect((await useRotated.json<{ user?: { id: string } }>()).user?.id).toBe(userId);
+  });
+});
+
+describe("passkeys (WebAuthn / FIDO2)", () => {
+  it("registers a UV-required passkey, notifies user, lists/renames/deletes, signs in passwordlessly, and rejects UV=false", async () => {
+    const email = "pk-user@x.io";
+    const sentMail: Array<{ subject: string; text: string }> = [];
+    const bindings: Env = {
+      ...env,
+      MAIL: {
+        async send(msg: { subject: string; text: string }) {
+          sentMail.push(msg);
+        },
+      } as unknown as SendEmail,
+    };
+
+    const { userId, token } = await signUpVerified(email);
+
+    // 1. Generate registration options & reject UV=false authenticator.
+    const optsRes1 = await call(
+      "/api/auth/passkey/generate-register-options",
+      authed(token, { headers: { "cf-connecting-ip": freshIp() } }),
+      bindings,
+    );
+    expect(optsRes1.status).toBe(200);
+    const opts1 = await optsRes1.json<{ challenge: string; rp: { id: string } }>();
+    const challengeCookie1 = cookiesOf(optsRes1);
+
+    const noUv = await createVirtualPasskey({
+      challenge: opts1.challenge,
+      origin: "https://api.test",
+      rpId: opts1.rp.id,
+      userVerified: false,
+    });
+    const badVerify = await call(
+      "/api/auth/passkey/verify-registration",
+      authed(
+        token,
+        json(
+          { response: noUv.registrationResponse, name: "No UV Key" },
+          { headers: { "cf-connecting-ip": freshIp(), cookie: challengeCookie1 } },
+        ),
+      ),
+      bindings,
+    );
+    expect(badVerify.status).toBe(400);
+
+    // 2. Register a valid UV=true passkey -> succeeds + sends security alert!
+    const optsRes2 = await call(
+      "/api/auth/passkey/generate-register-options",
+      authed(token, { headers: { "cf-connecting-ip": freshIp() } }),
+      bindings,
+    );
+    const opts2 = await optsRes2.json<{ challenge: string; rp: { id: string } }>();
+    const challengeCookie2 = cookiesOf(optsRes2);
+
+    const { registrationResponse, authenticator } = await createVirtualPasskey({
+      challenge: opts2.challenge,
+      origin: "https://api.test",
+      rpId: opts2.rp.id,
+      userVerified: true,
+    });
+    const regRes = await call(
+      "/api/auth/passkey/verify-registration",
+      authed(
+        token,
+        json(
+          { response: registrationResponse, name: "MacBook TouchID", createSession: true },
+          { headers: { "cf-connecting-ip": freshIp(), cookie: challengeCookie2 } },
+        ),
+      ),
+      bindings,
+    );
+    expect(regRes.status).toBe(200);
+    const regBody = await regRes.json<{ id: string; name: string; session?: unknown }>();
+    expect(regBody.name).toBe("MacBook TouchID");
+    // `createSession` stripped so D1 never runs interactive transactions.
+    expect(regBody.session).toBeUndefined();
+    expect(sentMail.some((m) => /passkey/i.test(m.subject))).toBe(true);
+
+    // 3. List and rename passkey (rejecting >64 char names, and never leaking raw publicKey/credentialID).
+    const listRes = await call("/api/auth/passkey/list-user-passkeys", authed(token), bindings);
+    expect(listRes.status).toBe(200);
+    const listed = await listRes.json<Array<Record<string, unknown>>>();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.["publicKey"]).toBeUndefined();
+    expect(listed[0]?.["credentialID"]).toBeUndefined();
+    const passkeyId = String(listed[0]?.["id"] ?? "");
+
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/update-passkey",
+          authed(token, json({ id: passkeyId, name: "x".repeat(80) })),
+          bindings,
+        )
+      ).status,
+    ).toBe(400);
+
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/update-passkey",
+          authed(token, json({ id: passkeyId, name: "Work MacBook" })),
+          bindings,
+        )
+      ).status,
+    ).toBe(200);
+
+    // 4. Sign in passwordlessly with the passkey -> stamps signInProvider = "passkey" + twoFactorVerifiedAt, increments counter, and rejects UV=false assertion!
+    const authOptsRes1 = await call(
+      "/api/auth/passkey/generate-authenticate-options",
+      { headers: { "cf-connecting-ip": freshIp() } },
+      bindings,
+    );
+    expect(authOptsRes1.status).toBe(200);
+    const authOpts1 = await authOptsRes1.json<{ challenge: string; rpId: string }>();
+    const authCookie1 = cookiesOf(authOptsRes1);
+
+    const noUvAssertion = await authenticator.sign({
+      challenge: authOpts1.challenge,
+      origin: "https://api.test",
+      rpId: authOpts1.rpId,
+      userVerified: false,
+    });
+    const badAuth = await call(
+      "/api/auth/passkey/verify-authentication",
+      json(
+        { response: noUvAssertion },
+        { headers: { "cf-connecting-ip": freshIp(), cookie: authCookie1 } },
+      ),
+      bindings,
+    );
+    expect(badAuth.status).toBeGreaterThanOrEqual(400);
+
+    const authOptsRes2 = await call(
+      "/api/auth/passkey/generate-authenticate-options",
+      { headers: { "cf-connecting-ip": freshIp() } },
+      bindings,
+    );
+    const authOpts2 = await authOptsRes2.json<{ challenge: string; rpId: string }>();
+    const authCookie2 = cookiesOf(authOptsRes2);
+    const validAssertion = await authenticator.sign({
+      challenge: authOpts2.challenge,
+      origin: "https://api.test",
+      rpId: authOpts2.rpId,
+      userVerified: true,
+      counter: 2,
+    });
+    const authRes = await call(
+      "/api/auth/passkey/verify-authentication",
+      {
+        ...json(
+          { response: validAssertion },
+          { headers: { "cf-connecting-ip": freshIp(), cookie: authCookie2 } },
+        ),
+        cf: { asn: 45899, asOrganization: "VNPT", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    expect(authRes.status).toBe(200);
+    const pkBearer = authRes.headers.get("set-auth-token") ?? "";
+    expect(pkBearer.length).toBeGreaterThan(10);
+
+    const pkSess = await (await call("/api/auth/get-session", authed(pkBearer), bindings)).json<{
+      session: Record<string, unknown>;
+      user: { id: string };
+    }>();
+    expect(pkSess.user.id).toBe(userId);
+    expect(pkSess.session["signInProvider"]).toBe("passkey");
+    expect(typeof pkSess.session["twoFactorVerifiedAt"]).toBe("string");
+
+    expect(
+      await env.DB.prepare("SELECT counter FROM passkey WHERE id = ?")
+        .bind(passkeyId)
+        .first("counter"),
+    ).toBe(2);
+
+    // 5. Delete passkey succeeds on fresh session.
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/delete-passkey",
+          authed(pkBearer, json({ id: passkeyId })),
+          bindings,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM passkey WHERE userId = ?")
+        .bind(userId)
+        .first("n"),
+    ).toBe(0);
+  });
+
+  it("unlocks bootstrap admin on first passkey enrollment, blocks password-only admin from adding a 2nd rogue passkey, and enforces freshAge + 20-passkey cap + ban + rate limit", async () => {
+    const email = "pk-admin@x.io";
+    const { userId, token: firstPwToken } = await signUpVerified(email);
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+
+    // Un-enrolled password session needs 2FA (cannot hit /api/auth/admin/list-users yet).
+    expect((await call("/api/auth/admin/list-users", authed(firstPwToken))).status).toBe(403);
+    const meBefore = await (await call("/v1/me", authed(firstPwToken))).json<{
+      adminNeedsTwoFactor: boolean;
+    }>();
+    expect(meBefore.adminNeedsTwoFactor).toBe(true);
+
+    // Bootstrap admin has 0 passkeys -> CAN enroll their FIRST passkey, which upgrades the current session!
+    const genRes = await call(
+      "/api/auth/passkey/generate-register-options",
+      authed(firstPwToken, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    expect(genRes.status).toBe(200);
+    const genOpts = await genRes.json<{ challenge: string; rp: { id: string } }>();
+    const { registrationResponse, authenticator } = await createVirtualPasskey({
+      challenge: genOpts.challenge,
+      origin: "https://api.test",
+      rpId: genOpts.rp.id,
+    });
+    const verifyRes = await call(
+      "/api/auth/passkey/verify-registration",
+      authed(
+        firstPwToken,
+        json(
+          { response: registrationResponse, name: "Admin YubiKey" },
+          { headers: { "cf-connecting-ip": freshIp(), cookie: cookiesOf(genRes) } },
+        ),
+      ),
+    );
+    expect(verifyRes.status).toBe(200);
+
+    // Current session is immediately upgraded (signInProvider = 'passkey') -> admin routes unlock!
+    const meAfter = await (await call("/v1/me", authed(firstPwToken))).json<{
+      adminNeedsTwoFactor: boolean;
+    }>();
+    expect(meAfter.adminNeedsTwoFactor).toBe(false);
+    expect((await call("/api/auth/admin/list-users", authed(firstPwToken))).status).toBe(200);
+
+    // CRITICAL GUARD: Attacker steals admin's password and signs in via /sign-in/email.
+    // Because admin already has >= 1 passkey (and twoFactorEnabled = false):
+    //   1) Plain password session is blocked from /api/auth/admin/* (403)
+    //   2) Plain password session CANNOT register a 2nd rogue passkey (403)!
+    const leakedSignIn = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    const leakedPwToken = leakedSignIn.headers.get("set-auth-token") ?? "";
+    const unsignedLeakedToken = (await leakedSignIn.json<{ token: string }>()).token;
+    expect((await call("/api/auth/admin/list-users", authed(leakedPwToken))).status).toBe(403);
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/generate-register-options",
+          authed(leakedPwToken, { headers: { "cf-connecting-ip": freshIp() } }),
+        )
+      ).status,
+    ).toBe(403);
+    // [C-1] & [I-3]: Unsigned raw Bearer token from JSON body MUST NOT bypass hooks.before guards!
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/generate-register-options",
+          authed(unsignedLeakedToken, { headers: { "cf-connecting-ip": freshIp() } }),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (await call("/api/auth/passkey/list-user-passkeys", authed(unsignedLeakedToken))).status,
+    ).toBe(403);
+
+    // [I-2]: Password-backed admin with twoFactorEnabled=false cannot delete their ONLY passkey (400 LAST_ADMIN_FACTOR).
+    const pkId =
+      (await env.DB.prepare("SELECT id FROM passkey WHERE userId = ?")
+        .bind(userId)
+        .first<string>("id")) ?? "";
+    expect(
+      (await call("/api/auth/passkey/delete-passkey", authed(firstPwToken, json({ id: pkId }))))
+        .status,
+    ).toBe(400);
+
+    // Stale session (>15m freshAge) cannot rename or delete passkeys — even with unsigned bearer!
+    const staleIso = new Date(Date.now() - 20 * 60_000).toISOString();
+    await env.DB.prepare("UPDATE session SET createdAt = ? WHERE userId = ?")
+      .bind(staleIso, userId)
+      .run();
+    const unsignedStaleToken = firstPwToken.split(".")[0] ?? "";
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/update-passkey",
+          authed(unsignedStaleToken, json({ id: pkId, name: "Stale Rename" })),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/delete-passkey",
+          authed(unsignedStaleToken, json({ id: pkId })),
+        )
+      ).status,
+    ).toBe(403);
+
+    // Sign in freshly with Passkey -> succeeds and reaches /api/auth/admin/list-users!
+    const authGen = await call("/api/auth/passkey/generate-authenticate-options", {
+      headers: { "cf-connecting-ip": freshIp() },
+    });
+    const authOpts = await authGen.json<{ challenge: string; rpId: string }>();
+    const assertion = await authenticator.sign({
+      challenge: authOpts.challenge,
+      origin: "https://api.test",
+      rpId: authOpts.rpId,
+    });
+    const pkLogin = await call(
+      "/api/auth/passkey/verify-authentication",
+      json(
+        { response: assertion },
+        { headers: { "cf-connecting-ip": freshIp(), cookie: cookiesOf(authGen) } },
+      ),
+    );
+    expect(pkLogin.status).toBe(200);
+    const freshPkToken = pkLogin.headers.get("set-auth-token") ?? "";
+    expect((await call("/api/auth/admin/list-users", authed(freshPkToken))).status).toBe(200);
+
+    // 20-passkey per-user anti-bloat cap: seed 19 more passkeys (total 20) -> 21st registration refused (400).
+    for (let i = 2; i <= 20; i++) {
+      await env.DB.prepare(
+        `INSERT INTO passkey (id, name, publicKey, userId, credentialID, counter, deviceType, backedUp, createdAt)
+         VALUES (?, ?, 'pub', ?, ?, 0, 'singleDevice', 0, ?)`,
+      )
+        .bind(`pk-cap-${i}`, `Key ${i}`, userId, `cred-cap-${i}`, new Date().toISOString())
+        .run();
+    }
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/generate-register-options",
+          authed(freshPkToken, { headers: { "cf-connecting-ip": freshIp() } }),
+        )
+      ).status,
+    ).toBe(400);
+
+    // Banned user is rejected on Passkey authentication (403 BANNED_USER).
+    await env.DB.prepare("UPDATE user SET banned = 1 WHERE id = ?").bind(userId).run();
+    const banGen = await call("/api/auth/passkey/generate-authenticate-options", {
+      headers: { "cf-connecting-ip": freshIp() },
+    });
+    const banOpts = await banGen.json<{ challenge: string; rpId: string }>();
+    const banAssertion = await authenticator.sign({
+      challenge: banOpts.challenge,
+      origin: "https://api.test",
+      rpId: banOpts.rpId,
+    });
+    const banLogin = await call(
+      "/api/auth/passkey/verify-authentication",
+      json(
+        { response: banAssertion },
+        { headers: { "cf-connecting-ip": freshIp(), cookie: cookiesOf(banGen) } },
+      ),
+    );
+    expect(banLogin.status).toBe(403);
+
+    // Rate limit (AUTH_RL) guards GET /api/auth/passkey/generate-authenticate-options against verification table spam.
+    const rlIp = freshIp();
+    const limited = await firstLimited(() =>
+      call("/api/auth/passkey/generate-authenticate-options", {
+        headers: { "cf-connecting-ip": rlIp },
+      }),
+    );
+    expect(limited?.status).toBe(429);
   });
 });

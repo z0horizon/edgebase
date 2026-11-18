@@ -1,4 +1,5 @@
 import { expo } from "@better-auth/expo";
+import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { admin, bearer, captcha, oneTimeToken, organization, twoFactor } from "better-auth/plugins";
@@ -87,6 +88,23 @@ export function configuredProviders(env: Env) {
 /** TRUSTED_ORIGINS as a list: app schemes (`myapp://`) and web origins. */
 export const trustedOrigins = (env: Env) => env.TRUSTED_ORIGINS.split(",").map((o) => o.trim());
 
+/** Expected WebAuthn ceremony origins: BASE_URL origin, web TRUSTED_ORIGINS, plus optional PASSKEY_ORIGINS. */
+export function passkeyOrigins(env: Env): string[] {
+  const base = new URL(env.BASE_URL);
+  const extra = (env as { PASSKEY_ORIGINS?: string | undefined }).PASSKEY_ORIGINS ?? "";
+  return Array.from(
+    new Set([
+      base.origin,
+      ...(base.hostname === "localhost" ? ["http://localhost:5173"] : []),
+      ...trustedOrigins(env).filter((o) => o.startsWith("https://") || o.startsWith("http://")),
+      ...extra
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean),
+    ]),
+  );
+}
+
 const SOCIAL_PROVIDERS = new Set(["google", "apple", "github"]);
 
 /**
@@ -106,6 +124,17 @@ export function socialProviderOf(
       ? (ctx.body as { provider?: unknown } | undefined)?.provider
       : undefined;
   return typeof id === "string" && SOCIAL_PROVIDERS.has(id) ? id : null;
+}
+
+export function signInProviderOf(
+  ctx: {
+    path?: string | undefined;
+    params?: Record<string, string | undefined> | undefined;
+    body?: unknown;
+  } | null,
+): string | null {
+  if (ctx?.path === "/passkey/verify-authentication") return "passkey";
+  return socialProviderOf(ctx);
 }
 
 export function twoFactorMethodOf(
@@ -129,8 +158,10 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
     matchedDevice: null,
     bridgeTrustId: null,
     hadTrustCookie: false,
+    matchedAnomaly: false,
     hadTwoFactorCookie: false,
     requestedTrustDevice: false,
+    bootstrapAdminPasskeySessionId: null,
   };
   const mail = (to: string, subject: string, text: string) => {
     ctx.waitUntil(sendMail(env, { to, subject, text }));
@@ -215,15 +246,19 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
             const existing = session as Record<string, unknown>;
             const ip = net.ipAddress ?? session.ipAddress ?? null;
             const freshMethod = twoFactorMethodOf(hookCtx, securityState, session.userId);
+            const provider = signInProviderOf(hookCtx) ?? pickStr(existing, "signInProvider");
+            const isPasskeyVerify = hookCtx?.path === "/passkey/verify-authentication";
             const disabled2fa = hookCtx?.path === "/two-factor/disable";
             const method = disabled2fa
               ? null
               : (freshMethod ?? pickStr(existing, "twoFactorMethod"));
             const verifiedAt = disabled2fa
-              ? null
-              : freshMethod
+              ? provider === "passkey"
+                ? pickStr(existing, "twoFactorVerifiedAt")
+                : null
+              : freshMethod || isPasskeyVerify
                 ? nowIso
-                : method
+                : method || provider === "passkey"
                   ? pickStr(existing, "twoFactorVerifiedAt")
                   : null;
             return {
@@ -231,7 +266,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
                 ...session,
                 ipAddress: ip,
                 userAgent: net.userAgent ?? session.userAgent ?? null,
-                signInProvider: socialProviderOf(hookCtx) ?? pickStr(existing, "signInProvider"),
+                signInProvider: provider,
                 asn: net.asn,
                 asOrganization: net.asOrganization,
                 country: net.country,
@@ -336,6 +371,16 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
       admin(),
       // TOTP and backup codes for email + password sign-in; the authenticator app shows the API host.
       twoFactor({ issuer: new URL(env.BASE_URL).hostname }),
+      // Hardware/platform WebAuthn credentials with mandatory biometric/PIN user verification.
+      passkey({
+        rpName: "EdgeBase",
+        rpID: new URL(env.BASE_URL).hostname,
+        origin: passkeyOrigins(env),
+        authenticatorSelection: {
+          residentKey: "preferred",
+          userVerification: "required",
+        },
+      }),
       edgebaseSecurityPlugin(env, ctx, net, securityState),
       organization({
         // Bounds organization and member rows per user; pending invitations are capped at 100 per

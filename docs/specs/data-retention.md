@@ -24,6 +24,7 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 | `push_open` | `DB` | its push's stats row is due for deletion, or the user is deleted | `push_stats_send_at` + primary key, `push_open_user_id` |
 | `push_stats` | `DB` | `send_at` older than 90 days and no opens left | `push_stats_send_at` |
 | `push_template` | `DB` | capped at 500 rows on write (`PUT` answers `409`) | primary key |
+| `passkey` | `DB` | cascade with the user; capped at 20 rows per user on write (`400`) | `passkey_user_id`, `passkey_credential_id` |
 | `twoFactor`, `member` | `DB` | cascade with the user (one 2FA row per user; ≤ 10 memberships) | `two_factor_user_id`, `member_user_id` |
 | `organization` | `DB` | trigger when its last member is deleted | `member_organization_id` |
 
