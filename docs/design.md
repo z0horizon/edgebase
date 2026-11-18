@@ -9,7 +9,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
  Web (cookie) ────┐
  Expo (bearer) ───┼──▶ Worker (Hono, packages/core/src/app.ts)
  Flutter (bearer) ┘     ├─ /api/auth/*        Better Auth                         packages/core/src/auth/
-                        ├─ /v1/me, /v1/auth/app-callback                          (user)
+                        ├─ /v1/me, /v1/sessions, /v1/trusted-devices, /v1/auth/app-callback (user)
                         ├─ /v1/devices        FCM token registration              packages/core/src/push/devices.ts (user)
                         ├─ /v1/inbox/*        inbox                               packages/core/src/inbox/ (user)
                         ├─ /v1/opens, /v1/topics/*  open reports, web topics      packages/core/src/push/stats.ts, topics.ts (user)
@@ -25,7 +25,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
 
 | Binding | Kind | Holds |
 |---|---|---|
-| `DB` | D1 `edgebase-db` | Better Auth tables (incl. admin, twoFactor, organization), `device`, `scheduled_push`, `push_stats`, `push_open`, `push_template`, `push_idempotency` |
+| `DB` | D1 `edgebase-db` | Better Auth tables (incl. admin, twoFactor, organization), `trusted_device`, `device`, `scheduled_push`, `push_stats`, `push_open`, `push_template`, `push_idempotency` |
 | `INBOX_DB` | D1 `edgebase-inbox` | `inbox_item`, `broadcast`, `inbox_state`, `inbox_push` |
 | `PUSH_QUEUE` | Queue `edgebase-push` | push messages (producer and consumer) |
 | `PUSH_DLQ` | Queue `edgebase-push-dlq` | pushes that failed 5 attempts |

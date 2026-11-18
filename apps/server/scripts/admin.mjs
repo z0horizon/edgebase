@@ -41,20 +41,27 @@ export function adminStatements({
   const at = sql(new Date(now).toISOString());
   const id = userId ?? ids.user;
   const user = userId
-    ? `UPDATE user SET role = 'admin', emailVerified = 1, banned = 0, updatedAt = ${at} WHERE id = ${sql(id)}`
-    : `INSERT INTO user (id, name, email, emailVerified, role, createdAt, updatedAt) VALUES (${sql(id)}, ${sql(email.split("@")[0])}, ${sql(email)}, 1, 'admin', ${at}, ${at})`;
+    ? `UPDATE user SET role = 'admin', emailVerified = 1, banned = 0, passwordChangedAt = ${at}, updatedAt = ${at} WHERE id = ${sql(id)}`
+    : `INSERT INTO user (id, name, email, emailVerified, role, passwordChangedAt, createdAt, updatedAt) VALUES (${sql(id)}, ${sql(email.split("@")[0])}, ${sql(email)}, 1, 'admin', ${at}, ${at}, ${at})`;
   const reset =
     resetTwoFactor && userId
       ? [
-          `UPDATE user SET twoFactorEnabled = 0 WHERE id = ${sql(id)}`,
+          `UPDATE user SET twoFactorEnabled = 0, twoFactorEnabledAt = NULL WHERE id = ${sql(id)}`,
           `DELETE FROM twoFactor WHERE userId = ${sql(id)}`,
         ]
       : [];
+  const revoke = userId
+    ? [
+        `DELETE FROM session WHERE userId = ${sql(id)}`,
+        `DELETE FROM trusted_device WHERE user_id = ${sql(id)}`,
+      ]
+    : [];
   return [
     user,
     ...reset,
     `DELETE FROM account WHERE userId = ${sql(id)} AND providerId = 'credential'`,
     `INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (${sql(ids.account)}, ${sql(id)}, 'credential', ${sql(id)}, ${sql(hash)}, ${at}, ${at})`,
+    ...revoke,
   ];
 }
 

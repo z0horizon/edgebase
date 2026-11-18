@@ -123,8 +123,10 @@ other calls (`/v1/push`, `/v1/templates`) stay guarded by the admin session and 
   Firebase JS SDK cannot.
 - On a notification tap, apps send `POST /v1/opens { pushId }` with the push's `data.pushId`.
 - 2FA: a sign-in answering `{ twoFactorRedirect: true }` sets a short-lived `better-auth.two_factor`
-  cookie; send it back with `POST /api/auth/two-factor/verify-totp { code }` (or
-  `verify-backup-code`). Expo's client keeps it; Flutter must store and resend that cookie.
+  cookie; send it back with `POST /api/auth/two-factor/verify-totp { code, trustDevice? }` (or
+  `verify-backup-code`). Expo's client keeps cookies; Flutter must store and resend the `two_factor`
+  cookie, and when `trustDevice: true` is used, store the `Set-Trust-Device-Token` header and send
+  it as `X-Trust-Device-Token` on later `POST /api/auth/sign-in/email` calls.
 
 Calls that keep requests (the cost that grows with users) low:
 

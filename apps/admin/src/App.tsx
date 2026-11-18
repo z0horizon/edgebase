@@ -1,5 +1,5 @@
 import { BellRing, FileText, KeyRound, Layers, LogOut, Send, Users } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,13 +8,18 @@ import { api, type Me, type User } from "@/lib/api";
 import { takeOAuthError } from "@/lib/oauth";
 import { clearSessionDrafts, viewKeyFromHash } from "@/lib/state";
 import { cn } from "@/lib/utils";
-import { AccountPage } from "./pages/Account";
-import { PushesPage } from "./pages/Pushes";
-import { SendPage } from "./pages/Send";
 import { SignIn } from "./pages/SignIn";
-import { TemplatesPage } from "./pages/Templates";
-import { TwoFactorSetup } from "./pages/TwoFactorSetup";
-import { UsersPage } from "./pages/Users";
+
+const AccountPage = lazy(() => import("./pages/Account").then((m) => ({ default: m.AccountPage })));
+const PushesPage = lazy(() => import("./pages/Pushes").then((m) => ({ default: m.PushesPage })));
+const SendPage = lazy(() => import("./pages/Send").then((m) => ({ default: m.SendPage })));
+const TemplatesPage = lazy(() =>
+  import("./pages/Templates").then((m) => ({ default: m.TemplatesPage })),
+);
+const TwoFactorSetup = lazy(() =>
+  import("./pages/TwoFactorSetup").then((m) => ({ default: m.TwoFactorSetup })),
+);
+const UsersPage = lazy(() => import("./pages/Users").then((m) => ({ default: m.UsersPage })));
 
 const VIEWS = {
   users: { label: "Users", icon: Users, page: UsersPage },
@@ -81,10 +86,10 @@ export function App() {
   }
   if (me.adminNeedsTwoFactor) {
     return (
-      <>
+      <Suspense fallback={null}>
         <TwoFactorSetup email={me.email} onDone={loadSession} onSignOut={signOut} />
         <Toaster />
-      </>
+      </Suspense>
     );
   }
   const Page = VIEWS[view].page;
@@ -169,7 +174,9 @@ export function App() {
         </div>
       </aside>
       <main className="mx-auto w-full max-w-6xl p-4 sm:p-6 md:p-8 lg:py-10">
-        <Page me={me} />
+        <Suspense fallback={<Skeleton className="h-48 w-full rounded-xl" />}>
+          <Page me={me} />
+        </Suspense>
       </main>
       <Toaster />
     </div>

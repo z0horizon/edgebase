@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { appCallback, appExchange } from "./auth/app-callback";
 import {
@@ -11,12 +12,19 @@ import {
 } from "./auth/auth";
 import {
   authRateLimit,
+  requireAdminConsole,
   requireAdminTwoFactor,
   requireApiKey,
   requireAuthConfig,
   requireUser,
   topicRateLimit,
 } from "./auth/middleware";
+import {
+  adminSessionRoutes,
+  sessionSecurityRoutes,
+  trustedDeviceRoutes,
+} from "./auth/security-routes";
+import { SET_TRUST_DEVICE_HEADER, TRUST_DEVICE_HEADER } from "./auth/trusted-devices";
 import { jsonError } from "./http";
 import { inboxRoutes } from "./inbox/routes";
 import { deviceRoutes } from "./push/devices";
@@ -24,6 +32,8 @@ import { pushRoutes } from "./push/routes";
 import { openRoutes } from "./push/stats";
 import { templateRoutes } from "./push/templates";
 import { topicRoutes } from "./push/topics";
+
+const MAX_BODY_BYTES = 64 * 1024;
 
 export type AppEnv = {
   Bindings: Env;
@@ -43,10 +53,19 @@ app.use("*", (c, next) =>
         : null,
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["content-type", "authorization", "x-captcha-response"],
-    exposeHeaders: ["set-auth-token"],
+    allowHeaders: ["content-type", "authorization", "x-captcha-response", TRUST_DEVICE_HEADER],
+    exposeHeaders: ["set-auth-token", SET_TRUST_DEVICE_HEADER],
     maxAge: 600,
   })(c, next),
+);
+
+// Rejects oversized request bodies early before JSON buffering into the 128 MB Worker isolate.
+app.use(
+  "*",
+  bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: () => jsonError(413, "payload_too_large", "Request body too large"),
+  }),
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
@@ -74,14 +93,34 @@ app.on(
 );
 // Native apps redeem one-time tokens only through /v1/auth/app-exchange, which checks the verifier.
 app.post("/api/auth/one-time-token/verify", () => jsonError(404, "not_found", "Route not found"));
+// Better Auth's session list endpoints include raw `session.token` bearer secrets; callers use
+// token-free `/v1/sessions` and `/v1/admin/users/:userId/sessions` instead.
+app.get("/api/auth/list-sessions", () => jsonError(404, "not_found", "Route not found"));
+app.post("/api/auth/admin/list-user-sessions", () =>
+  jsonError(404, "not_found", "Route not found"),
+);
 app.use("/api/auth/admin/*", requireAdminTwoFactor);
-app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env, c.executionCtx).handler(c.req.raw));
+app.on(["GET", "POST"], "/api/auth/*", (c) =>
+  createAuth(c.env, c.executionCtx, c.req.raw).handler(c.req.raw),
+);
 
 // User routes take a session; /v1/push takes the server API key instead.
 // app-callback checks its own session so it can redirect failures back to the app.
-for (const path of ["/v1/me", "/v1/devices/*", "/v1/inbox/*", "/v1/opens", "/v1/topics/*"]) {
+for (const path of [
+  "/v1/me",
+  "/v1/sessions",
+  "/v1/sessions/*",
+  "/v1/trusted-devices",
+  "/v1/trusted-devices/*",
+  "/v1/admin/*",
+  "/v1/devices/*",
+  "/v1/inbox/*",
+  "/v1/opens",
+  "/v1/topics/*",
+]) {
   app.use(path, requireAuthConfig, requireUser);
 }
+app.use("/v1/admin/*", requireAdminConsole);
 // Each topic change is one Instance ID request against the project's quota.
 app.use("/v1/topics/*", topicRateLimit);
 for (const path of ["/v1/push/*", "/v1/templates/*"]) app.use(path, requireApiKey);
@@ -103,6 +142,9 @@ app.get("/v1/auth/providers", (c) =>
 );
 app.get("/v1/auth/app-callback", appCallback);
 app.post("/v1/auth/app-exchange", appExchange);
+app.route("/v1/sessions", sessionSecurityRoutes);
+app.route("/v1/trusted-devices", trustedDeviceRoutes);
+app.route("/v1/admin/users", adminSessionRoutes);
 app.route("/v1/devices", deviceRoutes);
 app.route("/v1/inbox", inboxRoutes);
 

@@ -1,6 +1,6 @@
 import { expo } from "@better-auth/expo";
 import { betterAuth } from "better-auth";
-import { createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { admin, bearer, captcha, oneTimeToken, organization, twoFactor } from "better-auth/plugins";
 import * as v from "valibot";
 import { deleteUserInbox } from "../inbox/queries";
@@ -8,8 +8,55 @@ import { sendMail } from "../mail";
 import { deleteUserOpens } from "../push/stats";
 import { LocaleSchema } from "../push/types";
 import { bindAppCallback } from "./app-callback";
+import { type ClientNetwork, extractClientNetwork } from "./network";
+import {
+  edgebaseSecurityPlugin,
+  type RequestSecurityState,
+  revokeAllTrustedDevices,
+  type TwoFactorMethod,
+  wipeCredentialsState,
+} from "./trusted-devices";
 
 const DAY_SECONDS = 86_400;
+const FRESH_SESSION_SECONDS = 15 * 60;
+
+const UserPatchSchema = v.object({
+  name: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(120))),
+  email: v.optional(v.pipe(v.string(), v.minLength(3), v.maxLength(254))),
+  image: v.optional(v.nullable(v.pipe(v.string(), v.maxLength(2048)))),
+  banReason: v.optional(v.nullable(v.pipe(v.string(), v.maxLength(500)))),
+});
+
+const OrgPatchSchema = v.object({
+  name: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(120))),
+  slug: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(64))),
+  logo: v.optional(v.nullable(v.pipe(v.string(), v.maxLength(2048)))),
+});
+
+function assertValidPatch<S extends v.GenericSchema>(schema: S, data: unknown): void {
+  const parsed = v.safeParse(schema, data);
+  if (!parsed.success) {
+    throw new APIError("BAD_REQUEST", { message: v.summarize(parsed.issues) });
+  }
+}
+
+function assertBoundedOrg(data: Record<string, unknown> | undefined): void {
+  if (!data) return;
+  assertValidPatch(OrgPatchSchema, data);
+  const meta = data["metadata"];
+  if (meta !== undefined && meta !== null) {
+    const serialized = typeof meta === "string" ? meta : JSON.stringify(meta);
+    if (serialized.length > 4096) {
+      throw new APIError("BAD_REQUEST", { message: "Organization metadata exceeds 4 KB" });
+    }
+  }
+}
+
+const pickStr = (obj: Record<string, unknown>, key: string): string | null =>
+  typeof obj[key] === "string" ? (obj[key] as string) : null;
+
+const pickNum = (obj: Record<string, unknown>, key: string): number | null =>
+  typeof obj[key] === "number" ? (obj[key] as number) : null;
 
 const has = (...values: (string | undefined)[]) => values.every((value) => value?.trim());
 
@@ -61,8 +108,30 @@ export function socialProviderOf(
   return typeof id === "string" && SOCIAL_PROVIDERS.has(id) ? id : null;
 }
 
+export function twoFactorMethodOf(
+  ctx: { path?: string | undefined } | null,
+  state: RequestSecurityState,
+  userId: string,
+): TwoFactorMethod | null {
+  if (ctx?.path === "/two-factor/verify-totp") return "totp";
+  if (ctx?.path === "/two-factor/verify-backup-code") return "backup_code";
+  if (ctx?.path === "/sign-in/email" && state.trustedDeviceUserId === userId) {
+    return "trusted_device";
+  }
+  return null;
+}
+
 /** Built per request: bindings only exist once a request arrives. */
-export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
+export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, req?: Request) {
+  const net: ClientNetwork = extractClientNetwork(req);
+  const securityState: RequestSecurityState = {
+    trustedDeviceUserId: null,
+    matchedDevice: null,
+    bridgeTrustId: null,
+    hadTrustCookie: false,
+    hadTwoFactorCookie: false,
+    requestedTrustDevice: false,
+  };
   const mail = (to: string, subject: string, text: string) => {
     ctx.waitUntil(sendMail(env, { to, subject, text }));
   };
@@ -72,11 +141,19 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     baseURL: env.BASE_URL,
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: trustedOrigins(env),
+    advanced: {
+      ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
       sendResetPassword: async ({ user, url }) =>
         mail(user.email, "Reset your password", `Reset your password: ${url}`),
+      onPasswordReset: async ({ user }) => {
+        await wipeCredentialsState(env.DB, user.id, {
+          passwordChangedAt: new Date().toISOString(),
+        });
+      },
     },
     emailVerification: {
       sendOnSignUp: true,
@@ -88,7 +165,22 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     session: {
       expiresIn: 30 * DAY_SECONDS,
       updateAge: DAY_SECONDS,
-      additionalFields: { signInProvider: { type: "string", required: false, input: false } },
+      freshAge: FRESH_SESSION_SECONDS,
+      additionalFields: {
+        signInProvider: { type: "string", required: false, input: false },
+        asn: { type: "number", required: false, input: false },
+        asOrganization: { type: "string", required: false, input: false },
+        country: { type: "string", required: false, input: false },
+        city: { type: "string", required: false, input: false },
+        createdIp: { type: "string", required: false, input: false },
+        createdAsn: { type: "number", required: false, input: false },
+        createdAsOrganization: { type: "string", required: false, input: false },
+        createdCountry: { type: "string", required: false, input: false },
+        createdCity: { type: "string", required: false, input: false },
+        lastActiveAt: { type: "string", required: false, input: false },
+        twoFactorMethod: { type: "string", required: false, input: false },
+        twoFactorVerifiedAt: { type: "string", required: false, input: false },
+      },
     },
     // Its built-in limiter is per-isolate memory; AUTH_RL in middleware does this job.
     rateLimit: { enabled: false },
@@ -96,18 +188,20 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
       additionalFields: {
         marketingOptIn: { type: "boolean", required: false, defaultValue: false },
         locale: { type: "string", required: false, validator: { input: v.nullable(LocaleSchema) } },
+        twoFactorEnabledAt: { type: "string", required: false, input: false },
+        passwordChangedAt: { type: "string", required: false, input: false },
       },
       deleteUser: { enabled: true },
     },
     hooks: {
-      after: createAuthMiddleware(async (ctx) => {
-        if (!ctx.path.startsWith("/callback/")) return;
-        const sessionId = ctx.context.newSession?.session.id;
+      after: createAuthMiddleware(async (hookCtx) => {
+        if (!hookCtx.path.startsWith("/callback/")) return;
+        const sessionId = hookCtx.context.newSession?.session.id;
         if (!sessionId) return;
         await bindAppCallback(
           env,
           sessionId,
-          ctx.context.responseHeaders?.get("location"),
+          hookCtx.context.responseHeaders?.get("location"),
           Date.now(),
         );
       }),
@@ -116,8 +210,56 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     databaseHooks: {
       session: {
         create: {
-          before: async (session, ctx) => ({
-            data: { ...session, signInProvider: socialProviderOf(ctx) },
+          before: async (session, hookCtx) => {
+            const nowIso = new Date().toISOString();
+            const existing = session as Record<string, unknown>;
+            const ip = net.ipAddress ?? session.ipAddress ?? null;
+            const freshMethod = twoFactorMethodOf(hookCtx, securityState, session.userId);
+            const disabled2fa = hookCtx?.path === "/two-factor/disable";
+            const method = disabled2fa
+              ? null
+              : (freshMethod ?? pickStr(existing, "twoFactorMethod"));
+            const verifiedAt = disabled2fa
+              ? null
+              : freshMethod
+                ? nowIso
+                : method
+                  ? pickStr(existing, "twoFactorVerifiedAt")
+                  : null;
+            return {
+              data: {
+                ...session,
+                ipAddress: ip,
+                userAgent: net.userAgent ?? session.userAgent ?? null,
+                signInProvider: socialProviderOf(hookCtx) ?? pickStr(existing, "signInProvider"),
+                asn: net.asn,
+                asOrganization: net.asOrganization,
+                country: net.country,
+                city: net.city,
+                createdIp: pickStr(existing, "createdIp") ?? ip,
+                createdAsn: pickNum(existing, "createdAsn") ?? net.asn,
+                createdAsOrganization:
+                  pickStr(existing, "createdAsOrganization") ?? net.asOrganization,
+                createdCountry: pickStr(existing, "createdCountry") ?? net.country,
+                createdCity: pickStr(existing, "createdCity") ?? net.city,
+                lastActiveAt: nowIso,
+                twoFactorMethod: method,
+                twoFactorVerifiedAt: verifiedAt,
+              },
+            };
+          },
+        },
+        update: {
+          before: async (updatePayload) => ({
+            data: {
+              ...updatePayload,
+              ...(net.ipAddress !== null && { ipAddress: net.ipAddress }),
+              ...(net.asn !== null && { asn: net.asn }),
+              ...(net.asOrganization !== null && { asOrganization: net.asOrganization }),
+              ...(net.country !== null && { country: net.country }),
+              ...(net.city !== null && { city: net.city }),
+              lastActiveAt: new Date().toISOString(),
+            },
           }),
         },
       },
@@ -126,21 +268,57 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
           // A social session skips TOTP, so a provider account may join an admin only from that
           // admin's own session that already passed two-factor (link-social), never by matching
           // email at sign-in: owning the inbox, or the password alone, must not reach admin features.
-          before: async (account, ctx) => {
+          before: async (account, hookCtx) => {
             if (account.providerId === "credential") return;
             const role = await env.DB.prepare("SELECT role FROM user WHERE id = ?")
               .bind(account.userId)
               .first<string | null>("role");
             if (role !== "admin") return;
-            if (!ctx) return false;
-            const current = await getSessionFromCtx<SessionUser, Session["session"]>(ctx, {
+            if (!hookCtx) return false;
+            const current = await getSessionFromCtx<SessionUser, Session["session"]>(hookCtx, {
               disableRefresh: true,
             }).catch(() => null);
             if (current?.user.id !== account.userId || adminNeedsTwoFactor(current)) return false;
           },
+          after: async (account) => {
+            if (account.providerId === "credential" && account.password) {
+              await env.DB.prepare("UPDATE user SET passwordChangedAt = ? WHERE id = ?")
+                .bind(new Date().toISOString(), account.userId)
+                .run();
+            }
+          },
         },
       },
       user: {
+        create: {
+          before: async (user) => {
+            assertValidPatch(UserPatchSchema, user);
+          },
+        },
+        update: {
+          before: async (user) => {
+            assertValidPatch(UserPatchSchema, user);
+          },
+          after: async (user) => {
+            const u = user as { banned?: boolean | null; twoFactorEnabled?: boolean | null };
+            if (u.twoFactorEnabled === false) {
+              await env.DB.batch([
+                env.DB.prepare("UPDATE user SET twoFactorEnabledAt = NULL WHERE id = ?").bind(
+                  user.id,
+                ),
+                env.DB.prepare("DELETE FROM twoFactor WHERE userId = ?").bind(user.id),
+                env.DB.prepare("DELETE FROM trusted_device WHERE user_id = ?").bind(user.id),
+                env.DB.prepare(
+                  "DELETE FROM verification WHERE identifier GLOB 'trust-device-*' AND value = ?",
+                ).bind(user.id),
+              ]);
+              return;
+            }
+            if (u.banned) {
+              await revokeAllTrustedDevices(env.DB, user.id);
+            }
+          },
+        },
         delete: {
           after: async (user) => {
             await Promise.all([
@@ -154,21 +332,29 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
     plugins: [
       bearer(),
       oneTimeToken({ disableClientRequest: true, storeToken: "hashed" }),
-      expo(),
       // Roles: "user" (default) and "admin"; the first admin is set in D1 (see docs/deployment.md).
       admin(),
       // TOTP and backup codes for email + password sign-in; the authenticator app shows the API host.
       twoFactor({ issuer: new URL(env.BASE_URL).hostname }),
+      edgebaseSecurityPlugin(env, ctx, net, securityState),
       organization({
         // Bounds organization and member rows per user; pending invitations are capped at 100 per
         // organization by default and expire after 48 h.
         organizationLimit: 10,
         membershipLimit: 100,
-        sendInvitationEmail: async ({ id, email, organization, inviter }) =>
+        organizationHooks: {
+          beforeCreateOrganization: async ({ organization: org }) => {
+            assertBoundedOrg(org as Record<string, unknown>);
+          },
+          beforeUpdateOrganization: async ({ organization: org }) => {
+            assertBoundedOrg(org as Record<string, unknown>);
+          },
+        },
+        sendInvitationEmail: async ({ id, email, organization: org, inviter }) =>
           mail(
             email,
-            `Join ${organization.name}`,
-            `${inviter.user.name} invited you to ${organization.name}. Open the app to accept: ${env.APP_SCHEME}://invitation?id=${id}`,
+            `Join ${org.name}`,
+            `${inviter.user.name} invited you to ${org.name}. Open the app to accept: ${env.APP_SCHEME}://invitation?id=${id}`,
           ),
       }),
       // Off until a key is set: the per-IP rate limit covers one machine, Turnstile covers botnets
@@ -182,6 +368,8 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">) {
             }),
           ]
         : []),
+      // Kept last so its after-hook observes cookies emitted by earlier plugins.
+      expo(),
     ],
   });
 }

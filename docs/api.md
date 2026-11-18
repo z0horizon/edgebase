@@ -22,10 +22,12 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `invalid_body`, `invalid_header`, `invalid_cursor`, `invalid_limit` | input failed validation |
+| 400 | `invalid_body`, `invalid_header`, `invalid_cursor`, `invalid_limit`, `invalid_param` | input failed validation |
 | 401 | `unauthorized` | no valid session or API key |
+| 403 | `forbidden`, `forbidden_origin`, `two_factor_required` | missing admin role, untrusted cookie origin, or admin password session without TOTP |
 | 404 | `not_found` | unknown route or resource |
 | 409 | `idempotency_in_progress`, `limit_reached` | key still running; template cap reached |
+| 413 | `payload_too_large` | request body exceeds 64 KB |
 | 422 | `idempotency_mismatch` | `Idempotency-Key` reused with another body |
 | 429 | `rate_limited` | auth rate limit hit |
 | 500 | `internal` | unexpected error |
@@ -39,6 +41,15 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | GET | `/health` | none | liveness, answers `{ "ok": true }` |
 | ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, verify email, reset password, delete user, update user, admin, two-factor, organization |
 | GET | `/v1/me` | user | the signed-in user |
+| GET | `/v1/sessions` | user | list active sessions of the caller (without raw tokens or `freshAge` lockout) |
+| DELETE | `/v1/sessions/{id}` | user | revoke one session of the caller by opaque id |
+| POST | `/v1/sessions/revoke-others` | user | revoke all other sessions of the caller |
+| GET | `/v1/trusted-devices` | user | list active 30-day 2FA trusted devices of the caller |
+| DELETE | `/v1/trusted-devices/{id}` | user | revoke one trusted device of the caller |
+| DELETE | `/v1/trusted-devices` | user | revoke all trusted devices of the caller |
+| GET | `/v1/admin/users/{userId}/sessions` | admin | list active sessions of a user without exposing raw tokens |
+| DELETE | `/v1/admin/users/{userId}/sessions/{sessionId}` | admin | revoke one session of a user |
+| DELETE | `/v1/admin/users/{userId}/sessions` | admin | revoke all sessions and trusted devices of a user |
 | PUT | `/v1/devices` | user | register this device's FCM token |
 | DELETE | `/v1/devices/{token}` | user | unregister a token of the caller |
 | GET | `/v1/inbox` | user | list inbox items, newest first |
@@ -65,9 +76,26 @@ Better Auth's endpoints are documented at https://www.better-auth.com/docs; see
 
 ### `GET /v1/me`
 Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `marketingOptIn`,
-`locale`, `role`, `banned`, `banReason`, `banExpires`, `twoFactorEnabled`, `createdAt`,
-`updatedAt`, and `adminNeedsTwoFactor`: true for an admin whose session must set up TOTP before
-admin features (a password session without it). `401` without a session.
+`locale`, `role`, `banned`, `banReason`, `banExpires`, `twoFactorEnabled`, `twoFactorEnabledAt`,
+`passwordChangedAt`, `createdAt`, `updatedAt`, and `adminNeedsTwoFactor`: true for an admin whose
+session must set up TOTP before admin features (a password session without it). `401` without a session.
+
+### Sessions & trusted devices
+Active sessions are inspected and revoked through `/v1/sessions` (works throughout the 30-day
+session lifetime without the 15-minute `freshAge` gate and never exposes raw session tokens):
+
+- `GET /v1/sessions` → `{ "sessions": [{ id, userId, ipAddress, userAgent, asn, asOrganization, country, city, createdIp, createdAsn, createdAsOrganization, createdCountry, createdCity, lastActiveAt, signInProvider, twoFactorMethod, twoFactorVerifiedAt, createdAt, updatedAt, expiresAt, current }] }`.
+- `DELETE /v1/sessions/{id}` → `204`, or `404` when unknown or owned by another user.
+- `POST /v1/sessions/revoke-others` → `204` (revokes every session of the caller except the current one).
+
+Passing `trustDevice: true` to `POST /api/auth/two-factor/verify-totp` or `/verify-backup-code`
+during sign-in records a 30-day trusted device in D1 (capped at 20 per user), sets an `HttpOnly`
+cookie for web clients, and exposes `Set-Trust-Device-Token` for native apps (send back as
+`X-Trust-Device-Token` on `POST /api/auth/sign-in/email`).
+
+- `GET /v1/trusted-devices` → `{ "devices": [{ id, userAgent, ipAddress, asn, asOrganization, country, city, createdIp, createdAsn, createdCountry, createdAt, lastUsedAt, expiresAt, current }] }`.
+- `DELETE /v1/trusted-devices/{id}` → `204`, or `404` when unknown or owned by another user.
+- `DELETE /v1/trusted-devices` → `204` (revokes every trusted device of the caller).
 
 ### Admin, two-factor, organizations
 Better Auth's `admin`, `twoFactor` and `organization` plugin routes under `/api/auth/admin/*`,
@@ -90,8 +118,8 @@ Body `{ "token": ott, "verifier": string (43–128 chars) }` → `200 { "token":
 ## CORS
 
 Browsers from an `http(s)://` origin listed in `TRUSTED_ORIGINS` get CORS with credentials,
-methods `GET POST PUT DELETE OPTIONS`, headers `content-type, authorization, x-captcha-response`, and the
-`set-auth-token` response header exposed. Other origins get no CORS headers.
+methods `GET POST PUT DELETE OPTIONS`, headers `content-type, authorization, x-captcha-response, x-trust-device-token`, and the
+`set-auth-token` and `set-trust-device-token` response headers exposed. Other origins get no CORS headers.
 
 ## Devices
 

@@ -66,7 +66,7 @@ Without any push, a signed-in user costs:
 | Source | Cost |
 |---|---|
 | Each API call (`GET /v1/inbox`, `unread-count`, …) | 1 Worker request, a few ms CPU, a few dozen rows read (session, user, inbox page) |
-| Session refresh, at most once a day (`updateAge` in `packages/core/src/auth/auth.ts`) | ~2 writes (row and `session_expires_at` index) |
+| Session refresh, at most once a day (`updateAge` in `packages/core/src/auth/auth.ts`) | ~2 writes (row and `session_expires_at` index); `lastActiveAt` / current network updates in the background at most once per 15 min of activity or on ASN/country shift (1 unindexed row write) |
 | Device refresh, at most once every 7 days per device | ~2 writes (row and `device_updated_at` index) |
 
 Rows read are cheap: 25B a month cover ~800M reads of a few dozen rows. Requests and the daily
@@ -115,6 +115,6 @@ Mitigations, in order of effect:
 - Every row written costs one extra write per index it touches; deletes count as writes.
 - `inbox_item` uses an integer rowid key (2 writes per insert); a TEXT key would add an
   automatic index (3 writes).
-- Device upserts write only on change or after 7 days; sessions write at most once a day.
+- Device upserts write only on change or after 7 days; session expiry refreshes at most once a day, and `lastActiveAt` touches are throttled to 15 minutes (or ASN/country changes).
 - Broadcasts write one row, never one per user; "read all" is one write.
 - An open is stored once per user and push (`INSERT OR IGNORE`), so repeated reports write nothing.

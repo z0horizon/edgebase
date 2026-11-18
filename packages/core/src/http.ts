@@ -6,11 +6,16 @@ export function jsonError(status: ContentfulStatusCode, code: string, message: s
   return Response.json({ error: { code, message } }, { status });
 }
 
+const JSON_CONTENT_TYPE = /^application\/([a-z0-9.+-]*\+)?json\b/i;
+
 /** The validated JSON body, or a 400 response to return as is. */
 export async function parseBody<S extends v.GenericSchema>(
   c: Context,
   schema: S,
 ): Promise<v.InferOutput<S> | Response> {
+  if (!JSON_CONTENT_TYPE.test(c.req.header("content-type") ?? "")) {
+    return jsonError(400, "invalid_body", "Content-Type must be application/json");
+  }
   let raw: unknown;
   try {
     raw = await c.req.json();

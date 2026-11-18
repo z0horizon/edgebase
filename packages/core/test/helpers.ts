@@ -5,10 +5,13 @@ import { app } from "../src/app";
 export const BASE = "https://api.test";
 export const PASSWORD = "pw-correct-horse-1";
 
+export type TestRequestInit = RequestInit & { cf?: Record<string, unknown> };
+
 /** A request to the Worker that also waits for the work it left running. */
-export async function call(path: string, init: RequestInit = {}, bindings: Env = env) {
+export async function call(path: string, init: TestRequestInit = {}, bindings: Env = env) {
   const ctx = createExecutionContext();
-  const res = await app.request(`${BASE}${path}`, init, bindings, ctx);
+  const req = new Request(`${BASE}${path}`, init as RequestInit);
+  const res = await app.request(req, undefined, bindings, ctx);
   await waitOnExecutionContext(ctx);
   return res;
 }

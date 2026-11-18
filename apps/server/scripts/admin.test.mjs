@@ -38,9 +38,18 @@ describe("adminStatements", () => {
     const resetSql = adminStatements({ ...base, userId: "u1", resetTwoFactor: true }).join(";");
     assert.match(
       resetSql,
-      /twoFactorEnabled = 0 WHERE id = 'u1'.*DELETE FROM twoFactor WHERE userId = 'u1'/,
+      /twoFactorEnabled = 0, twoFactorEnabledAt = NULL WHERE id = 'u1'.*DELETE FROM twoFactor WHERE userId = 'u1'.*DELETE FROM trusted_device WHERE user_id = 'u1'/,
     );
     assert.doesNotMatch(adminStatements({ ...base, userId: "u1" }).join(";"), /twoFactor/);
+  });
+
+  it("stamps passwordChangedAt and revokes prior sessions and trusted devices when resetting an admin's password", () => {
+    const created = adminStatements({ ...base, userId: null }).join(";");
+    assert.match(created, /passwordChangedAt/);
+    const updated = adminStatements({ ...base, userId: "u1" }).join(";");
+    assert.match(updated, /passwordChangedAt = '2026-01-02T00:00:00\.000Z'/);
+    assert.match(updated, /DELETE FROM session WHERE userId = 'u1'/);
+    assert.match(updated, /DELETE FROM trusted_device WHERE user_id = 'u1'/);
   });
 });
 

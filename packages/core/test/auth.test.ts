@@ -451,18 +451,29 @@ describe("admin, two-factor, organizations, locale", () => {
     expect(socialProviderOf(ctx)).toBe(expected);
   });
 
-  it("a banned user's session stops working", async () => {
+  it("a banned user's session stops working and their trusted devices are revoked", async () => {
     const admin = await signUpVerified("banner@x.io");
     await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
       .bind(admin.userId)
       .run();
     const target = await signUpVerified("banned@x.io");
+    await env.DB.prepare(
+      `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+       VALUES ('td-banned', 'hash-banned', ?, 1, 1, ?)`,
+    )
+      .bind(target.userId, Date.now() + 86_400_000)
+      .run();
     const ban = await call(
       "/api/auth/admin/ban-user",
       authed(admin.token, json({ userId: target.userId })),
     );
     expect(ban.status).toBe(200);
     expect((await call("/v1/me", authed(target.token))).status).toBe(401);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(target.userId)
+        .first("n"),
+    ).toBe(0);
   });
 
   it("with 2FA on, password sign-in needs a second factor before it gets a session", async () => {
@@ -566,5 +577,1191 @@ describe("admin, two-factor, organizations, locale", () => {
     const clear = await call("/api/auth/update-user", authed(token, json({ locale: null })));
     expect(clear.status).toBe(200);
     expect(await locale()).toBeNull();
+  });
+});
+
+describe("session network telemetry and freshness", () => {
+  it("records origin and current IP/ASN/geo from cf-connecting-ip and request.cf, and refuses client forgery", async () => {
+    const email = "net@x.io";
+    await signUpVerified(email);
+    const clientIp = freshIp();
+    const signIn = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        {
+          headers: {
+            "cf-connecting-ip": clientIp,
+            "x-forwarded-for": "192.0.2.99",
+            "user-agent": "EdgeBaseTest/1.0",
+          },
+        },
+      ),
+      cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+    });
+    expect(signIn.status).toBe(200);
+    const token = signIn.headers.get("set-auth-token") ?? "";
+
+    const listed = await call("/v1/sessions", authed(token));
+    expect(listed.status).toBe(200);
+    const { sessions } = await listed.json<{ sessions: Array<Record<string, unknown>> }>();
+    const current = sessions.find((s) => s["ipAddress"] === clientIp);
+    expect(current).toMatchObject({
+      ipAddress: clientIp,
+      userAgent: "EdgeBaseTest/1.0",
+      asn: 45899,
+      asOrganization: "VNPT Corp",
+      country: "VN",
+      city: "Hanoi",
+      createdIp: clientIp,
+      createdAsn: 45899,
+      createdAsOrganization: "VNPT Corp",
+      createdCountry: "VN",
+      createdCity: "Hanoi",
+    });
+    expect(typeof current?.["lastActiveAt"]).toBe("string");
+
+    const forge = await call(
+      "/api/auth/update-session",
+      authed(
+        token,
+        json({ asn: 13335, createdCountry: "US" }, { headers: { "cf-connecting-ip": freshIp() } }),
+      ),
+    );
+    expect(forge.status).toBe(400);
+  });
+
+  it("updates current network and lastActiveAt on ASN shift or after 15 minutes while keeping origin immutable", async () => {
+    const email = "roam@x.io";
+    await signUpVerified(email);
+    const originIp = freshIp();
+    const signIn = await call("/api/auth/sign-in/email", {
+      ...json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": originIp } }),
+      cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+    });
+    const token = signIn.headers.get("set-auth-token") ?? "";
+    const {
+      session: { id: sessionId },
+    } = await (await call("/api/auth/get-session", authed(token))).json<{
+      session: { id: string };
+    }>();
+    const sessionRow = () =>
+      env.DB.prepare(
+        `SELECT ipAddress, asn, asOrganization, country, city,
+                createdIp, createdAsn, createdAsOrganization, createdCountry, createdCity, lastActiveAt
+         FROM session WHERE id = ?`,
+      )
+        .bind(sessionId)
+        .first<Record<string, unknown>>();
+
+    const initial = await sessionRow();
+    expect(initial?.["createdAsn"]).toBe(45899);
+
+    // Same ASN & country within 15 minutes: does not rewrite lastActiveAt.
+    const fixedTime = new Date(Date.now() - 5 * 60_000).toISOString();
+    await env.DB.prepare("UPDATE session SET lastActiveAt = ? WHERE id = ?")
+      .bind(fixedTime, sessionId)
+      .run();
+    await call("/v1/me", {
+      ...authed(token, { headers: { "cf-connecting-ip": freshIp() } }),
+      cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+    });
+    expect((await sessionRow())?.["lastActiveAt"]).toBe(fixedTime);
+
+    // Switching Wi-Fi -> mobile carrier (new ASN) immediately updates current network & lastActiveAt, keeping created* intact.
+    const mobileIp = freshIp();
+    await call("/v1/me", {
+      ...authed(token, { headers: { "cf-connecting-ip": mobileIp } }),
+      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" },
+    });
+    const roamed = await sessionRow();
+    expect(roamed).toMatchObject({
+      ipAddress: mobileIp,
+      asn: 7552,
+      asOrganization: "Viettel Group",
+      country: "VN",
+      city: "Da Nang",
+      createdIp: originIp,
+      createdAsn: 45899,
+      createdAsOrganization: "VNPT Corp",
+      createdCountry: "VN",
+      createdCity: "Hanoi",
+    });
+    expect(roamed?.["lastActiveAt"]).not.toBe(fixedTime);
+
+    // After > 15 minutes on the same ASN, lastActiveAt also refreshes.
+    const staleTime = new Date(Date.now() - 16 * 60_000).toISOString();
+    await env.DB.prepare("UPDATE session SET lastActiveAt = ? WHERE id = ?")
+      .bind(staleTime, sessionId)
+      .run();
+    await call("/v1/me", {
+      ...authed(token, { headers: { "cf-connecting-ip": mobileIp } }),
+      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" },
+    });
+    expect((await sessionRow())?.["lastActiveAt"]).not.toBe(staleTime);
+  });
+
+  it("enforces a 15-minute freshAge on passwordless sensitive actions like delete-user", async () => {
+    const { userId, token } = await signUpVerified("fresh-age@x.io");
+    const staleCreated = new Date(Date.now() - 16 * 60_000).toISOString();
+    await env.DB.prepare("UPDATE session SET createdAt = ? WHERE userId = ?")
+      .bind(staleCreated, userId)
+      .run();
+    const res = await call(
+      "/api/auth/delete-user",
+      authed(token, json({}, { headers: { "cf-connecting-ip": freshIp() } })),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "SESSION_EXPIRED" });
+  });
+});
+
+/** Computes an RFC 6238 6-digit TOTP code from an otpauth:// URI's base32 secret. */
+async function totpFromUri(uri: string, now = Date.now()): Promise<string> {
+  const b32 = (new URL(uri).searchParams.get("secret") ?? "").toUpperCase().replace(/=+$/, "");
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
+  for (const ch of b32) {
+    const idx = alphabet.indexOf(ch);
+    if (idx < 0) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((value >>> bits) & 0xff);
+    }
+  }
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(bytes),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const counter = new ArrayBuffer(8);
+  new DataView(counter).setUint32(4, Math.floor(now / 30_000), false);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, counter));
+  const offset = (mac[mac.length - 1] ?? 0) & 0x0f;
+  const code =
+    (((mac[offset] ?? 0) & 0x7f) << 24) |
+    (((mac[offset + 1] ?? 0) & 0xff) << 16) |
+    (((mac[offset + 2] ?? 0) & 0xff) << 8) |
+    ((mac[offset + 3] ?? 0) & 0xff);
+  return String(code % 1_000_000).padStart(6, "0");
+}
+
+const cookiesOf = (res: Response) =>
+  res.headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0])
+    .filter((pair) => pair && !pair.endsWith("="))
+    .join("; ");
+
+describe("2FA audit timestamps, trusted devices, and new-network alerts", () => {
+  it("tracks passwordChangedAt, twoFactorEnabledAt, and session twoFactorMethod across TOTP, backup code, and trusted device", async () => {
+    const email = "audit-2fa@x.io";
+    const { token } = await signUpVerified(email);
+    const meBefore = await (await call("/v1/me", authed(token))).json<Record<string, unknown>>();
+    expect(typeof meBefore["passwordChangedAt"]).toBe("string");
+    expect(meBefore["twoFactorEnabledAt"]).toBeNull();
+
+    const enable = await call(
+      "/api/auth/two-factor/enable",
+      authed(token, json({ password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } })),
+    );
+    expect(enable.status).toBe(200);
+    const { totpURI, backupCodes } = await enable.json<{
+      totpURI: string;
+      backupCodes: string[];
+    }>();
+    const confirm = await call(
+      "/api/auth/two-factor/verify-totp",
+      authed(
+        token,
+        json({ code: await totpFromUri(totpURI) }, { headers: { "cf-connecting-ip": freshIp() } }),
+      ),
+    );
+    expect(confirm.status).toBe(200);
+    const activeToken = confirm.headers.get("set-auth-token") ?? token;
+    const meEnabled = await (await call("/v1/me", authed(activeToken))).json<
+      Record<string, unknown>
+    >();
+    expect(typeof meEnabled["twoFactorEnabledAt"]).toBe("string");
+
+    // Sign in with TOTP + trustDevice: true -> stamps twoFactorMethod = "totp" and mints both cookie & mobile token.
+    const ip1 = freshIp();
+    const challenge1 = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        { headers: { "cf-connecting-ip": ip1, "user-agent": "MacSafari/18" } },
+      ),
+      cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+    });
+    expect(await challenge1.json()).toMatchObject({ twoFactorRedirect: true });
+    const verifyTotp = await call("/api/auth/two-factor/verify-totp", {
+      ...json(
+        { code: await totpFromUri(totpURI), trustDevice: true },
+        {
+          headers: {
+            "cf-connecting-ip": ip1,
+            "user-agent": "MacSafari/18",
+            cookie: cookiesOf(challenge1),
+          },
+        },
+      ),
+      cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+    });
+    expect(verifyTotp.status).toBe(200);
+    const totpBearer = verifyTotp.headers.get("set-auth-token") ?? "";
+    const trustToken = verifyTotp.headers.get("set-trust-device-token") ?? "";
+    expect(trustToken.length).toBeGreaterThanOrEqual(40);
+    const trustCookies = cookiesOf(verifyTotp);
+
+    const totpSession = await (await call("/api/auth/get-session", authed(totpBearer))).json<{
+      session: Record<string, unknown>;
+    }>();
+    expect(totpSession.session["twoFactorMethod"]).toBe("totp");
+    expect(typeof totpSession.session["twoFactorVerifiedAt"]).toBe("string");
+
+    // Mobile header X-Trust-Device-Token skips 2FA with NO cookies and stamps twoFactorMethod = "trusted_device",
+    // updating current network while preserving createdIp / createdAsn / createdCountry on the trusted device.
+    const ip2 = freshIp();
+    const mobileSignIn = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email, password: PASSWORD },
+        {
+          headers: {
+            "cf-connecting-ip": ip2,
+            "user-agent": "EdgeBaseExpo/2.0",
+            "x-trust-device-token": trustToken,
+          },
+        },
+      ),
+      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Ho Chi Minh City" },
+    });
+    expect(mobileSignIn.status).toBe(200);
+    const mobileBody = await mobileSignIn.json<Record<string, unknown>>();
+    expect(mobileBody["twoFactorRedirect"]).toBeUndefined();
+    const mobileBearer = mobileSignIn.headers.get("set-auth-token") ?? "";
+    const tdSession = await (await call("/api/auth/get-session", authed(mobileBearer))).json<{
+      session: Record<string, unknown>;
+    }>();
+    expect(tdSession.session["twoFactorMethod"]).toBe("trusted_device");
+    expect(typeof tdSession.session["twoFactorVerifiedAt"]).toBe("string");
+
+    // GET /v1/trusted-devices lists the device, marking current = true when token matches.
+    const listRes = await call(
+      "/v1/trusted-devices",
+      authed(mobileBearer, { headers: { "x-trust-device-token": trustToken } }),
+    );
+    expect(listRes.status).toBe(200);
+    const { devices } = await listRes.json<{ devices: Array<Record<string, unknown>> }>();
+    expect(devices).toHaveLength(1);
+    expect(devices[0]).toMatchObject({
+      ipAddress: ip2,
+      asn: 7552,
+      asOrganization: "Viettel Group",
+      country: "VN",
+      city: "Ho Chi Minh City",
+      createdIp: ip1,
+      createdAsn: 45899,
+      createdCountry: "VN",
+      current: true,
+    });
+    const deviceId = String(devices[0]?.["id"]);
+
+    // Another user cannot delete this trusted device (404).
+    const stranger = await signUpVerified("stranger-td@x.io");
+    expect(
+      (await call(`/v1/trusted-devices/${deviceId}`, authed(stranger.token, { method: "DELETE" })))
+        .status,
+    ).toBe(404);
+
+    // Revoking the trusted device in D1 immediately forces 2FA again, EVEN if the browser replays Better Auth's trust_device cookie!
+    expect(
+      (await call(`/v1/trusted-devices/${deviceId}`, authed(mobileBearer, { method: "DELETE" })))
+        .status,
+    ).toBe(204);
+    const afterRevoke = await call(
+      "/api/auth/sign-in/email",
+      json(
+        { email, password: PASSWORD },
+        { headers: { "cf-connecting-ip": freshIp(), cookie: trustCookies } },
+      ),
+    );
+    expect(await afterRevoke.json()).toMatchObject({ twoFactorRedirect: true });
+
+    // Verify with backup code -> stamps twoFactorMethod = "backup_code".
+    const verifyBackup = await call(
+      "/api/auth/two-factor/verify-backup-code",
+      json(
+        { code: backupCodes[0], trustDevice: true },
+        { headers: { "cf-connecting-ip": freshIp(), cookie: cookiesOf(afterRevoke) } },
+      ),
+    );
+    expect(verifyBackup.status).toBe(200);
+    const backupBearer = verifyBackup.headers.get("set-auth-token") ?? "";
+    const backupSession = await (await call("/api/auth/get-session", authed(backupBearer))).json<{
+      session: Record<string, unknown>;
+    }>();
+    expect(backupSession.session["twoFactorMethod"]).toBe("backup_code");
+  });
+
+  it("wipes trusted devices and other sessions on password change, password reset, and 2FA disable, and caps at 20 devices", async () => {
+    const email = "wipe-td@x.io";
+    const { userId, token } = await signUpVerified(email);
+    const enable = await call(
+      "/api/auth/two-factor/enable",
+      authed(token, json({ password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } })),
+    );
+    const { totpURI } = await enable.json<{ totpURI: string }>();
+    const confirm = await call(
+      "/api/auth/two-factor/verify-totp",
+      authed(
+        token,
+        json({ code: await totpFromUri(totpURI) }, { headers: { "cf-connecting-ip": freshIp() } }),
+      ),
+    );
+    const currentToken = confirm.headers.get("set-auth-token") ?? token;
+
+    // Seed 20 existing trusted devices; minting the 21st prunes the oldest last_used_at row.
+    for (let i = 1; i <= 20; i++) {
+      await env.DB.prepare(
+        `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+        .bind(`td-seed-${i}`, `hash-seed-${i}`, userId, i * 1000, i * 1000, Date.now() + 86_400_000)
+        .run();
+    }
+    const ch = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    const verified21 = await call(
+      "/api/auth/two-factor/verify-totp",
+      json(
+        { code: await totpFromUri(totpURI), trustDevice: true },
+        { headers: { "cf-connecting-ip": freshIp(), cookie: cookiesOf(ch) } },
+      ),
+    );
+    expect(verified21.status).toBe(200);
+    const session21 = verified21.headers.get("set-auth-token") ?? "";
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(userId)
+        .first("n"),
+    ).toBe(20);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE id = 'td-seed-1'").first(
+        "n",
+      ),
+    ).toBe(0);
+
+    // Changing password wipes all 20 trusted devices, revokes other sessions, and updates passwordChangedAt.
+    const nextPw = "pw-updated-horse-99";
+    const beforeChange = await env.DB.prepare("SELECT passwordChangedAt FROM user WHERE id = ?")
+      .bind(userId)
+      .first<string>("passwordChangedAt");
+    await new Promise((r) => setTimeout(r, 5));
+    const change = await call(
+      "/api/auth/change-password",
+      authed(
+        session21,
+        json(
+          { currentPassword: PASSWORD, newPassword: nextPw },
+          { headers: { "cf-connecting-ip": freshIp() } },
+        ),
+      ),
+    );
+    expect(change.status).toBe(200);
+    const afterChangeToken = change.headers.get("set-auth-token") ?? session21;
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(userId)
+        .first("n"),
+    ).toBe(0);
+    // Earlier session was revoked; current session stays valid.
+    expect((await call("/v1/me", authed(currentToken))).status).toBe(401);
+    expect((await call("/v1/me", authed(afterChangeToken))).status).toBe(200);
+    const afterChange = await env.DB.prepare("SELECT passwordChangedAt FROM user WHERE id = ?")
+      .bind(userId)
+      .first<string>("passwordChangedAt");
+    expect(afterChange).not.toBe(beforeChange);
+
+    // Disabling 2FA clears twoFactorEnabledAt and wipes any trusted devices.
+    await env.DB.prepare(
+      `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+       VALUES ('td-before-disable', 'hash-before-disable', ?, 1, 1, ?)`,
+    )
+      .bind(userId, Date.now() + 86_400_000)
+      .run();
+    const disable = await call(
+      "/api/auth/two-factor/disable",
+      authed(
+        afterChangeToken,
+        json({ password: nextPw }, { headers: { "cf-connecting-ip": freshIp() } }),
+      ),
+    );
+    expect(disable.status).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT twoFactorEnabledAt FROM user WHERE id = ?")
+        .bind(userId)
+        .first("twoFactorEnabledAt"),
+    ).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(userId)
+        .first("n"),
+    ).toBe(0);
+
+    // Expired trusted_device rows are hidden from GET /v1/trusted-devices, and DELETE /v1/trusted-devices revokes all live ones.
+    const disableBearer = disable.headers.get("set-auth-token") ?? afterChangeToken;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+         VALUES ('td-expired', 'hash-exp', ?1, 1, 1, ?2), ('td-live-a', 'hash-a', ?1, 2, 2, ?3), ('td-live-b', 'hash-b', ?1, 3, 3, ?3)`,
+      ).bind(userId, Date.now() - 1000, Date.now() + 86_400_000),
+    ]);
+    const listedBeforeClear = await (
+      await call("/v1/trusted-devices", authed(disableBearer))
+    ).json<{ devices: Array<{ id: string }> }>();
+    expect(listedBeforeClear.devices.map((d) => d.id).sort()).toEqual(["td-live-a", "td-live-b"]);
+    expect(
+      (await call("/v1/trusted-devices", authed(disableBearer, { method: "DELETE" }))).status,
+    ).toBe(204);
+    expect(
+      (
+        await (
+          await call("/v1/trusted-devices", authed(disableBearer))
+        ).json<{
+          devices: unknown[];
+        }>()
+      ).devices,
+    ).toHaveLength(0);
+
+    // reset-password wipes trusted_device rows and updates passwordChangedAt.
+    await env.DB.prepare(
+      `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+       VALUES ('td-before-reset', 'hash-before-reset', ?, 1, 1, ?)`,
+    )
+      .bind(userId, Date.now() + 86_400_000)
+      .run();
+    let resetToken = "";
+    const mailCapture: Env = {
+      ...env,
+      MAIL: {
+        async send(msg: { text: string }) {
+          const match = msg.text.match(/reset-password\/([^\s?]+)/);
+          resetToken = match?.[1] ?? "";
+        },
+      } as unknown as SendEmail,
+    };
+    await call(
+      "/api/auth/request-password-reset",
+      json(
+        { email, redirectTo: "https://web.test/reset" },
+        { headers: { "cf-connecting-ip": freshIp() } },
+      ),
+      mailCapture,
+    );
+    expect(resetToken.length).toBeGreaterThan(5);
+    await new Promise((r) => setTimeout(r, 5));
+    const resetRes = await call(
+      "/api/auth/reset-password",
+      json(
+        { token: resetToken, newPassword: "pw-after-reset-horse-77" },
+        { headers: { "cf-connecting-ip": freshIp() } },
+      ),
+    );
+    expect(resetRes.status).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(userId)
+        .first("n"),
+    ).toBe(0);
+    const afterReset = await env.DB.prepare("SELECT passwordChangedAt FROM user WHERE id = ?")
+      .bind(userId)
+      .first<string>("passwordChangedAt");
+    expect(afterReset).not.toBe(afterChange);
+  });
+
+  it("alerts via email and personal inbox on sign-in from a new network, never before 2FA completes or on initial sign-up", async () => {
+    const sentMail: Array<{ to: string; subject: string; text: string }> = [];
+    const bindings: Env = {
+      ...env,
+      MAIL: {
+        async send(msg: { to: string; from: string; subject: string; text: string }) {
+          sentMail.push({ to: msg.to, subject: msg.subject, text: msg.text });
+        },
+      } as unknown as SendEmail,
+    };
+
+    const email = "alert-net@x.io";
+    const ipHome = freshIp();
+    const up = await call(
+      "/api/auth/sign-up/email",
+      {
+        ...json(
+          { email, password: PASSWORD, name: "Alert User" },
+          { headers: { "cf-connecting-ip": ipHome } },
+        ),
+        cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    const { user } = await up.json<{ user: { id: string } }>();
+    await env.DB.prepare("UPDATE user SET emailVerified = 1 WHERE id = ?").bind(user.id).run();
+    sentMail.length = 0;
+
+    // First sign-in after verification establishes baseline network -> no security alert.
+    const first = await call(
+      "/api/auth/sign-in/email",
+      {
+        ...json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": ipHome } }),
+        cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    const homeToken = first.headers.get("set-auth-token") ?? "";
+    expect(sentMail).toHaveLength(0);
+
+    // Enable 2FA on the account.
+    const enable = await call(
+      "/api/auth/two-factor/enable",
+      authed(homeToken, json({ password: PASSWORD }, { headers: { "cf-connecting-ip": ipHome } })),
+      bindings,
+    );
+    const { totpURI } = await enable.json<{ totpURI: string }>();
+    await call(
+      "/api/auth/two-factor/verify-totp",
+      authed(
+        homeToken,
+        json({ code: await totpFromUri(totpURI) }, { headers: { "cf-connecting-ip": ipHome } }),
+      ),
+      bindings,
+    );
+    sentMail.length = 0;
+
+    // Password step from a foreign ASN/country stops at twoFactorRedirect -> MUST NOT send alert yet!
+    const ipForeign = freshIp();
+    const pending = await call(
+      "/api/auth/sign-in/email",
+      {
+        ...json(
+          { email, password: PASSWORD },
+          { headers: { "cf-connecting-ip": ipForeign, "user-agent": "LinuxChrome/130" } },
+        ),
+        cf: { asn: 16509, asOrganization: "Amazon.com, Inc.", country: "SG", city: "Singapore" },
+      },
+      bindings,
+    );
+    expect(await pending.json()).toMatchObject({ twoFactorRedirect: true });
+    expect(sentMail).toHaveLength(0);
+
+    // Completing 2FA from that unfamiliar (ASN, country) dispatches BOTH email and personal inbox alert!
+    const completed = await call(
+      "/api/auth/two-factor/verify-totp",
+      {
+        ...json(
+          { code: await totpFromUri(totpURI) },
+          {
+            headers: {
+              "cf-connecting-ip": ipForeign,
+              "user-agent": "LinuxChrome/130",
+              cookie: cookiesOf(pending),
+            },
+          },
+        ),
+        cf: { asn: 16509, asOrganization: "Amazon.com, Inc.", country: "SG", city: "Singapore" },
+      },
+      bindings,
+    );
+    expect(completed.status).toBe(200);
+    const sgToken = completed.headers.get("set-auth-token") ?? "";
+    expect(sentMail).toHaveLength(1);
+    expect(sentMail[0]?.subject).toMatch(/sign-in/i);
+    expect(sentMail[0]?.text).toContain("Amazon.com");
+    expect(sentMail[0]?.text).toContain("SG");
+
+    const inbox = await (await call("/v1/inbox", authed(sgToken), bindings)).json<{
+      items: Array<{ title: string; body: string; category: string }>;
+    }>();
+    expect(inbox.items).toHaveLength(1);
+    expect(inbox.items[0]).toMatchObject({ category: "transactional" });
+    expect(inbox.items[0]?.body).toContain("SG");
+
+    // Another sign-in from the now-known (16509, SG) network does not spam a second alert.
+    sentMail.length = 0;
+    const pendingAgain = await call(
+      "/api/auth/sign-in/email",
+      {
+        ...json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+        cf: { asn: 16509, asOrganization: "Amazon.com, Inc.", country: "SG", city: "Singapore" },
+      },
+      bindings,
+    );
+    const completedAgain = await call(
+      "/api/auth/two-factor/verify-totp",
+      {
+        ...json(
+          { code: await totpFromUri(totpURI) },
+          { headers: { "cf-connecting-ip": freshIp(), cookie: cookiesOf(pendingAgain) } },
+        ),
+        cf: { asn: 16509, asOrganization: "Amazon.com, Inc.", country: "SG", city: "Singapore" },
+      },
+      bindings,
+    );
+    expect(completedAgain.status).toBe(200);
+    expect(sentMail).toHaveLength(0);
+  });
+});
+
+describe("security review regressions", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("still sends new-network alerts when trustDevice: true is set, sanitizes User-Agent, and recognizes origin createdAsn", async () => {
+    const sentMail: Array<{ to: string; subject: string; text: string }> = [];
+    const bindings: Env = {
+      ...env,
+      MAIL: {
+        async send(msg: { to: string; from: string; subject: string; text: string }) {
+          sentMail.push({ to: msg.to, subject: msg.subject, text: msg.text });
+        },
+      } as unknown as SendEmail,
+    };
+
+    const email = "alert-td-bypass@x.io";
+    const ipHome = freshIp();
+    const up = await call(
+      "/api/auth/sign-up/email",
+      {
+        ...json(
+          { email, password: PASSWORD, name: "Bypass Check" },
+          { headers: { "cf-connecting-ip": ipHome } },
+        ),
+        cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    const { user } = await up.json<{ user: { id: string } }>();
+    await env.DB.prepare("UPDATE user SET emailVerified = 1 WHERE id = ?").bind(user.id).run();
+
+    const first = await call(
+      "/api/auth/sign-in/email",
+      {
+        ...json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": ipHome } }),
+        cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    const homeToken = first.headers.get("set-auth-token") ?? "";
+    const enable = await call(
+      "/api/auth/two-factor/enable",
+      authed(homeToken, json({ password: PASSWORD }, { headers: { "cf-connecting-ip": ipHome } })),
+      bindings,
+    );
+    const { totpURI } = await enable.json<{ totpURI: string }>();
+    const confirmed = await call(
+      "/api/auth/two-factor/verify-totp",
+      {
+        ...authed(
+          homeToken,
+          json({ code: await totpFromUri(totpURI) }, { headers: { "cf-connecting-ip": ipHome } }),
+        ),
+        cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    const activeHomeToken = confirmed.headers.get("set-auth-token") ?? homeToken;
+
+    // Roam the first device onto mobile carrier AS7552 so its current asn is 7552 while createdAsn stays 45899.
+    await call(
+      "/v1/me",
+      {
+        ...authed(activeHomeToken, { headers: { "cf-connecting-ip": freshIp() } }),
+        cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    sentMail.length = 0;
+
+    // Signing in on home Wi-Fi (AS45899, VN) matches createdAsn/createdCountry -> no false-positive alert!
+    const homeChallenge = await call(
+      "/api/auth/sign-in/email",
+      {
+        ...json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+        cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    const homeVerify = await call(
+      "/api/auth/two-factor/verify-totp",
+      {
+        ...json(
+          { code: await totpFromUri(totpURI) },
+          { headers: { "cf-connecting-ip": freshIp(), cookie: cookiesOf(homeChallenge) } },
+        ),
+        cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
+      },
+      bindings,
+    );
+    expect(homeVerify.status).toBe(200);
+    expect(sentMail).toHaveLength(0);
+
+    // Foreign login WITH trustDevice: true and malicious User-Agent MUST still alert and sanitize UA!
+    const evilUa =
+      "BadBot/1.0   Urgent: click https://evil.example/phish\t<script>alert(1)</script>";
+    const foreignChallenge = await call(
+      "/api/auth/sign-in/email",
+      {
+        ...json(
+          { email, password: PASSWORD },
+          { headers: { "cf-connecting-ip": freshIp(), "user-agent": evilUa } },
+        ),
+        cf: { asn: 14061, asOrganization: "DigitalOcean, LLC", country: "DE", city: "Frankfurt" },
+      },
+      bindings,
+    );
+    const foreignVerify = await call(
+      "/api/auth/two-factor/verify-totp",
+      {
+        ...json(
+          { code: await totpFromUri(totpURI), trustDevice: true },
+          {
+            headers: {
+              "cf-connecting-ip": freshIp(),
+              "user-agent": evilUa,
+              cookie: cookiesOf(foreignChallenge),
+            },
+          },
+        ),
+        cf: { asn: 14061, asOrganization: "DigitalOcean, LLC", country: "DE", city: "Frankfurt" },
+      },
+      bindings,
+    );
+    expect(foreignVerify.status).toBe(200);
+    expect(sentMail).toHaveLength(1);
+    expect(sentMail[0]?.text).not.toContain("https://evil.example");
+    expect(sentMail[0]?.text).not.toContain("<script>");
+    expect((sentMail[0]?.text ?? "").length).toBeLessThan(500);
+  });
+
+  it("allows listing and revoking sessions via /v1/sessions past 15-minute freshAge without exposing raw tokens", async () => {
+    const email = "sessions-v1@x.io";
+    const { userId, token: token1 } = await signUpVerified(email);
+    const second = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    const token2 = second.headers.get("set-auth-token") ?? "";
+    const third = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    const token3 = third.headers.get("set-auth-token") ?? "";
+
+    // Age all sessions past the 15-minute freshAge window.
+    const oldIso = new Date(Date.now() - 25 * 60_000).toISOString();
+    await env.DB.prepare("UPDATE session SET createdAt = ? WHERE userId = ?")
+      .bind(oldIso, userId)
+      .run();
+
+    const listRes = await call("/v1/sessions", authed(token1));
+    expect(listRes.status).toBe(200);
+    const { sessions } = await listRes.json<{ sessions: Array<Record<string, unknown>> }>();
+    expect(sessions).toHaveLength(3);
+    expect(sessions.filter((s) => s["current"] === true)).toHaveLength(1);
+    for (const s of sessions) {
+      expect(s["token"]).toBeUndefined();
+    }
+
+    // Revoke one specific non-current session by opaque id.
+    const other = sessions.find((s) => s["current"] === false);
+    expect(
+      (await call(`/v1/sessions/${String(other?.["id"])}`, authed(token1, { method: "DELETE" })))
+        .status,
+    ).toBe(204);
+
+    // Revoke all remaining other sessions while keeping token1 alive.
+    expect(
+      (await call("/v1/sessions/revoke-others", authed(token1, { method: "POST" }))).status,
+    ).toBe(204);
+    expect((await call("/v1/me", authed(token1))).status).toBe(200);
+    expect((await call("/v1/me", authed(token2))).status).toBe(401);
+    expect((await call("/v1/me", authed(token3))).status).toBe(401);
+
+    // Auth & CORS boundary checks on /v1/sessions and /v1/trusted-devices.
+    expect((await call("/v1/sessions")).status).toBe(401);
+    expect((await call("/v1/trusted-devices")).status).toBe(401);
+    expect(
+      (await call("/v1/trusted-devices", authed(token1), { ...env, BETTER_AUTH_SECRET: "" }))
+        .status,
+    ).toBe(503);
+    const preflight = await call("/api/auth/sign-in/email", {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://web.test",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type,x-trust-device-token",
+      },
+    });
+    expect(preflight.headers.get("access-control-allow-headers")).toContain("x-trust-device-token");
+    expect(preflight.headers.get("access-control-expose-headers")).toContain(
+      "set-trust-device-token",
+    );
+  });
+
+  it("preserves signInProvider and origin telemetry on session rotation, guards wrong-password trust touches, and revokes on admin password/ban updates", async () => {
+    // 1. GitHub admin who enables and then disables TOTP keeps signInProvider = "github" and stays allowed on /api/auth/admin/*.
+    const ghEmail = "gh-rotate-admin@x.io";
+    const gh = await githubOAuth(ghEmail);
+    const ghMe = await (await call("/api/auth/get-session", gh.session)).json<{
+      user: { id: string };
+    }>();
+    const pwHash = await env.DB.prepare(
+      "SELECT password FROM account WHERE password IS NOT NULL LIMIT 1",
+    ).first<string>("password");
+    const nowIso = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(ghMe.user.id),
+      env.DB.prepare(
+        "INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES ('acc-gh-pw', ?, 'credential', ?, ?, ?, ?)",
+      ).bind(ghMe.user.id, ghMe.user.id, pwHash, nowIso, nowIso),
+      env.DB.prepare(
+        "UPDATE session SET createdAsn = 45899, createdCountry = 'VN' WHERE userId = ?",
+      ).bind(ghMe.user.id),
+    ]);
+
+    const enableGh = await call("/api/auth/two-factor/enable", {
+      ...json(
+        { password: PASSWORD },
+        { headers: { ...gh.session.headers, "cf-connecting-ip": freshIp() } },
+      ),
+      cf: { asn: 7552, country: "SG" },
+    });
+    const { totpURI } = await enableGh.json<{ totpURI: string }>();
+    const verifyGh = await call("/api/auth/two-factor/verify-totp", {
+      ...json(
+        { code: await totpFromUri(totpURI) },
+        { headers: { ...gh.session.headers, "cf-connecting-ip": freshIp() } },
+      ),
+      cf: { asn: 7552, country: "SG" },
+    });
+    const rotatedCookie1 = cookiesOf(verifyGh) || gh.session.headers.cookie;
+    const disableGh = await call("/api/auth/two-factor/disable", {
+      ...json(
+        { password: PASSWORD },
+        { headers: { cookie: rotatedCookie1, "cf-connecting-ip": freshIp() } },
+      ),
+      cf: { asn: 7552, country: "SG" },
+    });
+    expect(disableGh.status).toBe(200);
+    const rotatedCookie2 = cookiesOf(disableGh);
+    const rotatedSession = await (
+      await call("/api/auth/get-session", { headers: { cookie: rotatedCookie2 } })
+    ).json<{ session: Record<string, unknown> }>();
+    expect(rotatedSession.session).toMatchObject({
+      signInProvider: "github",
+      createdAsn: 45899,
+      createdCountry: "VN",
+    });
+    expect(
+      (await call("/api/auth/admin/list-users", { headers: { cookie: rotatedCookie2 } })).status,
+    ).toBe(200);
+
+    // 2. Wrong password on /sign-in/email does not mutate trusted_device.last_used_at or leave trust-device-* rows in verification.
+    const tdEmail = "wrong-pw-td@x.io";
+    const tdUser = await signUpVerified(tdEmail);
+    const en = await call(
+      "/api/auth/two-factor/enable",
+      authed(
+        tdUser.token,
+        json({ password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+      ),
+    );
+    const { totpURI: tdUri } = await en.json<{ totpURI: string }>();
+    await call(
+      "/api/auth/two-factor/verify-totp",
+      authed(
+        tdUser.token,
+        json({ code: await totpFromUri(tdUri) }, { headers: { "cf-connecting-ip": freshIp() } }),
+      ),
+    );
+    const ch = await call(
+      "/api/auth/sign-in/email",
+      json({ email: tdEmail, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    const minted = await call("/api/auth/two-factor/verify-totp", {
+      ...json(
+        { code: await totpFromUri(tdUri), trustDevice: true },
+        { headers: { "cf-connecting-ip": "203.0.113.10", cookie: cookiesOf(ch) } },
+      ),
+      cf: { asn: 45899, country: "VN" },
+    });
+    const rawTd = minted.headers.get("set-trust-device-token") ?? "";
+    const fixedLastUsed = Date.now() - 3_600_000;
+    await env.DB.prepare("UPDATE trusted_device SET last_used_at = ? WHERE user_id = ?")
+      .bind(fixedLastUsed, tdUser.userId)
+      .run();
+
+    const wrongPw = await call("/api/auth/sign-in/email", {
+      ...json(
+        { email: tdEmail, password: "wrong-password-attempt" },
+        { headers: { "cf-connecting-ip": "198.51.100.99", "x-trust-device-token": rawTd } },
+      ),
+      cf: { asn: 16509, country: "US" },
+    });
+    expect(wrongPw.status).toBe(401);
+    const tdAfterWrong = await env.DB.prepare(
+      "SELECT last_used_at, ip_address, asn, country FROM trusted_device WHERE user_id = ?",
+    )
+      .bind(tdUser.userId)
+      .first<Record<string, unknown>>();
+    expect(tdAfterWrong).toMatchObject({
+      last_used_at: fixedLastUsed,
+      ip_address: "203.0.113.10",
+      asn: 45899,
+      country: "VN",
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT count(*) AS n FROM verification WHERE identifier LIKE 'trust-device-%' AND value = ?",
+      )
+        .bind(tdUser.userId)
+        .first("n"),
+    ).toBe(0);
+
+    // 3. Admin /admin/set-user-password stamps passwordChangedAt & revokes sessions + trusted devices;
+    //    Admin /admin/update-user { banned: true } also revokes trusted devices.
+    const setPw = await call("/api/auth/admin/set-user-password", {
+      ...json(
+        { userId: tdUser.userId, newPassword: "pw-admin-reset-horse-55" },
+        { headers: { cookie: rotatedCookie2, "cf-connecting-ip": freshIp() } },
+      ),
+    });
+    expect(setPw.status).toBe(200);
+    expect((await call("/v1/me", authed(tdUser.token))).status).toBe(401);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(tdUser.userId)
+        .first("n"),
+    ).toBe(0);
+
+    await env.DB.prepare(
+      `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+       VALUES ('td-update-ban', 'hash-update-ban', ?, 1, 1, ?)`,
+    )
+      .bind(tdUser.userId, Date.now() + 86_400_000)
+      .run();
+    const updateBan = await call("/api/auth/admin/update-user", {
+      ...json(
+        { userId: tdUser.userId, data: { banned: true } },
+        { headers: { cookie: rotatedCookie2, "cf-connecting-ip": freshIp() } },
+      ),
+    });
+    expect(updateBan.status).toBe(200);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(tdUser.userId)
+        .first("n"),
+    ).toBe(0);
+  });
+});
+
+describe("audit hardening: token isolation, CSRF, body/column/session/alert lifecycle bounds", () => {
+  it("blocks raw token session-list endpoints and serves token-free active-only /v1/admin/users/:userId/sessions", async () => {
+    const admin = await signUpVerified("sec-admin@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+      .bind(admin.userId)
+      .run();
+    const coAdmin = await signUpVerified("co-admin@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+      .bind(coAdmin.userId)
+      .run();
+    // Seed an expired session on coAdmin to ensure admin listing filters it out.
+    const pastIso = new Date(Date.now() - 60_000).toISOString();
+    await env.DB.prepare(
+      "INSERT INTO session (id, expiresAt, token, createdAt, updatedAt, userId) VALUES ('s-exp-co', ?, 'tok-exp-co', ?, ?, ?)",
+    )
+      .bind(pastIso, pastIso, pastIso, coAdmin.userId)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+       VALUES ('td-co', 'hash-co', ?, 1, 1, ?)`,
+    )
+      .bind(coAdmin.userId, Date.now() + 86_400_000)
+      .run();
+
+    // Raw-token endpoints are blocked with 404.
+    expect((await call("/api/auth/list-sessions", authed(admin.token))).status).toBe(404);
+    expect(
+      (
+        await call(
+          "/api/auth/admin/list-user-sessions",
+          authed(admin.token, json({ userId: coAdmin.userId })),
+        )
+      ).status,
+    ).toBe(404);
+
+    // Non-admin is refused on /v1/admin/*.
+    const plain = await signUpVerified("plain-sec@x.io");
+    expect(
+      (await call(`/v1/admin/users/${coAdmin.userId}/sessions`, authed(plain.token))).status,
+    ).toBe(403);
+
+    // Admin sees active sessions only, with NO raw token exposed.
+    const res = await call(`/v1/admin/users/${coAdmin.userId}/sessions`, authed(admin.token));
+    expect(res.status).toBe(200);
+    const { sessions } = await res.json<{ sessions: Array<Record<string, unknown>> }>();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.["token"]).toBeUndefined();
+
+    // Revoke all sessions of coAdmin via /v1/admin/users/:id/sessions also wipes trusted_device!
+    expect(
+      (
+        await call(
+          `/v1/admin/users/${coAdmin.userId}/sessions`,
+          authed(admin.token, { method: "DELETE" }),
+        )
+      ).status,
+    ).toBe(204);
+    expect((await call("/v1/me", authed(coAdmin.token))).status).toBe(401);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM trusted_device WHERE user_id = ?")
+        .bind(coAdmin.userId)
+        .first("n"),
+    ).toBe(0);
+  });
+
+  it("enforces Origin on cookie-authenticated /v1/* mutations and Content-Type: application/json in parseBody", async () => {
+    const email = "csrf-cookie@x.io";
+    await signUpVerified(email);
+    const signIn = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    const cookie = cookiesOf(signIn);
+    const activeBearer = signIn.headers.get("set-auth-token") ?? "";
+
+    // Untrusted sibling subdomain or missing Origin on cookie-authed POST -> 403 forbidden_origin.
+    expect(
+      (
+        await call("/v1/sessions/revoke-others", {
+          method: "POST",
+          headers: { cookie, origin: "https://untrusted.api.test" },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (await call("/v1/sessions/revoke-others", { method: "POST", headers: { cookie } })).status,
+    ).toBe(403);
+
+    // Trusted web origin succeeds -> 204.
+    expect(
+      (
+        await call("/v1/sessions/revoke-others", {
+          method: "POST",
+          headers: { cookie, origin: "https://web.test" },
+        })
+      ).status,
+    ).toBe(204);
+
+    // text/plain JSON smuggling rejected by parseBody with 400.
+    const smuggled = await call("/v1/devices", {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${activeBearer}`,
+        "content-type": "text/plain",
+      },
+      body: JSON.stringify({ token: "fcm-smuggle", platform: "ios" }),
+    });
+    expect(smuggled.status).toBe(400);
+  });
+
+  it("enforces 64 KB body limit, user/org column caps, 30-session per-user cap, and 3/hour security alert cap", async () => {
+    const email = "lifecycle-caps@x.io";
+    const { userId, token } = await signUpVerified(email);
+
+    // 1. >64 KB request body -> 413 payload_too_large.
+    const huge = "x".repeat(70 * 1024);
+    const tooBig = await call(
+      "/v1/devices",
+      authed(token, json({ token: huge, platform: "ios" }, { method: "PUT" })),
+    );
+    expect(tooBig.status).toBe(413);
+
+    // 2. Oversized user.name or organization.name rejected (400).
+    const badName = await call(
+      "/api/auth/update-user",
+      authed(token, json({ name: "n".repeat(200) })),
+    );
+    expect(badName.status).toBe(400);
+    const badOrg = await call(
+      "/api/auth/organization/create",
+      authed(token, json({ name: "o".repeat(200), slug: "valid-slug" })),
+    );
+    expect(badOrg.status).toBe(400);
+
+    // 3. Seed 30 sessions for the user; signing in once more caps total sessions at 30 and evicts the oldest.
+    const nowMs = Date.now();
+    const expIso = new Date(nowMs + 86_400_000).toISOString();
+    await env.DB.prepare("DELETE FROM session WHERE userId = ?").bind(userId).run();
+    for (let i = 1; i <= 30; i++) {
+      const ts = new Date(nowMs - (40 - i) * 60_000).toISOString();
+      await env.DB.prepare(
+        `INSERT INTO session (id, expiresAt, token, createdAt, updatedAt, lastActiveAt, userId, asn, country)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 45899, 'VN')`,
+      )
+        .bind(`s-cap-${i}`, expIso, `tok-cap-${i}`, ts, ts, ts, userId)
+        .run();
+    }
+
+    const sentMail: string[] = [];
+    const bindings: Env = {
+      ...env,
+      MAIL: {
+        async send(msg: { subject: string }) {
+          sentMail.push(msg.subject);
+        },
+      } as unknown as SendEmail,
+    };
+
+    // 4. Sign in from 5 distinct unfamiliar (ASN, country) networks:
+    //    - Active sessions stay capped at <= 30 (oldest s-cap-1 evicted)
+    //    - Security alerts are rate-capped at 3 within the hour!
+    const foreignNets = [
+      { asn: 16509, country: "US" },
+      { asn: 14061, country: "DE" },
+      { asn: 24940, country: "FI" },
+      { asn: 13335, country: "JP" },
+      { asn: 15169, country: "AU" },
+    ];
+    for (const net of foreignNets) {
+      const res = await call(
+        "/api/auth/sign-in/email",
+        {
+          ...json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+          cf: net,
+        },
+        bindings,
+      );
+      expect(res.status).toBe(200);
+    }
+
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM session WHERE userId = ?")
+        .bind(userId)
+        .first("n"),
+    ).toBe(30);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM session WHERE id = 's-cap-1'").first("n"),
+    ).toBe(0);
+    expect(sentMail).toHaveLength(3);
+    expect(
+      await env.INBOX_DB.prepare("SELECT count(*) AS n FROM inbox_item WHERE user_id = ?")
+        .bind(userId)
+        .first("n"),
+    ).toBe(3);
   });
 });

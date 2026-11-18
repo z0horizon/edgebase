@@ -77,7 +77,7 @@ export async function appCallback(c: Context<AppEnv>): Promise<Response> {
   const fail = (error: string) => c.redirect(`${c.env.APP_SCHEME}://auth?error=${error}`, 302);
   const challenge = v.safeParse(ChallengeSchema, c.req.query("challenge"));
   if (!challenge.success) return fail("invalid_challenge");
-  const auth = createAuth(c.env, c.executionCtx);
+  const auth = createAuth(c.env, c.executionCtx, c.req.raw);
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   const now = Date.now();
   // Require both a fresh session and the exact single-use challenge bound at OAuth callback, so a
@@ -114,7 +114,11 @@ export async function appExchange(c: Context<AppEnv>): Promise<Response> {
   if (base64url(await sha256(body.verifier)) !== row.value) return rejected();
 
   try {
-    const { session, user } = await createAuth(c.env, c.executionCtx).api.verifyOneTimeToken({
+    const { session, user } = await createAuth(
+      c.env,
+      c.executionCtx,
+      c.req.raw,
+    ).api.verifyOneTimeToken({
       body: { token: body.token },
     });
     return c.json({ token: session.token, user });

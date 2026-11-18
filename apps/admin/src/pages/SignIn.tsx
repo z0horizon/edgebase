@@ -3,6 +3,7 @@ import { type FormEvent, useState } from "react";
 import { FormError } from "@/components/FormError";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, errorMessage } from "@/lib/api";
@@ -16,6 +17,8 @@ export function SignIn({
   onSignedIn: () => Promise<void>;
 }) {
   const [step, setStep] = useState<"password" | "code">("password");
+  const [useBackup, setUseBackup] = useState(false);
+  const [trustDevice, setTrustDevice] = useState(false);
   const [error, setError] = useState(takeOAuthError);
   const shown = error || (notAdmin ? "This account is not an admin." : "");
   const [busy, setBusy] = useState(false);
@@ -39,9 +42,16 @@ export function SignIn({
     setError("");
     try {
       if (step === "code") {
-        await api("/api/auth/two-factor/verify-totp", {
+        const endpoint = useBackup
+          ? "/api/auth/two-factor/verify-backup-code"
+          : "/api/auth/two-factor/verify-totp";
+        const rawCode = String(form.get("code") ?? "").trim();
+        await api(endpoint, {
           method: "POST",
-          body: { code: form.get("code") },
+          body: {
+            code: useBackup ? rawCode : rawCode.replace(/\s/g, ""),
+            trustDevice,
+          },
         });
       } else {
         const result = await api<{ twoFactorRedirect?: boolean }>("/api/auth/sign-in/email", {
@@ -50,6 +60,7 @@ export function SignIn({
         });
         if (result?.twoFactorRedirect) {
           setStep("code");
+          setUseBackup(false);
           return;
         }
       }
@@ -79,7 +90,9 @@ export function SignIn({
             <CardDescription className="text-pretty">
               {step === "password"
                 ? "Sign in with an admin account. Password sign-in needs two-factor."
-                : "Enter the 6-digit code from your authenticator app."}
+                : useBackup
+                  ? "Enter one of your single-use recovery backup codes."
+                  : "Enter the 6-digit code from your authenticator app."}
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
@@ -133,38 +146,82 @@ export function SignIn({
                   </div>
                 </>
               ) : (
-                <div className="grid gap-2">
-                  <Label htmlFor="code">6-digit authenticator code</Label>
-                  <Input
-                    id="code"
-                    name="code"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    pattern="[0-9]{6}"
-                    maxLength={6}
-                    placeholder="000000"
-                    className="h-11 text-center font-mono text-lg tracking-[0.35em] tabular-nums"
-                    required
-                    autoFocus
-                  />
-                </div>
+                <>
+                  <div className="grid gap-2">
+                    <Label htmlFor="code">
+                      {useBackup ? "Backup recovery code" : "6-digit authenticator code"}
+                    </Label>
+                    {useBackup ? (
+                      <Input
+                        key="backup"
+                        id="code"
+                        name="code"
+                        autoComplete="off"
+                        maxLength={32}
+                        placeholder="XXXXX-XXXXX"
+                        className="h-11 text-center font-mono text-base tracking-widest"
+                        required
+                        autoFocus
+                      />
+                    ) : (
+                      <Input
+                        key="totp"
+                        id="code"
+                        name="code"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        pattern="[0-9 ]{6,7}"
+                        maxLength={7}
+                        placeholder="000000"
+                        className="h-11 text-center font-mono text-lg tracking-[0.35em] tabular-nums"
+                        required
+                        autoFocus
+                      />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <Checkbox
+                      id="trust-device"
+                      checked={trustDevice}
+                      onCheckedChange={(v) => setTrustDevice(v === true)}
+                    />
+                    <Label htmlFor="trust-device" className="text-xs font-normal leading-snug">
+                      Trust this device for 30 days
+                    </Label>
+                  </div>
+                </>
               )}
               <FormError message={shown} />
               <Button type="submit" disabled={busy} className="w-full">
                 {step === "password" ? "Sign in" : "Verify"}
               </Button>
               {step === "code" && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setStep("password");
-                    setError("");
-                  }}
-                >
-                  Use a different account
-                </Button>
+                <div className="grid gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setUseBackup((prev) => !prev);
+                      setError("");
+                    }}
+                  >
+                    {useBackup ? "Use authenticator code instead" : "Use a backup code instead"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setStep("password");
+                      setUseBackup(false);
+                      setTrustDevice(false);
+                      setError("");
+                    }}
+                  >
+                    Use a different account
+                  </Button>
+                </div>
               )}
             </form>
           </CardContent>

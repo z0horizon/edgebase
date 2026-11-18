@@ -2,6 +2,7 @@ import { MAX_RECIPIENTS } from "@edgebase/core/limits";
 import {
   Ban,
   Copy,
+  Laptop,
   MoreHorizontal,
   Search,
   Send,
@@ -13,6 +14,7 @@ import {
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
+import { SessionCard } from "@/components/SessionCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -42,7 +44,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api, errorMessage, listUsers, type User } from "@/lib/api";
+import { api, errorMessage, listUsers, type SessionRecord, type User } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { SEND_RECIPIENTS_KEY } from "@/lib/state";
 
@@ -54,8 +56,62 @@ export function UsersPage({ me }: { me: User }) {
   const [offset, setOffset] = useState(0);
   const [query, setQuery] = useState("");
   const [banning, setBanning] = useState<User | null>(null);
+  const [inspecting, setInspecting] = useState<User | null>(null);
+  const [userSessions, setUserSessions] = useState<SessionRecord[] | null>(null);
+  const [sessionsBusy, setSessionsBusy] = useState(false);
   const [selected, setSelected] = useState<Record<string, string>>({});
   const latest = useRef(0);
+
+  const loadUserSessions = useCallback(async (target: User) => {
+    setUserSessions(null);
+    try {
+      const res = await api<{ sessions: SessionRecord[] }>(
+        `/v1/admin/users/${encodeURIComponent(target.id)}/sessions`,
+      );
+      setUserSessions(res.sessions);
+    } catch (e) {
+      setUserSessions([]);
+      toast.error(errorMessage(e));
+    }
+  }, []);
+
+  const openSessions = (target: User) => {
+    setInspecting(target);
+    loadUserSessions(target);
+  };
+
+  const revokeTargetSession = async (sessionId: string) => {
+    if (!inspecting) return;
+    setSessionsBusy(true);
+    try {
+      await api(
+        `/v1/admin/users/${encodeURIComponent(inspecting.id)}/sessions/${encodeURIComponent(sessionId)}`,
+        { method: "DELETE" },
+      );
+      toast.success("Session revoked");
+      await loadUserSessions(inspecting);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setSessionsBusy(false);
+    }
+  };
+
+  const revokeAllTargetSessions = async () => {
+    if (!inspecting) return;
+    setSessionsBusy(true);
+    try {
+      await api(`/v1/admin/users/${encodeURIComponent(inspecting.id)}/sessions`, {
+        method: "DELETE",
+      });
+      toast.success(`Revoked all sessions and trusted devices for ${inspecting.email}`);
+      await loadUserSessions(inspecting);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setSessionsBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     // A slow answer for an older search or page must not replace a newer one.
@@ -293,6 +349,9 @@ export function UsersPage({ me }: { me: User }) {
                         >
                           <Copy /> Copy user ID
                         </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => openSessions(user)}>
+                          <Laptop /> View sessions
+                        </DropdownMenuItem>
                         {user.id !== me.id && (
                           <>
                             <DropdownMenuSeparator />
@@ -410,6 +469,61 @@ export function UsersPage({ me }: { me: User }) {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={inspecting !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInspecting(null);
+            setUserSessions(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Sessions — {inspecting?.email}</DialogTitle>
+            <DialogDescription>
+              {inspecting?.twoFactorEnabled
+                ? `2FA enabled${inspecting.twoFactorEnabledAt ? ` (${formatDate(inspecting.twoFactorEnabledAt)})` : ""}`
+                : "2FA off"}
+              {" · "}
+              Password changed:{" "}
+              {inspecting?.passwordChangedAt ? formatDate(inspecting.passwordChangedAt) : "—"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {userSessions === null && (
+              <p className="text-sm text-muted-foreground">Loading sessions…</p>
+            )}
+            {userSessions?.length === 0 && (
+              <p className="text-sm text-muted-foreground">No active sessions.</p>
+            )}
+            {userSessions?.map((s) => (
+              <SessionCard
+                key={s.id}
+                session={s}
+                busy={sessionsBusy}
+                onRevoke={inspecting?.id !== me.id ? () => revokeTargetSession(s.id) : undefined}
+              />
+            ))}
+          </div>
+          <DialogFooter>
+            {inspecting?.id !== me.id && (userSessions?.length ?? 0) > 0 && (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={sessionsBusy}
+                onClick={revokeAllTargetSessions}
+              >
+                Revoke all sessions
+              </Button>
+            )}
+            <Button type="button" variant="outline" onClick={() => setInspecting(null)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

@@ -46,8 +46,53 @@ export type User = {
   banned?: boolean | null;
   banReason?: string | null;
   twoFactorEnabled?: boolean | null;
+  twoFactorEnabledAt?: string | null;
+  passwordChangedAt?: string | null;
   emailVerified: boolean;
   createdAt: string;
+};
+
+export type SessionRecord = {
+  id: string;
+  current?: boolean;
+  userId: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  asn?: number | null;
+  asOrganization?: string | null;
+  country?: string | null;
+  city?: string | null;
+  createdIp?: string | null;
+  createdAsn?: number | null;
+  createdAsOrganization?: string | null;
+  createdCountry?: string | null;
+  createdCity?: string | null;
+  lastActiveAt?: string | null;
+  signInProvider?: string | null;
+  twoFactorMethod?: "totp" | "backup_code" | "trusted_device" | null;
+  twoFactorVerifiedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+};
+
+export type TrustedDevice = {
+  id: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  asn: number | null;
+  asOrganization: string | null;
+  country: string | null;
+  city: string | null;
+  createdIp: string | null;
+  createdAsn: number | null;
+  createdAsOrganization?: string | null;
+  createdCountry: string | null;
+  createdCity?: string | null;
+  createdAt: number;
+  lastUsedAt: number;
+  expiresAt: number;
+  current: boolean;
 };
 
 /** `GET /v1/me`: the signed-in user, and whether admin features first need TOTP set up. */

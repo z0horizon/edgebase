@@ -49,6 +49,7 @@ type CleanupReport = {
   session: number;
   verification: number;
   device: number;
+  trustedDevice: number;
   unverifiedUsers: number;
   scheduledPush: number;
   invitation: number;
@@ -109,6 +110,11 @@ export async function runCleanup(
     env.DB,
     `DELETE FROM device WHERE token IN (SELECT token FROM device WHERE updated_at < ? LIMIT ${CHUNK})`,
     [now - DEVICE_STALE_DAYS * DAY_MS],
+  );
+  const trustedDevice = await step(
+    env.DB,
+    `DELETE FROM trusted_device WHERE id IN (SELECT id FROM trusted_device WHERE expires_at < ? LIMIT ${CHUNK})`,
+    [now],
   );
   // Email sign-ups never verified; users with any social account are kept, since a provider may
   // report its email unverified while the sign-in itself is real.
@@ -178,6 +184,7 @@ export async function runCleanup(
     session,
     verification,
     device,
+    trustedDevice,
     unverified,
     scheduledPush,
     invitation,
@@ -193,6 +200,7 @@ export async function runCleanup(
     session: session.deleted,
     verification: verification.deleted,
     device: device.deleted,
+    trustedDevice: trustedDevice.deleted,
     unverifiedUsers: unverified.deleted,
     scheduledPush: scheduledPush.deleted,
     invitation: invitation.deleted,

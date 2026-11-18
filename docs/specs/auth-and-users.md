@@ -8,13 +8,21 @@ user routes answer `503`.
 
 ## Entities
 
-- **`user`** (`packages/core/migrations/0001_init.sql`): Better Auth columns plus `marketingOptIn` (0/1, default 0)
-  and `locale` (BCP 47 or null, `0006`); `role`, `banned`, `banReason`, `banExpires`,
-  `twoFactorEnabled` come from the admin and twoFactor plugins (`0004`). Dates are ISO 8601 text,
-  booleans 0/1.
+- **`user`** (`packages/core/migrations/0001_init.sql`): Better Auth columns plus `marketingOptIn` (0/1, default 0),
+  `locale` (BCP 47 or null, `0006`), `twoFactorEnabledAt` and `passwordChangedAt` (`0008`); `role`,
+  `banned`, `banReason`, `banExpires`, `twoFactorEnabled` come from the admin and twoFactor plugins
+  (`0004`). Dates are ISO 8601 text, booleans 0/1.
 - **`session`**: one row per signed-in device; `expiresAt` indexed for retention. `signInProvider`
-  (`0007`) is the social provider that created it (`google`, `github`, `apple`) or null; clients
-  cannot set it.
+  (`0007`) is the social provider that created it (`google`, `github`, `apple`) or null; `0008`
+  adds current edge network (`asn`, `asOrganization`, `country`, `city`), initial sign-in network
+  (`createdIp`, `createdAsn`, `createdAsOrganization`, `createdCountry`, `createdCity`),
+  `lastActiveAt`, and 2FA provenance (`twoFactorMethod`: `totp` | `backup_code` | `trusted_device`
+  | null, `twoFactorVerifiedAt`). Clients cannot set any of these columns.
+- **`trusted_device`** (`0008`): one row per 30-day 2FA-trusted browser or native app (capped at 20
+  per user, `expires_at` indexed for cleanup, cascades with `user`); stores only `base64url(SHA-256(token))`
+  plus user agent, origin network (`created_ip`, `created_asn`, `created_country`), last-used
+  network (`ip_address`, `asn`, `as_organization`, `country`, `city`), and epoch-ms `created_at`,
+  `last_used_at`, `expires_at`.
 - **`account`**: one row per sign-in method of a user (`credential`, `google`, `apple`, `github`).
 - **`verification`**: email verification, password reset, one-time tokens and 2FA challenges; `expiresAt` indexed.
 - **`twoFactor`** (`packages/core/migrations/0004_admin_two_factor_organization.sql`): one row per user with 2FA,
@@ -47,20 +55,35 @@ user routes answer `503`.
    so the waiting app always hears back. A token is spent
    by its first redemption attempt, right or wrong. Better Auth's own
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.
-4. Sessions last 30 days and are extended at most once a day (`updateAge`), so an active session
-   costs about one D1 write per day. There is no cookie cache and no secondary storage.
+4. Sessions last 30 days and are extended at most once a day (`updateAge`), with a 15-minute
+   `freshAge` for passwordless sensitive operations (`delete-user`, `unlink-account`), and are
+   capped at 30 active sessions per user (pruning the oldest on sign-in). Better Auth's raw-token
+   `/api/auth/list-sessions` and `/api/auth/admin/list-user-sessions` endpoints are disabled (`404`)
+   in favour of token-free `/v1/sessions` and `/v1/admin/users/{userId}/sessions`. There is no
+   cookie cache and no secondary storage. Client IP comes from `cf-connecting-ip` and ASN/ISP/geo
+   from Cloudflare `request.cf`. Active `/v1/*` calls refresh `lastActiveAt` and the current
+   network in `ctx.waitUntil` at most every 15 minutes or immediately when `asn` or `country`
+   changes, never altering `createdIp`/`createdAsn`/`createdCountry` and never revoking a roaming
+   mobile session. When an established user completes sign-in from an `(asn, country)` pair not
+   present among their other unexpired sessions or trusted devices, a transactional inbox alert and
+   email are sent via `ctx.waitUntil` (capped at 3 alerts per hour per user).
 5. Sign-in, sign-up, password-reset (`request-password-reset`, `reset-password`),
    `change-password`, `verify-password`, `delete-user`, resend-verification, two-factor, organization invite-member
    and app-exchange requests are limited
    to 10 per minute per `cf-connecting-ip` through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`packages/core/src/auth/middleware.ts`). Better Auth's own limiter is disabled.
 6. `POST /api/auth/delete-user` and admin `remove-user` delete the user; `session`, `account`,
-   `device`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
+   `device`, `trusted_device`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
    hook removes the user's `inbox_item` and `inbox_state` rows from `INBOX_DB`, which has no
    foreign keys (`packages/core/src/inbox/queries.ts`), and their `push_open` rows.
 7. Users opt in to marketing pushes with `POST /api/auth/update-user { marketingOptIn: true }`.
 8. Browsers on another origin may call the API with credentials when their origin is an
-   `http(s)://` entry of `TRUSTED_ORIGINS`; `set-auth-token` is exposed to them (`packages/core/src/app.ts`).
+   `http(s)://` entry of `TRUSTED_ORIGINS`; `set-auth-token` and `set-trust-device-token` are exposed to them (`packages/core/src/app.ts`).
+   State-changing `/v1/*` calls authenticated via cookie (without `Authorization: Bearer`) must send
+   `Origin` matching `BASE_URL` or an `http(s)://` `TRUSTED_ORIGINS` entry (`403 forbidden_origin` otherwise).
+   All incoming `/api/auth/*` and `/v1/*` request bodies are capped at 64 KB (`413 payload_too_large`),
+   and `user` / `organization` text columns (`name`, `email`, `image`, `banReason`, `slug`, `logo`, `metadata`)
+   enforce bounded lengths on write.
 9. Email sign-ups still unverified after 7 days are deleted by the cleanup cron along with any
    `inbox_item`, `inbox_state` and `push_open` rows, unless the user
    also has a social account (see data-retention).
@@ -80,20 +103,30 @@ user routes answer `503`.
     linking by email at sign-in, or a link from a password session without TOTP, is refused
     (`databaseHooks.account.create.before`). A user who signed up with a provider and is later
     made admin keeps that provider.
-    Banning deletes the user's sessions, so the next request answers `401`. The first admin comes
+    Banning deletes the user's sessions and `trusted_device` rows, so the next request answers `401`. The first admin comes
     from `pnpm admin:create` or bootstrap (see deployment.md). The `/admin` page (`apps/admin/`)
-    signs admins in with Google, GitHub or Apple, or with email, password and TOTP, walks an
+    signs admins in with Google, GitHub or Apple, or with email, password and TOTP (or backup code,
+    with optional 30-day device trust), walks an
     admin with a password session and no TOTP through setting it up (QR code,
-    confirming code, backup codes), links providers on its Account view, manages users through these routes, and sends pushes and edits templates with the
+    confirming code, backup codes), links providers and manages active sessions and trusted devices
+    on its Account view, inspects/revokes user sessions on Users, and sends pushes and edits templates with the
     admin session (see api.md, Authentication). It is served with a CSP that allows only its own
     scripts, and renders user data as text.
 12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;
     social sign-in is not challenged. `POST /api/auth/two-factor/enable { password }` returns the
     TOTP URI (issuer: the `BASE_URL` host) and backup codes; 2FA is on once a code is confirmed
-    with `verify-totp`. A sign-in of a user with 2FA answers `{ twoFactorRedirect: true }` with
-    no session and a 10-minute `two_factor` cookie; `verify-totp` or `verify-backup-code` with that
-    cookie creates the session. `/api/auth/two-factor/*` shares rule 5's per-IP limit, and Better
-    Auth locks the challenge after repeated wrong codes.
+    with `verify-totp` (which stamps `user.twoFactorEnabledAt`). A sign-in of a user with 2FA
+    answers `{ twoFactorRedirect: true }` with no session and a 10-minute `two_factor` cookie unless
+    the caller presents a valid unrevoked D1 `trusted_device` token (cookie `[__Secure-]edgebase_td`
+    or header `X-Trust-Device-Token`); `verify-totp` or `verify-backup-code` with that `two_factor`
+    cookie creates the session (`twoFactorMethod` set to `totp` or `backup_code`, or `trusted_device`
+    when bypassed). Passing `trustDevice: true` during sign-in verification mints a 30-day
+    `trusted_device` row (at most 20 per user, listed and revoked at `/v1/trusted-devices`); D1 is
+    authoritative, so revoking a row forces 2FA on the next sign-in even if browser cookies remain.
+    `change-password`, `reset-password` and `two-factor/disable` wipe the user's `trusted_device`
+    rows and other sessions (`change-password` and `reset-password` update `user.passwordChangedAt`;
+    `two-factor/disable` clears `user.twoFactorEnabledAt`). `/api/auth/two-factor/*` shares rule 5's
+    per-IP limit, and Better Auth locks the challenge after repeated wrong codes.
 13. Organizations (`organization` plugin): a user belongs to at most 10, an organization has at
     most 100 members and 100 pending invitations, and invitations expire after 48 h. Invitations
     are mailed with `<APP_SCHEME>://invitation?id=<id>`; the app accepts with

@@ -12,9 +12,10 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 | `inbox_item` | `INBOX_DB` | `created_at` older than `INBOX_TTL_DAYS` (default 30) | rowid order |
 | `broadcast` | `INBOX_DB` | same as `inbox_item` | rowid order |
 | `inbox_push` | `INBOX_DB` | same as `inbox_item` | rowid order (push ids grow with time) |
-| `session` | `DB` | `expiresAt` < now (ISO text compare) | `session_expires_at` |
+| `session` | `DB` | `expiresAt` < now (ISO text compare); also capped at 30 active rows per user on sign-in | `session_expires_at`, `session_user_id` |
 | `verification` | `DB` | `expiresAt` < now | `verification_expires_at` |
 | `device` | `DB` | `updated_at` older than 60 days | `device_updated_at` |
+| `trusted_device` | `DB` | `expires_at` < now (30-day TTL; also capped at 20 rows per user on write) | `trusted_device_expires_at`, `trusted_device_user_id` |
 | `user` (+ cascades, inbox & opens) | `DB`, `INBOX_DB` | email unverified and created more than 7 days ago, with no social account | `user_unverified_created_at` (partial) |
 | `scheduled_push` | `DB` | when sent (by the request for an immediate push, else the minute cron), or 24 h past intended `send_at` | `scheduled_push_send_at` + `push_stats` PK |
 | `inbox_state` | `INBOX_DB` | when the user is deleted | primary key |

@@ -60,6 +60,10 @@ describe("runCleanup", () => {
       env.DB.prepare(
         "INSERT INTO device VALUES ('d-stale', ?, 'ios', ?), ('d-live', ?, 'ios', ?)",
       ).bind(u, NOW - 61 * DAY, u, NOW - 59 * DAY),
+      env.DB.prepare(
+        `INSERT INTO trusted_device (id, token_hash, user_id, created_at, last_used_at, expires_at)
+         VALUES ('td-old', 'th-old', ?1, ?2, ?2, ?3), ('td-live', 'th-live', ?1, ?2, ?2, ?4)`,
+      ).bind(u, NOW - DAY, NOW - 1, NOW + DAY),
     ]);
     await env.INBOX_DB.prepare(
       "INSERT INTO broadcast (title, body, category, created_at) VALUES ('old', 'b', 'marketing', ?), ('new', 'b', 'marketing', ?)",
@@ -68,12 +72,21 @@ describe("runCleanup", () => {
       .run();
 
     const report = await runCleanup(env, NOW);
-    expect(report).toMatchObject({ session: 1, verification: 1, device: 1, broadcast: 1 });
+    expect(report).toMatchObject({
+      session: 1,
+      verification: 1,
+      device: 1,
+      trustedDevice: 1,
+      broadcast: 1,
+    });
     expect(await count(env.DB, "SELECT count(*) AS n FROM session WHERE id = 's-live'")).toBe(1);
     expect(await count(env.DB, "SELECT count(*) AS n FROM verification WHERE id = 'v-live'")).toBe(
       1,
     );
     expect(await count(env.DB, "SELECT count(*) AS n FROM device WHERE token = 'd-live'")).toBe(1);
+    expect(
+      await count(env.DB, "SELECT count(*) AS n FROM trusted_device WHERE id = 'td-live'"),
+    ).toBe(1);
     expect(
       await count(env.INBOX_DB, "SELECT count(*) AS n FROM broadcast WHERE title = 'new'"),
     ).toBe(1);
