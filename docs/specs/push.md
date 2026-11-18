@@ -72,7 +72,7 @@ FCM and retries per token.
 3. The template is applied when the push is accepted: a scheduled push keeps the text it was
    accepted with even if the template changes.
 4. `translations` maps up to 50 BCP 47 tags to `{ title, body }`. Each user gets the translation
-   of their `locale` (case-insensitive), else of its language (`vi-VN` → `vi`), else the default
+   of their `locale` (case-insensitive), else of its language (`es-MX` → `es`), else the default
    `title` and `body`; their inbox item holds the same text. Users are queued in groups per
    translation.
 5. Topic pushes and broadcasts use the default text: a topic has no per-user locale, so apps that

@@ -1,5 +1,11 @@
 import * as v from "valibot";
-import { BODY_MAX, MAX_RECIPIENTS, TEMPLATE_NAME_PATTERN, TITLE_MAX } from "./limits";
+import {
+  BODY_MAX,
+  LOCALE_PATTERN,
+  MAX_RECIPIENTS,
+  TEMPLATE_NAME_PATTERN,
+  TITLE_MAX,
+} from "./limits";
 
 export const PlatformSchema = v.picklist(["web", "ios", "android"]);
 export type Platform = v.InferOutput<typeof PlatformSchema>;
@@ -14,8 +20,8 @@ const TextEntries = {
   body: v.pipe(v.string(), v.maxLength(BODY_MAX)),
 };
 
-// BCP 47, e.g. "vi" or "en-US".
-export const LocaleSchema = v.pipe(v.string(), v.regex(/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8}){0,3}$/));
+// BCP 47, e.g. "es" or "en-US".
+export const LocaleSchema = v.pipe(v.string(), v.regex(new RegExp(`^${LOCALE_PATTERN}$`)));
 
 /** Text per locale; a user gets their locale, else its language, else the default title and body. */
 const TranslationsSchema = v.pipe(

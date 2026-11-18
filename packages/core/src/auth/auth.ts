@@ -10,10 +10,12 @@ import { deleteUserOpens } from "../push/stats";
 import { LocaleSchema } from "../push/types";
 import { bindAppCallback } from "./app-callback";
 import { type ClientNetwork, extractClientNetwork } from "./network";
+import { passkeyPolicyPlugin } from "./passkey-policy";
 import {
   edgebaseSecurityPlugin,
   type RequestSecurityState,
   revokeAllTrustedDevices,
+  revokeAllTrustedDevicesStatements,
   type TwoFactorMethod,
   wipeCredentialsState,
 } from "./trusted-devices";
@@ -88,6 +90,10 @@ export function configuredProviders(env: Env) {
 /** TRUSTED_ORIGINS as a list: app schemes (`myapp://`) and web origins. */
 export const trustedOrigins = (env: Env) => env.TRUSTED_ORIGINS.split(",").map((o) => o.trim());
 
+/** HTTP(S) web origins from TRUSTED_ORIGINS (excludes native custom URL schemes). */
+export const webTrustedOrigins = (env: Env) =>
+  trustedOrigins(env).filter((o) => o.startsWith("https://") || o.startsWith("http://"));
+
 /** Expected WebAuthn ceremony origins: BASE_URL origin, web TRUSTED_ORIGINS, plus optional PASSKEY_ORIGINS. */
 export function passkeyOrigins(env: Env): string[] {
   const base = new URL(env.BASE_URL);
@@ -96,7 +102,7 @@ export function passkeyOrigins(env: Env): string[] {
     new Set([
       base.origin,
       ...(base.hostname === "localhost" ? ["http://localhost:5173"] : []),
-      ...trustedOrigins(env).filter((o) => o.startsWith("https://") || o.startsWith("http://")),
+      ...webTrustedOrigins(env),
       ...extra
         .split(",")
         .map((o) => o.trim())
@@ -342,10 +348,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
                   user.id,
                 ),
                 env.DB.prepare("DELETE FROM twoFactor WHERE userId = ?").bind(user.id),
-                env.DB.prepare("DELETE FROM trusted_device WHERE user_id = ?").bind(user.id),
-                env.DB.prepare(
-                  "DELETE FROM verification WHERE identifier GLOB 'trust-device-*' AND value = ?",
-                ).bind(user.id),
+                ...revokeAllTrustedDevicesStatements(env.DB, user.id),
               ]);
               return;
             }
@@ -381,6 +384,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
           userVerification: "required",
         },
       }),
+      passkeyPolicyPlugin(env, ctx, net, securityState),
       edgebaseSecurityPlugin(env, ctx, net, securityState),
       organization({
         // Bounds organization and member rows per user; pending invitations are capped at 100 per

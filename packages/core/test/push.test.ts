@@ -237,8 +237,8 @@ describe("templates and translations", () => {
     env.DB.prepare("UPDATE user SET locale = ? WHERE id = ?").bind(locale, id).run();
 
   it("renders vars and sends each user the text of their locale or language", async () => {
-    const [vi, enUs, none] = [await seedUser(), await seedUser(), await seedUser()];
-    await setLocale(vi, "vi-VN");
+    const [es, enUs, none] = [await seedUser(), await seedUser(), await seedUser()];
+    await setLocale(es, "es-MX");
     await setLocale(enUs, "en-US");
     expect(
       (
@@ -248,7 +248,7 @@ describe("templates and translations", () => {
           category: "transactional",
           data: { orderId: "{{order}}" },
           translations: {
-            vi: { title: "Đơn {{order}} đã gửi", body: "Đang giao" },
+            es: { title: "Pedido {{order}} enviado", body: "En camino" },
             "en-US": { title: "Order {{order}} is out", body: "Coming" },
           },
         })
@@ -258,7 +258,7 @@ describe("templates and translations", () => {
     const { res, sent } = push({
       template: "shipped",
       vars: { order: "42" },
-      to: { userIds: [vi, enUs, none] },
+      to: { userIds: [es, enUs, none] },
       inbox: true,
     });
     expect((await res).status).toBe(202);
@@ -268,13 +268,13 @@ describe("templates and translations", () => {
         return m.userIds.map((u) => [u, m.payload] as const);
       }),
     );
-    expect(byUser.get(vi)?.title).toBe("Đơn 42 đã gửi");
+    expect(byUser.get(es)?.title).toBe("Pedido 42 enviado");
     expect(byUser.get(enUs)?.title).toBe("Order 42 is out");
     expect(byUser.get(none)?.title).toBe("Order 42 shipped");
     expect(byUser.get(none)?.data).toMatchObject({ orderId: "42" });
     const inboxTitle = (u: string) =>
       env.INBOX_DB.prepare("SELECT title FROM inbox_item WHERE user_id = ?").bind(u).first("title");
-    expect(await inboxTitle(vi)).toBe("Đơn 42 đã gửi");
+    expect(await inboxTitle(es)).toBe("Pedido 42 enviado");
     expect(await inboxTitle(none)).toBe("Order 42 shipped");
   });
 

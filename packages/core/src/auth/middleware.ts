@@ -1,16 +1,13 @@
 import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../app";
 import { jsonError, sha256 } from "../http";
-import { adminNeedsTwoFactor, createAuth, trustedOrigins } from "./auth";
+import { adminNeedsTwoFactor, createAuth, webTrustedOrigins } from "./auth";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 function isAllowedWebOrigin(env: Env, origin: string | undefined): boolean {
   if (!origin) return false;
-  if (origin === new URL(env.BASE_URL).origin) return true;
-  return trustedOrigins(env)
-    .filter((o) => o.startsWith("https://") || o.startsWith("http://"))
-    .includes(origin);
+  return origin === new URL(env.BASE_URL).origin || webTrustedOrigins(env).includes(origin);
 }
 
 /** Blocks every auth route while the auth secret is unset, instead of running with a blank key. */

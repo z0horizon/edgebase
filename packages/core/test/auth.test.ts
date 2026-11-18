@@ -573,8 +573,8 @@ describe("admin, two-factor, organizations, locale", () => {
     expect((await update("not a locale")).status).toBe(400);
     const locale = () =>
       env.DB.prepare("SELECT locale FROM user WHERE id = ?").bind(userId).first("locale");
-    expect((await update("vi-VN")).status).toBe(200);
-    expect(await locale()).toBe("vi-VN");
+    expect((await update("es-MX")).status).toBe(200);
+    expect(await locale()).toBe("es-MX");
     const clear = await call("/api/auth/update-user", authed(token, json({ locale: null })));
     expect(clear.status).toBe(200);
     expect(await locale()).toBeNull();

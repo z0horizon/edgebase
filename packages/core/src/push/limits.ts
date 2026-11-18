@@ -6,6 +6,8 @@ export const TITLE_MAX = 120;
 export const BODY_MAX = 500;
 /** A template name, unanchored as HTML `pattern` takes it; `-` is escaped for its `v` flag. */
 export const TEMPLATE_NAME_PATTERN = "[a-z0-9_.\\-]{1,64}";
+/** A BCP 47 locale tag, unanchored as HTML `pattern` takes it. */
+export const LOCALE_PATTERN = "[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8}){0,3}";
 /** Pushes `GET /v1/push` lists, newest first. */
 export const STATS_LISTED = 50;
 /** Days a push's stats and opens are kept. */

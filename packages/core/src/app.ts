@@ -8,7 +8,7 @@ import {
   createAuth,
   type Session,
   type SessionUser,
-  trustedOrigins,
+  webTrustedOrigins,
 } from "./auth/auth";
 import {
   authRateLimit,
@@ -45,12 +45,7 @@ export const app = new Hono<AppEnv>();
 // Web apps on another origin call the API with cookies; only TRUSTED_ORIGINS web entries qualify.
 app.use("*", (c, next) =>
   cors({
-    origin: (origin) =>
-      trustedOrigins(c.env)
-        .filter((o) => o.startsWith("https://") || o.startsWith("http://"))
-        .includes(origin)
-        ? origin
-        : null,
+    origin: (origin) => (webTrustedOrigins(c.env).includes(origin) ? origin : null),
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["content-type", "authorization", "x-captcha-response", TRUST_DEVICE_HEADER],

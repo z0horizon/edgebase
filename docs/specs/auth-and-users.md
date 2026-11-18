@@ -148,4 +148,4 @@ user routes answer `503`.
     `POST /api/auth/organization/accept-invitation`. A trigger deletes an organization when its
     last member row goes, which happens only when that member's account is deleted.
 14. `POST /api/auth/update-user { locale }` sets the language pushes are written in; `null`
-    clears it, and anything other than a BCP 47 tag such as `vi` or `en-US` answers `400`.
+    clears it, and anything other than a BCP 47 tag such as `es` or `en-US` answers `400`.

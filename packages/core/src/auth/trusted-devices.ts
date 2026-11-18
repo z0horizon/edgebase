@@ -1,25 +1,18 @@
 import type { BetterAuthPlugin } from "better-auth";
-import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { base64url, sha256 } from "../http";
-import { insertPersonal } from "../inbox/queries";
-import { sendMail } from "../mail";
 import { type ClientNetwork, type TrackedSession, touchSessionActivity } from "./network";
+import { notifyNewNetworkSignIn } from "./security-alerts";
 
 export const TRUSTED_DEVICE_TTL_MS = 30 * 86_400_000;
 export const TRUSTED_DEVICE_MAX_AGE_SECONDS = 30 * 86_400;
 export const MAX_TRUSTED_DEVICES_PER_USER = 20;
-export const MAX_PASSKEYS_PER_USER = 20;
 export const MAX_SESSIONS_PER_USER = 30;
 export const TRUST_DEVICE_HEADER = "x-trust-device-token";
 export const SET_TRUST_DEVICE_HEADER = "set-trust-device-token";
 
 const MAX_TRUST_TOKEN_LEN = 128;
-const MAX_PASSKEY_NAME_LEN = 64;
-const FRESH_SESSION_MS = 15 * 60_000;
 const BRIDGE_TRUST_TTL_MS = 60_000;
-const ALERT_WINDOW_MS = 3_600_000;
-const MAX_SECURITY_ALERTS_PER_HOUR = 3;
-const ALERT_UA_MAX_LEN = 80;
 const COOKIE_BASE = "edgebase_td";
 const SECURE_COOKIE_NAME = `__Secure-${COOKIE_BASE}`;
 const BA_TRUST_COOKIE_NAMES = new Set([
@@ -109,6 +102,19 @@ export function parseCookiePairs(cookieHeader: string | null | undefined): Map<s
   return map;
 }
 
+function omitCookies(cookieHeader: string | null | undefined, omit: ReadonlySet<string>): string {
+  if (!cookieHeader) return "";
+  return cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => {
+      const eq = part.indexOf("=");
+      const key = eq > 0 ? part.slice(0, eq).trim() : part;
+      return Boolean(key) && !omit.has(key);
+    })
+    .join("; ");
+}
+
 /** Extracts a bounded candidate raw device-trust token from header (mobile) or cookie (web). */
 export function extractTrustDeviceToken(
   headers: Headers | undefined,
@@ -165,7 +171,7 @@ async function signBetterCallCookie(value: string, secret: string): Promise<stri
   return encodeURIComponent(`${value}.${sigB64}`);
 }
 
-async function headersWithBearerCookie(
+export async function headersWithBearerCookie(
   headersIn: Headers | undefined,
   cookieName: string,
   secret: string,
@@ -185,15 +191,7 @@ async function headersWithBearerCookie(
     ? encodeURIComponent(decoded)
     : await signBetterCallCookie(decoded, secret);
   const next = new Headers(headersIn);
-  const keptCookies = (next.get("cookie") ?? "")
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => {
-      const eq = part.indexOf("=");
-      const key = eq > 0 ? part.slice(0, eq).trim() : part;
-      return Boolean(key) && key !== cookieName;
-    })
-    .join("; ");
+  const keptCookies = omitCookies(next.get("cookie"), new Set([cookieName]));
   next.set(
     "cookie",
     keptCookies ? `${keptCookies}; ${cookieName}=${encoded}` : `${cookieName}=${encoded}`,
@@ -219,7 +217,7 @@ export async function revokeAllTrustedDevices(db: D1Database, userId: string): P
 }
 
 /**
- * Atomically updates credential timestamps and revokes sessions + trusted devices in 1 D1 batch.
+ * Atomically updates `passwordChangedAt` (when set) and revokes sessions + trusted devices in 1 D1 batch.
  */
 export async function wipeCredentialsState(
   db: D1Database,
@@ -227,8 +225,6 @@ export async function wipeCredentialsState(
   opts: {
     keepSessionId?: string | undefined;
     passwordChangedAt?: string | undefined;
-    clearTwoFactorEnabledAt?: boolean | undefined;
-    dropTwoFactorRow?: boolean | undefined;
   } = {},
 ): Promise<void> {
   const statements: D1PreparedStatement[] = [];
@@ -238,14 +234,6 @@ export async function wipeCredentialsState(
         .prepare("UPDATE user SET passwordChangedAt = ? WHERE id = ?")
         .bind(opts.passwordChangedAt, userId),
     );
-  }
-  if (opts.clearTwoFactorEnabledAt) {
-    statements.push(
-      db.prepare("UPDATE user SET twoFactorEnabledAt = NULL WHERE id = ?").bind(userId),
-    );
-  }
-  if (opts.dropTwoFactorRow) {
-    statements.push(db.prepare("DELETE FROM twoFactor WHERE userId = ?").bind(userId));
   }
   statements.push(
     opts.keepSessionId
@@ -385,158 +373,6 @@ export async function revokeTrustedDevice(
   return { deleted: Boolean(row), tokenHash: row?.token_hash ?? null };
 }
 
-/** Strips control chars, HTML brackets, and URLs from User-Agent before placing it in alerts. */
-export function sanitizeUserAgentForAlert(userAgent: string | null): string {
-  if (!userAgent) return "Unknown device";
-  const cleaned = Array.from(userAgent)
-    .map((ch) => {
-      const code = ch.charCodeAt(0);
-      return code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? " " : ch;
-    })
-    .join("")
-    .replace(/https?:\/\/\S+/gi, "[url]")
-    .replace(/[<>]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned ? cleaned.slice(0, ALERT_UA_MAX_LEN) : "Unknown device";
-}
-
-async function hasReachedAlertCap(db: D1Database, userId: string, now: number): Promise<boolean> {
-  // Uses `inbox_item_user_created_at` so sign-in loops cannot bloat `INBOX_DB` or exhaust `MAIL`.
-  const recent = await db
-    .prepare(
-      `SELECT count(*) AS n FROM inbox_item
-       WHERE user_id = ? AND created_at > ? AND category = 'transactional'
-         AND json_extract(data, '$.kind') = 'security_alert'`,
-    )
-    .bind(userId, now - ALERT_WINDOW_MS)
-    .first<number>("n");
-  return (recent ?? 0) >= MAX_SECURITY_ALERTS_PER_HOUR;
-}
-
-export async function notifyNewNetworkSignIn(
-  env: Env,
-  user: { id: string; email: string },
-  sessionId: string,
-  net: ClientNetwork,
-  now: number,
-  excludeTrustedDeviceId: string | null = null,
-): Promise<void> {
-  if (net.asn === null && net.country === null) return;
-  const nowIso = new Date(now).toISOString();
-
-  // Single short-circuiting EXISTS query on DB (1 round-trip, stops at first matching row).
-  const check = await env.DB.prepare(
-    `SELECT
-       EXISTS(
-         SELECT 1 FROM session WHERE userId = ?1 AND id <> ?2 AND expiresAt > ?3
-         UNION ALL
-         SELECT 1 FROM trusted_device
-         WHERE user_id = ?1 AND expires_at > ?4 AND (?7 IS NULL OR id <> ?7)
-       ) AS hasPrior,
-       EXISTS(
-         SELECT 1 FROM session
-         WHERE userId = ?1 AND id <> ?2 AND expiresAt > ?3
-           AND (
-             (COALESCE(asn, -1) = COALESCE(?5, -1) AND COALESCE(country, '') = COALESCE(?6, ''))
-             OR (COALESCE(createdAsn, -1) = COALESCE(?5, -1) AND COALESCE(createdCountry, '') = COALESCE(?6, ''))
-           )
-         UNION ALL
-         SELECT 1 FROM trusted_device
-         WHERE user_id = ?1 AND expires_at > ?4 AND (?7 IS NULL OR id <> ?7)
-           AND (
-             (COALESCE(asn, -1) = COALESCE(?5, -1) AND COALESCE(country, '') = COALESCE(?6, ''))
-             OR (COALESCE(created_asn, -1) = COALESCE(?5, -1) AND COALESCE(created_country, '') = COALESCE(?6, ''))
-           )
-       ) AS hasMatch`,
-  )
-    .bind(user.id, sessionId, nowIso, now, net.asn, net.country, excludeTrustedDeviceId)
-    .first<{ hasPrior: number; hasMatch: number }>();
-
-  if (!check || check.hasPrior === 0 || check.hasMatch === 1) return;
-  if (await hasReachedAlertCap(env.INBOX_DB, user.id, now)) return;
-
-  const location = [net.city, net.country].filter(Boolean).join(", ") || "Unknown location";
-  const isp = net.asOrganization
-    ? net.asn
-      ? `${net.asOrganization} (AS${net.asn})`
-      : net.asOrganization
-    : net.asn
-      ? `AS${net.asn}`
-      : "Unknown network";
-  const device = sanitizeUserAgentForAlert(net.userAgent);
-  const ip = net.ipAddress ?? "Unknown IP";
-  const summary = `New sign-in on ${device} from ${location} — ${isp} (IP: ${ip}) at ${nowIso}. If this was not you, revoke the session and change your password immediately.`;
-
-  await Promise.all([
-    insertPersonal(
-      env.INBOX_DB,
-      [user.id],
-      {
-        title: "New sign-in from an unfamiliar network",
-        body: summary,
-        category: "transactional",
-        data: { kind: "security_alert" },
-      },
-      now,
-    ),
-    sendMail(env, {
-      to: user.email,
-      subject: "Security alert: new sign-in detected",
-      text: summary,
-    }),
-  ]);
-}
-
-export async function notifyPasskeyAdded(
-  env: Env,
-  user: { id: string; email: string },
-  passkeyName: string | null,
-  net: ClientNetwork,
-  now: number,
-): Promise<void> {
-  if (await hasReachedAlertCap(env.INBOX_DB, user.id, now)) return;
-
-  const label = sanitizeUserAgentForAlert(passkeyName || "Passkey");
-  const device = sanitizeUserAgentForAlert(net.userAgent);
-  const location = [net.city, net.country].filter(Boolean).join(", ") || "Unknown location";
-  const ip = net.ipAddress ?? "Unknown IP";
-  const nowIso = new Date(now).toISOString();
-  const summary = `A new passkey "${label}" was added to your account on ${device} from ${location} (IP: ${ip}) at ${nowIso}. If you did not add this passkey, remove it immediately from Account Security.`;
-
-  await Promise.all([
-    insertPersonal(
-      env.INBOX_DB,
-      [user.id],
-      {
-        title: "New passkey added to your account",
-        body: summary,
-        category: "transactional",
-        data: { kind: "security_alert" },
-      },
-      now,
-    ),
-    sendMail(env, {
-      to: user.email,
-      subject: "Security alert: new passkey added",
-      text: summary,
-    }),
-  ]);
-}
-
-function stripBetterAuthTrustCookies(cookieHeader: string | null | undefined): string {
-  if (!cookieHeader) return "";
-  return cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => {
-      const eq = part.indexOf("=");
-      const key = eq > 0 ? part.slice(0, eq).trim() : part;
-      return Boolean(key) && !BA_TRUST_COOKIE_NAMES.has(key);
-    })
-    .join("; ");
-}
-
 export function osFamilyOf(userAgent: string | null | undefined): string | null {
   if (!userAgent) return null;
   if (/iPhone|iPad|iPod|\biOS\b/i.test(userAgent)) return "ios";
@@ -560,7 +396,7 @@ async function prepareSignInTrustBridge(
   const cookies = parseCookiePairs(headers.get("cookie"));
   state.hadTrustCookie = cookies.has(SECURE_COOKIE_NAME) || cookies.has(COOKIE_BASE);
   const rawToken = extractTrustDeviceToken(headers, cookies);
-  let strippedCookies = stripBetterAuthTrustCookies(headers.get("cookie"));
+  let strippedCookies = omitCookies(headers.get("cookie"), BA_TRUST_COOKIE_NAMES);
 
   if (email && rawToken) {
     const tokenHash = base64url(await sha256(rawToken));
@@ -704,135 +540,6 @@ export function edgebaseSecurityPlugin(
             return { context: { headers } };
           }),
         },
-        {
-          matcher: (context) =>
-            context.path === "/passkey/list-user-passkeys" ||
-            context.path === "/passkey/generate-register-options" ||
-            context.path === "/passkey/verify-registration" ||
-            context.path === "/passkey/update-passkey" ||
-            context.path === "/passkey/delete-passkey",
-          handler: createAuthMiddleware(async (ctx) => {
-            const cookieName = ctx.context.authCookies.sessionToken.name;
-            const lookupHeaders = await headersWithBearerCookie(
-              ctx.headers,
-              cookieName,
-              ctx.context.secret,
-            );
-            const current = await getSessionFromCtx<
-              {
-                id: string;
-                email: string;
-                role?: string | null;
-                twoFactorEnabled?: boolean | null;
-              },
-              { id: string; createdAt: Date | string; signInProvider?: string | null }
-            >(
-              { ...ctx, headers: lookupHeaders },
-              { disableRefresh: true, disableCookieCache: true },
-            ).catch(() => null);
-            // Fail closed: every endpoint matched here requires a valid session.
-            if (!current) {
-              throw new APIError("UNAUTHORIZED", {
-                code: "UNAUTHORIZED",
-                message: "Unauthorized",
-              });
-            }
-
-            const unverifiedAdmin =
-              current.user.role === "admin" &&
-              !current.user.twoFactorEnabled &&
-              !current.session.signInProvider;
-
-            if (ctx.path === "/passkey/list-user-passkeys") {
-              if (unverifiedAdmin) {
-                throw new APIError("FORBIDDEN", {
-                  code: "TWO_FACTOR_REQUIRED",
-                  message: "Turn on two-factor authentication first",
-                });
-              }
-              return;
-            }
-
-            // Step-up freshness check across all passkey mutations (add, rename, delete).
-            const createdAtMs = new Date(current.session.createdAt).getTime();
-            if (Date.now() - createdAtMs >= FRESH_SESSION_MS) {
-              throw new APIError("FORBIDDEN", {
-                code: "SESSION_NOT_FRESH",
-                message: "Session is not fresh",
-              });
-            }
-
-            const queryName = (ctx.query as Record<string, unknown> | undefined)?.["name"];
-            const body = ctx.body as Record<string, unknown> | undefined;
-            const bodyName = body?.["name"];
-            for (const candidate of [queryName, bodyName]) {
-              if (typeof candidate === "string" && candidate.trim().length > MAX_PASSKEY_NAME_LEN) {
-                throw new APIError("BAD_REQUEST", {
-                  code: "INVALID_PASSKEY_NAME",
-                  message: `Passkey name must be at most ${MAX_PASSKEY_NAME_LEN} characters`,
-                });
-              }
-            }
-
-            if (ctx.path === "/passkey/update-passkey" || ctx.path === "/passkey/delete-passkey") {
-              if (unverifiedAdmin) {
-                throw new APIError("FORBIDDEN", {
-                  code: "TWO_FACTOR_REQUIRED",
-                  message: "Turn on two-factor authentication first",
-                });
-              }
-              if (
-                ctx.path === "/passkey/delete-passkey" &&
-                current.user.role === "admin" &&
-                !current.user.twoFactorEnabled
-              ) {
-                const factorState = await env.DB.prepare(
-                  `SELECT
-                     (SELECT count(*) FROM passkey WHERE userId = ?1) AS passkeys,
-                     EXISTS(SELECT 1 FROM account WHERE userId = ?1 AND providerId = 'credential') AS hasPassword`,
-                )
-                  .bind(current.user.id)
-                  .first<{ passkeys: number; hasPassword: number }>();
-                if (factorState && factorState.hasPassword === 1 && factorState.passkeys <= 1) {
-                  throw new APIError("BAD_REQUEST", {
-                    code: "LAST_ADMIN_FACTOR",
-                    message:
-                      "Add another passkey or enable two-factor before removing your last passkey",
-                  });
-                }
-              }
-              return;
-            }
-
-            const count =
-              (await env.DB.prepare("SELECT count(*) AS n FROM passkey WHERE userId = ?")
-                .bind(current.user.id)
-                .first<number>("n")) ?? 0;
-
-            if (unverifiedAdmin) {
-              if (count > 0) {
-                throw new APIError("FORBIDDEN", {
-                  code: "TWO_FACTOR_REQUIRED",
-                  message: "Sign in with an existing passkey or two-factor first",
-                });
-              }
-              state.bootstrapAdminPasskeySessionId = current.session.id;
-            }
-
-            if (count >= MAX_PASSKEYS_PER_USER) {
-              throw new APIError("BAD_REQUEST", {
-                code: "PASSKEY_LIMIT_REACHED",
-                message: `Maximum of ${MAX_PASSKEYS_PER_USER} passkeys per account`,
-              });
-            }
-
-            // Cloudflare D1 has no interactive SQL transactions (`runWithTransaction`); never let
-            // `verify-registration` spin up a second session transactionally.
-            if (ctx.path === "/passkey/verify-registration" && body?.["createSession"]) {
-              return { context: { body: { ...body, createSession: false } } };
-            }
-          }),
-        },
       ],
       after: [
         {
@@ -947,69 +654,6 @@ export function edgebaseSecurityPlugin(
               return;
             }
 
-            if (ctx.path === "/passkey/list-user-passkeys") {
-              if (Array.isArray(ctx.context.returned)) {
-                return ctx.json(
-                  ctx.context.returned.map((item: Record<string, unknown>) => {
-                    const { publicKey: _pk, credentialID: _cid, ...safe } = item;
-                    return safe;
-                  }),
-                );
-              }
-              return;
-            }
-
-            if (ctx.path === "/passkey/verify-registration") {
-              const active = ctx.context.session;
-              if (!active) return;
-              const createdId = (ctx.context.returned as { id?: unknown } | null)?.id;
-              if (
-                state.bootstrapAdminPasskeySessionId &&
-                active.session.id === state.bootstrapAdminPasskeySessionId
-              ) {
-                const postCount =
-                  (await env.DB.prepare("SELECT count(*) AS n FROM passkey WHERE userId = ?")
-                    .bind(active.user.id)
-                    .first<number>("n")) ?? 0;
-                if (postCount > 1) {
-                  if (typeof createdId === "string" && createdId) {
-                    await env.DB.prepare("DELETE FROM passkey WHERE id = ? AND userId = ?")
-                      .bind(createdId, active.user.id)
-                      .run();
-                  }
-                  throw new APIError("FORBIDDEN", {
-                    code: "TWO_FACTOR_REQUIRED",
-                    message: "Sign in with an existing passkey or two-factor first",
-                  });
-                }
-                await env.DB.prepare(
-                  "UPDATE session SET signInProvider = 'passkey', twoFactorVerifiedAt = ? WHERE id = ?",
-                )
-                  .bind(nowIso, active.session.id)
-                  .run();
-              } else {
-                await env.DB.prepare(
-                  `DELETE FROM passkey
-                   WHERE userId = ?1 AND id NOT IN (
-                     SELECT id FROM passkey
-                     WHERE userId = ?1
-                     ORDER BY createdAt DESC, rowid DESC
-                     LIMIT ?2
-                   )`,
-                )
-                  .bind(active.user.id, MAX_PASSKEYS_PER_USER)
-                  .run();
-              }
-              const body = ctx.body as { name?: unknown } | undefined;
-              const name = typeof body?.name === "string" ? body.name.trim() : null;
-              execCtx.waitUntil(
-                notifyPasskeyAdded(env, active.user, name, net, now).catch((error) =>
-                  console.error("passkey alert failed", error),
-                ),
-              );
-              return;
-            }
-
             if (
               ctx.path === "/two-factor/verify-totp" ||
               ctx.path === "/two-factor/verify-backup-code"
@@ -1072,10 +716,9 @@ export function edgebaseSecurityPlugin(
             if (ctx.path === "/two-factor/disable") {
               const active = ctx.context.newSession ?? ctx.context.session;
               if (!active) return;
-              await wipeCredentialsState(env.DB, active.user.id, {
-                keepSessionId: active.session.id,
-                clearTwoFactorEnabledAt: true,
-              });
+              await env.DB.prepare("DELETE FROM session WHERE userId = ? AND id <> ?")
+                .bind(active.user.id, active.session.id)
+                .run();
               ctx.responseHeaders?.append("set-cookie", serializeTrustCookie(env.BASE_URL, "", 0));
               return;
             }
