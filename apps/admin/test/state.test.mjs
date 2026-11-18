@@ -4,10 +4,12 @@ import {
   clearSessionDrafts,
   describeDevice,
   describeNetwork,
+  extractPlaceholders,
   fillPreview,
   networkShifted,
+  routeFromHash,
   SEND_RECIPIENTS_KEY,
-  viewKeyFromHash,
+  SEND_TEMPLATE_KEY,
 } from "../src/lib/state.ts";
 import {
   base64urlToBytes,
@@ -17,16 +19,47 @@ import {
   toRequestOptions,
 } from "../src/lib/webauthn.ts";
 
-const VIEWS = { users: 1, send: 1, pushes: 1, templates: 1, account: 1 };
+const VIEWS = { users: 1, notifications: 1, templates: 1, account: 1 };
+const ALIASES = { pushes: "notifications", send: "notifications" };
 
-describe("viewKeyFromHash", () => {
-  it("picks known views and falls back for unknown or Object.prototype hashes", () => {
-    assert.equal(viewKeyFromHash("#send", VIEWS, "users"), "send");
-    assert.equal(viewKeyFromHash("", VIEWS, "users"), "users");
-    assert.equal(viewKeyFromHash("#nope", VIEWS, "send"), "send");
-    assert.equal(viewKeyFromHash("#toString", VIEWS, "users"), "users");
-    assert.equal(viewKeyFromHash("#constructor", VIEWS, "users"), "users");
-    assert.equal(viewKeyFromHash("#__proto__", VIEWS, "users"), "users");
+describe("routeFromHash", () => {
+  it("resolves known views, subviews, legacy aliases, and rejects unknown or Object.prototype hashes", () => {
+    assert.deepEqual(routeFromHash("", VIEWS, "users", ALIASES), {
+      view: "users",
+      subview: null,
+    });
+    assert.deepEqual(routeFromHash("#nope", VIEWS, "notifications", ALIASES), {
+      view: "notifications",
+      subview: null,
+    });
+    assert.deepEqual(routeFromHash("#notifications", VIEWS, "users", ALIASES), {
+      view: "notifications",
+      subview: null,
+    });
+    assert.deepEqual(routeFromHash("#notifications/send", VIEWS, "users", ALIASES), {
+      view: "notifications",
+      subview: "send",
+    });
+    assert.deepEqual(routeFromHash("#send", VIEWS, "users", ALIASES), {
+      view: "notifications",
+      subview: "send",
+    });
+    assert.deepEqual(routeFromHash("#pushes", VIEWS, "users", ALIASES), {
+      view: "notifications",
+      subview: null,
+    });
+    assert.deepEqual(routeFromHash("#toString", VIEWS, "users", ALIASES), {
+      view: "users",
+      subview: null,
+    });
+    assert.deepEqual(routeFromHash("#constructor", VIEWS, "users", ALIASES), {
+      view: "users",
+      subview: null,
+    });
+    assert.deepEqual(routeFromHash("#__proto__/send", VIEWS, "users", ALIASES), {
+      view: "users",
+      subview: null,
+    });
   });
 });
 
@@ -40,14 +73,34 @@ describe("fillPreview", () => {
 });
 
 describe("clearSessionDrafts", () => {
-  it("removes queued send recipients from sessionStorage on sign-out", () => {
-    const store = new Map([[SEND_RECIPIENTS_KEY, '{"u1":"a@x.io"}']]);
+  it("removes queued send recipients and template selection from sessionStorage on sign-out", () => {
+    const store = new Map([
+      [SEND_RECIPIENTS_KEY, '{"u1":"a@x.io"}'],
+      [SEND_TEMPLATE_KEY, "order-shipped"],
+    ]);
     clearSessionDrafts({
       removeItem: (key) => {
         store.delete(key);
       },
     });
     assert.equal(store.has(SEND_RECIPIENTS_KEY), false);
+    assert.equal(store.has(SEND_TEMPLATE_KEY), false);
+  });
+});
+
+describe("extractPlaceholders", () => {
+  it("collects unique placeholder names in order across title, body, data, and translations", () => {
+    assert.deepEqual(
+      extractPlaceholders({
+        title: "Order #{{order}} shipped",
+        body: "Arriving {{ eta }} for {{order}}",
+        data: { tracking: "{{tracking_id}}" },
+        translations: {
+          es: { title: "Pedido #{{order}}", body: "Entrega {{eta}} ({{carrier}})" },
+        },
+      }),
+      ["order", "eta", "tracking_id", "carrier"],
+    );
   });
 });
 

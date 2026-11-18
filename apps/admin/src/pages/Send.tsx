@@ -1,5 +1,5 @@
 import { BODY_MAX, MAX_RECIPIENTS, TITLE_MAX } from "@edgebase/core/limits";
-import { Check, Plus, Radio, Search, Send, Users, X } from "lucide-react";
+import { ArrowLeft, Check, Plus, Radio, Search, Send, Users, X } from "lucide-react";
 import {
   type ClipboardEvent,
   type FormEvent,
@@ -36,26 +36,25 @@ import {
   type User,
 } from "@/lib/api";
 import { formatDate } from "@/lib/format";
-import { fillPreview, SEND_RECIPIENTS_KEY } from "@/lib/state";
+import {
+  extractPlaceholders,
+  fillPreview,
+  SEND_RECIPIENTS_KEY,
+  SEND_TEMPLATE_KEY,
+} from "@/lib/state";
 import { cn } from "@/lib/utils";
 
 const NONE = "none";
 const SEARCH_LIMIT = 8;
 const COLLAPSED_CHIP_LIMIT = 10;
 
-/** `name=value` per line; the first `=` splits, so values may contain `=`. */
-function parseVars(text: string): Record<string, string> {
-  const vars: Record<string, string> = {};
-  for (const line of text.split("\n")) {
-    const at = line.indexOf("=");
-    const key = (at < 0 ? line : line.slice(0, at)).trim();
-    if (key) vars[key] = at < 0 ? "" : line.slice(at + 1).trim();
-  }
-  return vars;
-}
-
 export function SendPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [initialTemplate] = useState(() => {
+    const prefill = sessionStorage.getItem(SEND_TEMPLATE_KEY);
+    if (prefill) sessionStorage.removeItem(SEND_TEMPLATE_KEY);
+    return prefill;
+  });
   const [target, setTarget] = useState<"users" | "topic">("users");
   // Maps userId -> display label (email when picked from list, or the raw ID when pasted).
   const [recipients, setRecipients] = useState<Record<string, string>>(() => {
@@ -76,7 +75,7 @@ export function SendPage() {
   const [topic, setTopic] = useState("all");
   const [templateName, setTemplateName] = useState(NONE);
   const [text, setText] = useState<Text>({ title: "", body: "" });
-  const [vars, setVars] = useState("");
+  const [vars, setVars] = useState<Record<string, string>>({});
   const [category, setCategory] = useState<Category>("transactional");
   const [inbox, setInbox] = useState(true);
   const [sendAt, setSendAt] = useState("");
@@ -92,6 +91,13 @@ export function SendPage() {
       .then((r) => {
         setTemplates(r.templates);
         setPushUnconfigured(false);
+        if (initialTemplate) {
+          const matched = r.templates.find((t) => t.name === initialTemplate);
+          if (matched) {
+            setTemplateName(matched.name);
+            if (matched.category) setCategory(matched.category);
+          }
+        }
       })
       .catch((e) => {
         if (e instanceof ApiError && e.status === 503) {
@@ -100,7 +106,7 @@ export function SendPage() {
         }
         toast.error(errorMessage(e));
       });
-  }, []);
+  }, [initialTemplate]);
 
   useEffect(() => {
     const q = userQuery.trim();
@@ -210,16 +216,21 @@ export function SendPage() {
   };
 
   const template = templates.find((t) => t.name === templateName);
+  const templateVars = useMemo(() => (template ? extractPlaceholders(template) : []), [template]);
 
   // What each language will show; "" is the default text.
   const preview = useMemo(() => {
-    const values = parseVars(vars);
+    const filled = Object.fromEntries(
+      Object.entries(vars)
+        .map(([k, v]) => [k, v.trim()] as const)
+        .filter(([, v]) => v.length > 0),
+    );
     const base = template ?? { ...text, translations: {} };
     const texts: Record<string, Text> = { "": base, ...base.translations };
     return Object.fromEntries(
       Object.entries(texts).map(([key, t]) => [
         key,
-        { title: fillPreview(t.title, values), body: fillPreview(t.body, values) },
+        { title: fillPreview(t.title, filled), body: fillPreview(t.body, filled) },
       ]),
     );
   }, [template, text, vars]);
@@ -228,6 +239,7 @@ export function SendPage() {
   const chooseTemplate = (name: string) => {
     setTemplateName(name);
     setLocale("");
+    setError("");
     const chosen = templates.find((t) => t.name === name);
     if (chosen?.category) setCategory(chosen.category);
   };
@@ -249,6 +261,17 @@ export function SendPage() {
         return;
       }
     }
+    const varsPayload: Record<string, string> = {};
+    if (template) {
+      for (const key of templateVars) {
+        const val = (vars[key] ?? "").trim();
+        if (!val) {
+          setError(`Enter a value for "{{${key}}}" before sending.`);
+          return;
+        }
+        varsPayload[key] = val;
+      }
+    }
     setBusy(true);
     try {
       const result = await api<{ id: number; users?: number; scheduled?: boolean }>("/v1/push", {
@@ -258,7 +281,7 @@ export function SendPage() {
           to: target === "users" ? { userIds: recipientIds } : { topic: topic.trim() },
           category,
           inbox,
-          ...(template ? { template: template.name, vars: parseVars(vars) } : text),
+          ...(template ? { template: template.name, vars: varsPayload } : text),
           ...(sendAt && { sendAt: new Date(sendAt).toISOString() }),
         },
       });
@@ -270,7 +293,7 @@ export function SendPage() {
             : `Push #${result.id} sent to ${result.users} ${result.users === 1 ? "user" : "users"}`,
       );
       setIdempotencyKey(crypto.randomUUID());
-      location.hash = "#pushes";
+      location.hash = "#notifications";
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -283,7 +306,17 @@ export function SendPage() {
       <PageHeader
         title="Send push"
         description="Dispatch an immediate or scheduled FCM notification to selected accounts or a broadcast topic."
-      />
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            location.hash = "#notifications";
+          }}
+        >
+          <ArrowLeft /> Back
+        </Button>
+      </PageHeader>
 
       {pushUnconfigured && (
         <div
@@ -547,7 +580,15 @@ export function SendPage() {
 
           <section className="grid gap-3.5 px-4 py-4">
             <div className="grid gap-1.5">
-              <Label htmlFor="template">Payload source</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="template">Payload source</Label>
+                <a
+                  href="#templates"
+                  className="text-xs font-medium text-primary-ink hover:underline"
+                >
+                  Manage templates
+                </a>
+              </div>
               <Select value={templateName} onValueChange={chooseTemplate}>
                 <SelectTrigger id="template" className="w-full">
                   <SelectValue />
@@ -564,21 +605,41 @@ export function SendPage() {
             </div>
 
             {template ? (
-              <div className="grid gap-1.5">
-                <Label htmlFor="vars">Template variables</Label>
-                <Textarea
-                  id="vars"
-                  placeholder={"order=1042\neta=tomorrow"}
-                  value={vars}
-                  onChange={(e) => setVars(e.target.value)}
-                  spellCheck={false}
-                  className="font-mono text-xs"
-                />
+              templateVars.length > 0 ? (
+                <div className="grid gap-2.5">
+                  <div className="grid gap-0.5">
+                    <span className="text-xs leading-none font-medium text-foreground">
+                      Template variables
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      Substituted into default and localized copy before dispatch.
+                    </span>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {templateVars.map((key) => (
+                      <div key={key} className="grid gap-1.5">
+                        <Label htmlFor={`var-${key}`} className="font-mono text-xs">
+                          {`{{${key}}}`}
+                        </Label>
+                        <Input
+                          id={`var-${key}`}
+                          value={vars[key] ?? ""}
+                          onChange={(e) => setVars((prev) => ({ ...prev, [key]: e.target.value }))}
+                          placeholder={`Value for ${key}`}
+                          maxLength={500}
+                          required
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
                 <p className="text-xs text-muted-foreground">
-                  One <code className="font-mono text-foreground">name=value</code> pair per line
-                  for each <code className="font-mono text-foreground">{"{{name}}"}</code> token.
+                  This template has no{" "}
+                  <code className="font-mono text-foreground">{"{{variable}}"}</code> placeholders
+                  and is ready to dispatch as-is.
                 </p>
-              </div>
+              )
             ) : (
               <>
                 <div className="grid gap-1.5">
@@ -744,7 +805,7 @@ export function SendPage() {
             <div className="rounded-md border bg-card p-3 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)]">
               <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <span className="font-medium text-foreground">EdgeBase</span>
-                <span className="ml-auto font-mono text-[10px]">now</span>
+                <span className="ml-auto font-mono text-[11px]">now</span>
               </div>
               <p
                 className={cn(

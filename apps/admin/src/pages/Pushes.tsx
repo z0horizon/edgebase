@@ -1,5 +1,5 @@
 import { STATS_KEPT_DAYS, STATS_LISTED } from "@edgebase/core/limits";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Send } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
@@ -47,11 +47,19 @@ export function PushesPage() {
   return (
     <>
       <PageHeader
-        title="Sent pushes"
-        description={`Recent ${STATS_LISTED} dispatches with ${STATS_KEPT_DAYS}-day delivery and open retention.`}
+        title="Dispatches"
+        description={`Recent ${STATS_LISTED} notification batches with ${STATS_KEPT_DAYS}-day delivery and open retention.`}
       >
         <Button variant="outline" size="sm" onClick={load}>
           <RefreshCw /> Refresh
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            location.hash = "#notifications/send";
+          }}
+        >
+          <Send /> Send push
         </Button>
       </PageHeader>
 
@@ -127,12 +135,12 @@ export function PushesPage() {
             {pushes?.length === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="h-28 text-center text-xs text-muted-foreground">
-                  No push batches recorded yet.{" "}
+                  No notifications recorded yet.{" "}
                   <a
-                    href="#send"
+                    href="#notifications/send"
                     className="font-medium text-primary-ink underline underline-offset-4"
                   >
-                    Dispatch a push
+                    Send a push
                   </a>
                 </TableCell>
               </TableRow>

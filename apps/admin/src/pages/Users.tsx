@@ -15,6 +15,16 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { SessionCard } from "@/components/SessionCard";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -46,9 +56,62 @@ import {
 } from "@/components/ui/table";
 import { api, errorMessage, listUsers, type SessionRecord, type User } from "@/lib/api";
 import { formatDate } from "@/lib/format";
-import { SEND_RECIPIENTS_KEY } from "@/lib/state";
+import { describeDevice, describeNetwork, SEND_RECIPIENTS_KEY } from "@/lib/state";
 
 const PAGE = 20;
+
+type UserConfirmAction =
+  | { kind: "set-role"; user: User; role: "admin" | "user" }
+  | { kind: "unban"; user: User }
+  | { kind: "revoke-session"; user: User; session: SessionRecord }
+  | { kind: "revoke-all-sessions"; user: User; count: number };
+
+function userConfirmCopy(action: UserConfirmAction): {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  destructive: boolean;
+} {
+  switch (action.kind) {
+    case "set-role":
+      return action.role === "admin"
+        ? {
+            title: `Grant admin access to ${action.user.email}?`,
+            description:
+              "Admins can inspect accounts, revoke sessions, and dispatch push notifications after completing two-factor setup.",
+            confirmLabel: "Grant admin",
+            destructive: false,
+          }
+        : {
+            title: `Revoke admin access from ${action.user.email}?`,
+            description: "Console privileges are removed immediately on the next request.",
+            confirmLabel: "Revoke admin",
+            destructive: true,
+          };
+    case "unban":
+      return {
+        title: `Unban ${action.user.email}?`,
+        description: "Restores sign-in access for this account immediately.",
+        confirmLabel: "Unban account",
+        destructive: false,
+      };
+    case "revoke-session":
+      return {
+        title: `Revoke session for ${action.user.email}?`,
+        description: `Signs out ${describeDevice(action.session.userAgent)} (${describeNetwork(action.session)}) immediately.`,
+        confirmLabel: "Revoke session",
+        destructive: true,
+      };
+    case "revoke-all-sessions":
+      return {
+        title: `Revoke all ${action.count} ${action.count === 1 ? "session" : "sessions"} for ${action.user.email}?`,
+        description:
+          "Signs out every active browser and clears all 30-day trusted devices for this account immediately.",
+        confirmLabel: "Revoke all sessions",
+        destructive: true,
+      };
+  }
+}
 
 export function UsersPage({ me }: { me: User }) {
   const [users, setUsers] = useState<User[] | null>(null);
@@ -57,6 +120,7 @@ export function UsersPage({ me }: { me: User }) {
   const [query, setQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [banning, setBanning] = useState<User | null>(null);
+  const [confirming, setConfirming] = useState<UserConfirmAction | null>(null);
   const [inspecting, setInspecting] = useState<User | null>(null);
   const [userSessions, setUserSessions] = useState<SessionRecord[] | null>(null);
   const [sessionsBusy, setSessionsBusy] = useState(false);
@@ -81,16 +145,15 @@ export function UsersPage({ me }: { me: User }) {
     loadUserSessions(target);
   };
 
-  const revokeTargetSession = async (sessionId: string) => {
-    if (!inspecting) return;
+  const revokeTargetSession = async (target: User, sessionId: string) => {
     setSessionsBusy(true);
     try {
       await api(
-        `/v1/admin/users/${encodeURIComponent(inspecting.id)}/sessions/${encodeURIComponent(sessionId)}`,
+        `/v1/admin/users/${encodeURIComponent(target.id)}/sessions/${encodeURIComponent(sessionId)}`,
         { method: "DELETE" },
       );
       toast.success("Session revoked");
-      await loadUserSessions(inspecting);
+      await loadUserSessions(target);
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -98,15 +161,14 @@ export function UsersPage({ me }: { me: User }) {
     }
   };
 
-  const revokeAllTargetSessions = async () => {
-    if (!inspecting) return;
+  const revokeAllTargetSessions = async (target: User) => {
     setSessionsBusy(true);
     try {
-      await api(`/v1/admin/users/${encodeURIComponent(inspecting.id)}/sessions`, {
+      await api(`/v1/admin/users/${encodeURIComponent(target.id)}/sessions`, {
         method: "DELETE",
       });
-      toast.success(`Revoked all sessions and trusted devices for ${inspecting.email}`);
-      await loadUserSessions(inspecting);
+      toast.success(`Revoked all sessions and trusted devices for ${target.email}`);
+      await loadUserSessions(target);
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -132,6 +194,16 @@ export function UsersPage({ me }: { me: User }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const trimmed = searchInput.trim();
+    if (trimmed === query) return;
+    const timer = setTimeout(() => {
+      setOffset(0);
+      setQuery(trimmed);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchInput, query]);
 
   const act = async (path: string, body: object, done: string) => {
     try {
@@ -225,7 +297,7 @@ export function UsersPage({ me }: { me: User }) {
                   size="sm"
                   onClick={() => {
                     sessionStorage.setItem(SEND_RECIPIENTS_KEY, JSON.stringify(selected));
-                    location.hash = "#send";
+                    location.hash = "#notifications/send";
                   }}
                 >
                   <Send /> Send push ({selectedCount})
@@ -393,7 +465,7 @@ export function UsersPage({ me }: { me: User }) {
                               SEND_RECIPIENTS_KEY,
                               JSON.stringify({ [user.id]: user.email }),
                             );
-                            location.hash = "#send";
+                            location.hash = "#notifications/send";
                           }}
                         >
                           <Send /> Send push
@@ -416,11 +488,7 @@ export function UsersPage({ me }: { me: User }) {
                             {isAdmin ? (
                               <DropdownMenuItem
                                 onSelect={() =>
-                                  act(
-                                    "set-role",
-                                    { userId: user.id, role: "user" },
-                                    `${user.email} is now a user`,
-                                  )
+                                  setConfirming({ kind: "set-role", user, role: "user" })
                                 }
                               >
                                 <ShieldOff /> Revoke admin
@@ -428,11 +496,7 @@ export function UsersPage({ me }: { me: User }) {
                             ) : (
                               <DropdownMenuItem
                                 onSelect={() =>
-                                  act(
-                                    "set-role",
-                                    { userId: user.id, role: "admin" },
-                                    `${user.email} is now an admin`,
-                                  )
+                                  setConfirming({ kind: "set-role", user, role: "admin" })
                                 }
                               >
                                 <ShieldCheck /> Grant admin
@@ -440,9 +504,7 @@ export function UsersPage({ me }: { me: User }) {
                             )}
                             {user.banned ? (
                               <DropdownMenuItem
-                                onSelect={() =>
-                                  act("unban-user", { userId: user.id }, `Unbanned ${user.email}`)
-                                }
+                                onSelect={() => setConfirming({ kind: "unban", user })}
                               >
                                 <Undo2 /> Unban account
                               </DropdownMenuItem>
@@ -568,17 +630,27 @@ export function UsersPage({ me }: { me: User }) {
                 key={s.id}
                 session={s}
                 busy={sessionsBusy}
-                onRevoke={inspecting?.id !== me.id ? () => revokeTargetSession(s.id) : undefined}
+                onRevoke={
+                  inspecting && inspecting.id !== me.id
+                    ? () => setConfirming({ kind: "revoke-session", user: inspecting, session: s })
+                    : undefined
+                }
               />
             ))}
           </div>
           <DialogFooter>
-            {inspecting?.id !== me.id && (userSessions?.length ?? 0) > 0 && (
+            {inspecting && inspecting.id !== me.id && (userSessions?.length ?? 0) > 0 && (
               <Button
                 type="button"
                 variant="destructive"
                 disabled={sessionsBusy}
-                onClick={revokeAllTargetSessions}
+                onClick={() =>
+                  setConfirming({
+                    kind: "revoke-all-sessions",
+                    user: inspecting,
+                    count: userSessions?.length ?? 0,
+                  })
+                }
               >
                 Revoke all sessions
               </Button>
@@ -589,6 +661,52 @@ export function UsersPage({ me }: { me: User }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
+        <AlertDialogContent>
+          {confirming && (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{userConfirmCopy(confirming).title}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {userConfirmCopy(confirming).description}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant={userConfirmCopy(confirming).destructive ? "destructive" : "default"}
+                  onClick={() => {
+                    const action = confirming;
+                    setConfirming(null);
+                    if (action.kind === "set-role") {
+                      void act(
+                        "set-role",
+                        { userId: action.user.id, role: action.role },
+                        action.role === "admin"
+                          ? `${action.user.email} is now an admin`
+                          : `${action.user.email} is now a user`,
+                      );
+                    } else if (action.kind === "unban") {
+                      void act(
+                        "unban-user",
+                        { userId: action.user.id },
+                        `Unbanned ${action.user.email}`,
+                      );
+                    } else if (action.kind === "revoke-session") {
+                      void revokeTargetSession(action.user, action.session.id);
+                    } else {
+                      void revokeAllTargetSessions(action.user);
+                    }
+                  }}
+                >
+                  {userConfirmCopy(confirming).confirmLabel}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

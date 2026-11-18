@@ -1,12 +1,14 @@
 import {
-  BellRing,
+  Bell,
+  ChevronRight,
   ChevronsUpDown,
   FileText,
   KeyRound,
   LogOut,
   Monitor,
   Moon,
-  Send,
+  PanelLeftClose,
+  PanelLeftOpen,
   Sun,
   Users,
 } from "lucide-react";
@@ -26,7 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { api, type Me, type User } from "@/lib/api";
 import { takeOAuthError } from "@/lib/oauth";
-import { clearSessionDrafts, viewKeyFromHash } from "@/lib/state";
+import { clearSessionDrafts, routeFromHash } from "@/lib/state";
 import { type ThemePreference, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { SignIn } from "./pages/SignIn";
@@ -43,27 +45,23 @@ const TwoFactorSetup = lazy(() =>
 const UsersPage = lazy(() => import("./pages/Users").then((m) => ({ default: m.UsersPage })));
 
 const VIEWS = {
-  users: { label: "Users", shortLabel: "Users", icon: Users, group: "ops", page: UsersPage },
-  send: { label: "Send push", shortLabel: "Send", icon: Send, group: "ops", page: SendPage },
-  pushes: {
-    label: "Sent pushes",
-    shortLabel: "Pushes",
-    icon: BellRing,
-    group: "ops",
+  users: { label: "Users", shortLabel: "Users", icon: Users, page: UsersPage },
+  notifications: {
+    label: "Dispatches",
+    shortLabel: "Dispatches",
+    icon: Bell,
     page: PushesPage,
   },
   templates: {
     label: "Templates",
     shortLabel: "Templates",
     icon: FileText,
-    group: "ops",
     page: TemplatesPage,
   },
   account: {
     label: "Account & Security",
     shortLabel: "Security",
     icon: KeyRound,
-    group: "security",
     page: AccountPage,
   },
 } satisfies Record<
@@ -72,29 +70,45 @@ const VIEWS = {
     label: string;
     shortLabel: string;
     icon: typeof Users;
-    group: "ops" | "security";
     page: (p: { me: User }) => ReactNode;
   }
 >;
 type View = keyof typeof VIEWS;
 
-const OPS_KEYS: View[] = ["users", "send", "pushes", "templates"];
-const SECURITY_KEYS: View[] = ["account"];
+const MOBILE_KEYS: View[] = ["users", "notifications", "templates", "account"];
+const HASH_ALIASES: Record<string, View> = { pushes: "notifications", send: "notifications" };
+const RAIL_COLLAPSED_KEY = "edgebase:rail-collapsed";
+const NOTIF_OPEN_KEY = "edgebase:nav-notifications-open";
 
-const viewFromHash = (): View => viewKeyFromHash(location.hash, VIEWS, "users");
+const route = () => routeFromHash(location.hash, VIEWS, "users", HASH_ALIASES);
+const readFlag = (key: string, fallback: boolean): boolean => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : raw === "1";
+  } catch {
+    return fallback;
+  }
+};
+const writeFlag = (key: string, value: boolean) => {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {}
+};
 
 function AccountMenu({
   me,
   side,
   align,
+  collapsed = false,
   onSignOut,
   className,
 }: {
   me: User;
-  side: "top" | "bottom";
+  side: "top" | "bottom" | "right";
   align: "start" | "end";
+  collapsed?: boolean;
   onSignOut: () => void;
-  className?: string;
+  className?: string | undefined;
 }) {
   const { preference, setPreference } = useTheme();
   const hasDistinctName = Boolean(
@@ -102,6 +116,7 @@ function AccountMenu({
       me.name !== me.email &&
       me.name.toLowerCase() !== me.email.split("@")[0]?.toLowerCase(),
   );
+  const initial = (me.name || me.email).trim().charAt(0).toUpperCase() || "A";
 
   return (
     <DropdownMenu>
@@ -109,13 +124,23 @@ function AccountMenu({
         <button
           type="button"
           aria-label="Account menu"
+          title={collapsed ? me.email : undefined}
           className={cn(
-            "flex items-center justify-between gap-2 rounded-md text-left transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none data-[state=open]:bg-sidebar-accent",
+            "rounded-md transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none data-[state=open]:bg-sidebar-accent",
+            collapsed
+              ? "grid size-8 place-items-center border border-sidebar-border bg-card text-xs font-semibold text-sidebar-foreground hover:bg-sidebar-accent"
+              : "flex items-center justify-between gap-2 text-left",
             className,
           )}
         >
-          <span className="truncate font-medium text-sidebar-foreground">{me.email}</span>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+          {collapsed ? (
+            <span>{initial}</span>
+          ) : (
+            <>
+              <span className="truncate font-medium text-sidebar-foreground">{me.email}</span>
+              <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+            </>
+          )}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side={side} align={align} className="w-56">
@@ -164,7 +189,9 @@ function AccountMenu({
 
 export function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
-  const [view, setView] = useState<View>(viewFromHash);
+  const [activeRoute, setActiveRoute] = useState(route);
+  const [railCollapsed, setRailCollapsed] = useState(() => readFlag(RAIL_COLLAPSED_KEY, false));
+  const [notifOpen, setNotifOpen] = useState(() => readFlag(NOTIF_OPEN_KEY, true));
 
   // The server decides who must set up a second factor; the page only follows its answer.
   const loadSession = useCallback(async () => {
@@ -173,10 +200,18 @@ export function App() {
 
   useEffect(() => {
     loadSession();
-    const onHash = () => setView(viewFromHash());
+    const onHash = () => setActiveRoute(route());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, [loadSession]);
+
+  const inNotifications = activeRoute.view === "notifications" || activeRoute.view === "templates";
+  useEffect(() => {
+    if (inNotifications) {
+      setNotifOpen(true);
+      writeFlag(NOTIF_OPEN_KEY, true);
+    }
+  }, [inNotifications]);
 
   const inConsole = me?.role === "admin" && !me.adminNeedsTwoFactor;
   // A failed link-social comes back here signed in; a failed sign-in is shown by SignIn instead.
@@ -220,18 +255,35 @@ export function App() {
     );
   }
 
-  const Page = VIEWS[view].page;
+  const view = activeRoute.view;
+  const Page =
+    view === "notifications" && activeRoute.subview === "send" ? SendPage : VIEWS[view].page;
 
-  const renderNavItem = (key: View) => {
-    const { label, shortLabel, icon: Icon } = VIEWS[key];
+  const toggleRail = () => {
+    const next = !railCollapsed;
+    setRailCollapsed(next);
+    writeFlag(RAIL_COLLAPSED_KEY, next);
+  };
+
+  const toggleNotif = () => {
+    const next = !notifOpen;
+    setNotifOpen(next);
+    writeFlag(NOTIF_OPEN_KEY, next);
+  };
+
+  const renderDesktopLink = (key: "users" | "account") => {
+    const { label, icon: Icon } = VIEWS[key];
     const active = view === key;
     return (
       <a
         key={key}
         href={`#${key}`}
         aria-current={active ? "page" : undefined}
+        aria-label={railCollapsed ? label : undefined}
+        title={railCollapsed ? label : undefined}
         className={cn(
-          "group flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none md:h-8 md:gap-2 md:px-2.5 md:text-[13px]",
+          "group flex h-8 items-center rounded-md text-[13px] transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+          railCollapsed ? "size-8 justify-center" : "gap-2 px-2.5",
           active
             ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
             : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
@@ -245,22 +297,68 @@ export function App() {
               : "text-muted-foreground group-hover:text-sidebar-foreground",
           )}
         />
-        <span className="md:hidden">{shortLabel}</span>
-        <span className="hidden md:inline">{label}</span>
+        {!railCollapsed && <span className="truncate">{label}</span>}
+      </a>
+    );
+  };
+
+  const renderSubLink = (key: "notifications" | "templates") => {
+    const active = view === key;
+    return (
+      <a
+        key={key}
+        href={`#${key}`}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "flex h-7 items-center rounded-md px-2 text-xs transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+          active
+            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+            : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+        )}
+      >
+        <span className="truncate">{VIEWS[key].label}</span>
       </a>
     );
   };
 
   return (
-    <div className="min-h-screen bg-background md:grid md:grid-cols-[224px_minmax(0,1fr)]">
+    <div
+      className={cn(
+        "min-h-screen bg-background md:grid md:transition-[grid-template-columns] md:duration-150",
+        railCollapsed ? "md:grid-cols-[52px_minmax(0,1fr)]" : "md:grid-cols-[224px_minmax(0,1fr)]",
+      )}
+    >
       <aside className="flex flex-col border-b border-sidebar-border bg-sidebar text-sidebar-foreground md:sticky md:top-0 md:h-screen md:border-r md:border-b-0">
-        <div className="flex h-12 items-center justify-between gap-2 border-b border-sidebar-border px-3.5">
+        <div
+          className={cn(
+            "flex h-12 items-center border-b border-sidebar-border",
+            railCollapsed
+              ? "justify-between px-3.5 md:justify-center md:px-0"
+              : "justify-between gap-2 px-3.5",
+          )}
+        >
           <a
             href="#users"
-            className="text-sm font-semibold tracking-tight text-sidebar-foreground focus-visible:outline-none"
+            className={cn(
+              "text-sm font-semibold tracking-tight text-sidebar-foreground focus-visible:outline-none",
+              railCollapsed && "md:hidden",
+            )}
           >
             EdgeBase
           </a>
+          <button
+            type="button"
+            onClick={toggleRail}
+            aria-label={railCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={railCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="hidden size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none md:grid"
+          >
+            {railCollapsed ? (
+              <PanelLeftOpen className="size-3.5" />
+            ) : (
+              <PanelLeftClose className="size-3.5" />
+            )}
+          </button>
           <AccountMenu
             me={me}
             side="bottom"
@@ -271,26 +369,143 @@ export function App() {
         </div>
 
         <nav
-          className="flex items-center gap-1 overflow-x-auto px-2.5 py-2 md:flex-1 md:flex-col md:items-stretch md:gap-0.5 md:py-3"
+          className="flex items-center gap-1 overflow-x-auto px-2.5 py-2 md:hidden"
           aria-label="Sections"
         >
-          {OPS_KEYS.map(renderNavItem)}
-          <div
-            aria-hidden="true"
-            className="hidden bg-sidebar-border md:my-2 md:block md:h-px md:w-full"
-          />
-          <div className="hidden md:flex md:flex-col md:gap-0.5">
-            {SECURITY_KEYS.map(renderNavItem)}
-          </div>
+          {MOBILE_KEYS.map((key) => {
+            const { shortLabel, icon: Icon } = VIEWS[key];
+            const active = view === key;
+            return (
+              <a
+                key={key}
+                href={`#${key}`}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs transition-colors duration-100",
+                  active
+                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                )}
+              >
+                <Icon className={cn("size-3.5 shrink-0", active && "text-primary-ink")} />
+                <span>{shortLabel}</span>
+              </a>
+            );
+          })}
         </nav>
 
-        <div className="mt-auto hidden border-t border-sidebar-border p-2 md:block">
+        <nav
+          className={cn(
+            "hidden md:flex md:flex-1 md:flex-col md:gap-0.5 md:py-3",
+            railCollapsed ? "md:items-center md:px-1.5" : "md:items-stretch md:px-2.5",
+          )}
+          aria-label="Sections"
+        >
+          {renderDesktopLink("users")}
+
+          {railCollapsed ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Notifications"
+                  title="Notifications"
+                  className={cn(
+                    "group grid size-8 place-items-center rounded-md transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none data-[state=open]:bg-sidebar-accent",
+                    inNotifications
+                      ? "bg-sidebar-accent text-primary-ink"
+                      : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                  )}
+                >
+                  <Bell className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="right" align="start" className="w-44">
+                <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                  Notifications
+                </DropdownMenuLabel>
+                <DropdownMenuItem
+                  aria-current={view === "notifications" ? "page" : undefined}
+                  className={cn(view === "notifications" && "bg-secondary font-medium")}
+                  onSelect={() => {
+                    location.hash = "#notifications";
+                  }}
+                >
+                  <Bell /> Dispatches
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  aria-current={view === "templates" ? "page" : undefined}
+                  className={cn(view === "templates" && "bg-secondary font-medium")}
+                  onSelect={() => {
+                    location.hash = "#templates";
+                  }}
+                >
+                  <FileText /> Templates
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <div className="flex flex-col">
+              <button
+                type="button"
+                aria-expanded={notifOpen}
+                onClick={toggleNotif}
+                className={cn(
+                  "group flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+                  inNotifications && !notifOpen
+                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    : inNotifications
+                      ? "font-medium text-sidebar-foreground hover:bg-sidebar-accent/60"
+                      : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                )}
+              >
+                <Bell
+                  className={cn(
+                    "size-3.5 shrink-0 transition-colors",
+                    inNotifications
+                      ? "text-primary-ink"
+                      : "text-muted-foreground group-hover:text-sidebar-foreground",
+                  )}
+                />
+                <span className="truncate">Notifications</span>
+                <ChevronRight
+                  className={cn(
+                    "ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
+                    notifOpen && "rotate-90",
+                  )}
+                />
+              </button>
+              {notifOpen && (
+                <div className="mt-0.5 ml-4 flex flex-col gap-0.5 border-l border-sidebar-border pl-2.5">
+                  {renderSubLink("notifications")}
+                  {renderSubLink("templates")}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div
+            aria-hidden="true"
+            className={cn("my-2 h-px bg-sidebar-border", railCollapsed ? "w-6" : "w-full")}
+          />
+          {renderDesktopLink("account")}
+        </nav>
+
+        <div
+          className={cn(
+            "mt-auto hidden border-t border-sidebar-border p-2 md:flex",
+            railCollapsed ? "justify-center" : "block",
+          )}
+        >
           <AccountMenu
             me={me}
-            side="top"
-            align="start"
+            side={railCollapsed ? "right" : "top"}
+            align={railCollapsed ? "end" : "start"}
+            collapsed={railCollapsed}
             onSignOut={signOut}
-            className="h-9 w-full px-2.5 text-[13px] hover:bg-sidebar-accent"
+            className={
+              railCollapsed ? undefined : "h-9 w-full px-2.5 text-[13px] hover:bg-sidebar-accent"
+            }
           />
         </div>
       </aside>

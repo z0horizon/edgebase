@@ -1,5 +1,5 @@
-import { BODY_MAX, TEMPLATE_NAME_PATTERN, TITLE_MAX } from "@edgebase/core/limits";
-import { Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { BODY_MAX, LOCALE_PATTERN, TEMPLATE_NAME_PATTERN, TITLE_MAX } from "@edgebase/core/limits";
+import { Pencil, Plus, Search, Send, Trash2, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { FormError } from "@/components/FormError";
@@ -45,8 +45,10 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage, type Template } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { SEND_TEMPLATE_KEY } from "@/lib/state";
 
 const ANY = "any";
+const LOCALE_RE = new RegExp(`^${LOCALE_PATTERN}$`);
 type Editing = { template: Template | null } | null;
 
 function highlightPlaceholders(text: string): ReactNode[] {
@@ -176,7 +178,7 @@ export function TemplatesPage() {
               <TableHead className="hidden sm:table-cell">Category</TableHead>
               <TableHead className="hidden md:table-cell">Locales</TableHead>
               <TableHead className="hidden text-right lg:table-cell">Updated</TableHead>
-              <TableHead className="w-20 text-right">
+              <TableHead className="w-28 text-right">
                 <span className="sr-only">Actions</span>
               </TableHead>
             </TableRow>
@@ -243,7 +245,7 @@ export function TemplatesPage() {
                   <TableCell className="hidden align-top md:table-cell">
                     <div className="flex flex-wrap gap-1">
                       {locales.map((l) => (
-                        <Badge key={l} variant="outline" className="font-mono text-[10px]">
+                        <Badge key={l} variant="outline" className="font-mono text-[11px]">
                           {l}
                         </Badge>
                       ))}
@@ -252,11 +254,24 @@ export function TemplatesPage() {
                   <TableCell className="hidden text-right align-top text-xs tabular-nums text-muted-foreground lg:table-cell">
                     {formatDate(t.updatedAt)}
                   </TableCell>
-                  <TableCell className="text-right align-top">
+                  <TableCell className="w-28 text-right align-top">
                     <div className="inline-flex items-center gap-0.5">
                       <Button
                         variant="ghost"
                         size="icon-sm"
+                        title={`Send push with ${t.name}`}
+                        aria-label={`Send push with ${t.name}`}
+                        onClick={() => {
+                          sessionStorage.setItem(SEND_TEMPLATE_KEY, t.name);
+                          location.hash = "#notifications/send";
+                        }}
+                      >
+                        <Send />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        title={`Edit ${t.name}`}
                         aria-label={`Edit ${t.name}`}
                         onClick={() => setEditing({ template: t })}
                       >
@@ -265,6 +280,7 @@ export function TemplatesPage() {
                       <Button
                         variant="ghost"
                         size="icon-sm"
+                        title={`Delete ${t.name}`}
                         aria-label={`Delete ${t.name}`}
                         onClick={() => setDeleting(t)}
                       >
@@ -306,6 +322,13 @@ export function TemplatesPage() {
   );
 }
 
+type LocaleDraft = {
+  id: string;
+  locale: string;
+  title: string;
+  body: string;
+};
+
 function TemplateDialog({
   editing,
   names,
@@ -319,12 +342,36 @@ function TemplateDialog({
 }) {
   const template = editing?.template ?? null;
   const [category, setCategory] = useState(ANY);
+  const [locales, setLocales] = useState<LocaleDraft[]>([]);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setCategory(template?.category ?? ANY);
+    if (!editing) return;
+    const tpl = editing.template;
+    setCategory(tpl?.category ?? ANY);
+    setLocales(
+      Object.entries(tpl?.translations ?? {}).map(([locale, copy]) => ({
+        id: crypto.randomUUID(),
+        locale,
+        title: copy.title,
+        body: copy.body,
+      })),
+    );
     setError("");
-  }, [template]);
+  }, [editing]);
+
+  const updateLocale = (id: string, patch: Partial<Omit<LocaleDraft, "id">>) => {
+    setLocales((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+
+  const addLocale = () => {
+    setLocales((prev) => [...prev, { id: crypto.randomUUID(), locale: "", title: "", body: "" }]);
+  };
+
+  const removeLocale = (id: string) => {
+    setLocales((prev) => prev.filter((row) => row.id !== id));
+  };
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -334,14 +381,31 @@ function TemplateDialog({
       setError(`A template named ${name} already exists. Edit it instead.`);
       return;
     }
-    const rawTranslations = String(form.get("translations") ?? "").trim();
-    let translations: unknown;
-    try {
-      translations = rawTranslations ? JSON.parse(rawTranslations) : undefined;
-    } catch {
-      setError('Translations must be valid JSON, e.g. { "vi": { "title": "…", "body": "…" } }.');
-      return;
+
+    const translationsMap: Record<string, { title: string; body: string }> = {};
+    const seenTags = new Set<string>();
+    for (const row of locales) {
+      const tag = row.locale.trim();
+      if (!LOCALE_RE.test(tag)) {
+        setError(`"${tag || "empty"}" is not a valid BCP 47 locale tag (e.g. es, fr, en-GB).`);
+        return;
+      }
+      const lower = tag.toLowerCase();
+      if (seenTags.has(lower)) {
+        setError(`Duplicate translation locale "${tag}".`);
+        return;
+      }
+      seenTags.add(lower);
+      if (!row.title.trim()) {
+        setError(`Enter a translated title for locale "${tag}".`);
+        return;
+      }
+      translationsMap[tag] = { title: row.title, body: row.body };
     }
+    const translations = locales.length > 0 ? translationsMap : undefined;
+
+    setBusy(true);
+    setError("");
     try {
       await api(`/v1/templates/${encodeURIComponent(name)}`, {
         method: "PUT",
@@ -359,12 +423,14 @@ function TemplateDialog({
       await onSaved();
     } catch (e) {
       setError(errorMessage(e));
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <Dialog open={editing !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <form className="grid gap-3.5" onSubmit={save} key={template?.name ?? "new"}>
           <DialogHeader>
             <DialogTitle>{template ? `Edit ${template.name}` : "New template"}</DialogTitle>
@@ -388,18 +454,25 @@ function TemplateDialog({
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="t-title">Title</Label>
+            <Label htmlFor="t-title">Default title</Label>
             <Input
               id="t-title"
               name="title"
               defaultValue={template?.title}
+              placeholder="Order #{{order}} shipped"
               maxLength={TITLE_MAX}
               required
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="t-body">Body</Label>
-            <Textarea id="t-body" name="body" defaultValue={template?.body} maxLength={BODY_MAX} />
+            <Label htmlFor="t-body">Default body</Label>
+            <Textarea
+              id="t-body"
+              name="body"
+              defaultValue={template?.body}
+              placeholder="Your package is on the way."
+              maxLength={BODY_MAX}
+            />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="t-kind">Default category</Label>
@@ -414,26 +487,81 @@ function TemplateDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="t-translations">Translations (JSON, optional)</Label>
-            <Textarea
-              id="t-translations"
-              name="translations"
-              rows={4}
-              spellCheck={false}
-              className="font-mono text-xs"
-              defaultValue={
-                template?.translations ? JSON.stringify(template.translations, null, 2) : ""
-              }
-              placeholder={'{ "vi": { "title": "Đơn {{order}} đã gửi", "body": "Đang giao" } }'}
-            />
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="grid gap-0.5">
+                <span className="text-xs leading-none font-medium text-foreground">
+                  Locale translations (optional)
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  Matched against each recipient&apos;s BCP 47 profile locale.
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                disabled={locales.length >= 50}
+                onClick={addLocale}
+              >
+                <Plus /> Add locale
+              </Button>
+            </div>
+            {locales.length > 0 && (
+              <div className="divide-y overflow-hidden rounded-md border bg-muted/20">
+                {locales.map((row) => (
+                  <div key={row.id} className="grid gap-2 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <Input
+                        value={row.locale}
+                        onChange={(e) => updateLocale(row.id, { locale: e.target.value })}
+                        pattern={LOCALE_PATTERN}
+                        placeholder="es or fr-CA"
+                        aria-label="BCP 47 locale tag"
+                        spellCheck={false}
+                        className="h-7 w-32 font-mono text-xs"
+                        required
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Remove ${row.locale || "translation"}`}
+                        onClick={() => removeLocale(row.id)}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                    <Input
+                      value={row.title}
+                      onChange={(e) => updateLocale(row.id, { title: e.target.value })}
+                      placeholder="Pedido #{{order}} enviado"
+                      aria-label={`Translated title for ${row.locale || "locale"}`}
+                      maxLength={TITLE_MAX}
+                      required
+                    />
+                    <Textarea
+                      rows={2}
+                      value={row.body}
+                      onChange={(e) => updateLocale(row.id, { body: e.target.value })}
+                      placeholder="Tu paquete está en camino. (optional)"
+                      aria-label={`Translated body for ${row.locale || "locale"}`}
+                      className="min-h-14"
+                      maxLength={BODY_MAX}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <FormError message={error} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit">Save template</Button>
+            <Button type="submit" disabled={busy}>
+              Save template
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

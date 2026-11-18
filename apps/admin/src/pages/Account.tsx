@@ -3,6 +3,16 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { SessionCard } from "@/components/SessionCard";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +39,54 @@ import { type Provider, startOAuth, useProviders } from "@/lib/oauth";
 import { describeDevice, describeNetwork, networkShifted } from "@/lib/state";
 import { describePasskey, supportsPasskeys } from "@/lib/webauthn";
 
+type ConfirmAction =
+  | { kind: "delete-passkey"; passkey: PasskeyRecord }
+  | { kind: "revoke-session"; session: SessionRecord }
+  | { kind: "revoke-other-sessions"; count: number }
+  | { kind: "revoke-device"; device: TrustedDevice }
+  | { kind: "revoke-all-devices"; count: number };
+
+function accountConfirmCopy(action: ConfirmAction): {
+  title: string;
+  description: string;
+  confirmLabel: string;
+} {
+  switch (action.kind) {
+    case "delete-passkey":
+      return {
+        title: `Remove passkey "${describePasskey(action.passkey)}"?`,
+        description: "This authenticator will no longer be able to sign in to your account.",
+        confirmLabel: "Remove passkey",
+      };
+    case "revoke-session":
+      return {
+        title: `Revoke session on ${describeDevice(action.session.userAgent)}?`,
+        description: `Signs out this session (${describeNetwork(action.session)}) immediately.`,
+        confirmLabel: "Revoke session",
+      };
+    case "revoke-other-sessions":
+      return {
+        title: `Sign out ${action.count} other ${action.count === 1 ? "session" : "sessions"}?`,
+        description:
+          "Every other active browser and device is signed out immediately. Your current session stays active.",
+        confirmLabel: "Revoke sessions",
+      };
+    case "revoke-device":
+      return {
+        title: `Remove trusted browser on ${describeDevice(action.device.userAgent)}?`,
+        description: `This browser (${describeNetwork(action.device)}) will require two-factor verification on its next sign-in.`,
+        confirmLabel: "Remove device",
+      };
+    case "revoke-all-devices":
+      return {
+        title: "Revoke all trusted devices?",
+        description:
+          "Clears 30-day 2FA trust across all browsers. Every device will require a second factor on next sign-in.",
+        confirmLabel: "Revoke all",
+      };
+  }
+}
+
 /** Linking, passkeys, active session inspection/revocation, and 2FA trusted-device controls. */
 export function AccountPage({ me }: { me: User }) {
   const [linked, setLinked] = useState<Set<string> | null>(null);
@@ -39,6 +97,7 @@ export function AccountPage({ me }: { me: User }) {
   const [newPasskeyName, setNewPasskeyName] = useState("");
   const [renaming, setRenaming] = useState<PasskeyRecord | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [confirming, setConfirming] = useState<ConfirmAction | null>(null);
   const [busy, setBusy] = useState(false);
   const providers = useProviders();
   const canPasskey = supportsPasskeys();
@@ -317,7 +376,7 @@ export function AccountPage({ me }: { me: User }) {
                       ? "Add another passkey or enable TOTP before removing your only passkey"
                       : undefined
                   }
-                  onClick={() => handleDeletePasskey(pk.id)}
+                  onClick={() => setConfirming({ kind: "delete-passkey", passkey: pk })}
                 >
                   <Trash2 /> Remove
                 </Button>
@@ -369,7 +428,14 @@ export function AccountPage({ me }: { me: User }) {
             </p>
           </div>
           {otherSessionCount > 0 && (
-            <Button variant="outline" size="sm" disabled={busy} onClick={revokeOtherSessions}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                setConfirming({ kind: "revoke-other-sessions", count: otherSessionCount })
+              }
+            >
               Revoke {otherSessionCount} other {otherSessionCount === 1 ? "session" : "sessions"}
             </Button>
           )}
@@ -386,7 +452,9 @@ export function AccountPage({ me }: { me: User }) {
               key={s.id}
               session={s}
               busy={busy}
-              onRevoke={s.current ? undefined : () => revokeSession(s.id)}
+              onRevoke={
+                s.current ? undefined : () => setConfirming({ kind: "revoke-session", session: s })
+              }
             />
           ))}
         </div>
@@ -404,7 +472,14 @@ export function AccountPage({ me }: { me: User }) {
             </p>
           </div>
           {(trustedDevices?.length ?? 0) > 0 && (
-            <Button variant="outline" size="sm" disabled={busy} onClick={revokeAllDevices}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                setConfirming({ kind: "revoke-all-devices", count: trustedDevices?.length ?? 0 })
+              }
+            >
               Revoke all
             </Button>
           )}
@@ -460,7 +535,7 @@ export function AccountPage({ me }: { me: User }) {
                   variant="outline"
                   size="sm"
                   disabled={busy}
-                  onClick={() => revokeDevice(d.id)}
+                  onClick={() => setConfirming({ kind: "revoke-device", device: d })}
                 >
                   <Trash2 /> Remove
                 </Button>
@@ -531,6 +606,43 @@ export function AccountPage({ me }: { me: User }) {
           </form>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
+        <AlertDialogContent>
+          {confirming && (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{accountConfirmCopy(confirming).title}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {accountConfirmCopy(confirming).description}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    const action = confirming;
+                    setConfirming(null);
+                    if (action.kind === "delete-passkey") {
+                      void handleDeletePasskey(action.passkey.id);
+                    } else if (action.kind === "revoke-session") {
+                      void revokeSession(action.session.id);
+                    } else if (action.kind === "revoke-other-sessions") {
+                      void revokeOtherSessions();
+                    } else if (action.kind === "revoke-device") {
+                      void revokeDevice(action.device.id);
+                    } else {
+                      void revokeAllDevices();
+                    }
+                  }}
+                >
+                  {accountConfirmCopy(confirming).confirmLabel}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

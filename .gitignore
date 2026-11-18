@@ -14,5 +14,6 @@ wrangler.production.jsonc
 apps/server/public/admin/
 apps/admin/.impeccable/review/
 apps/admin/.impeccable/mocks/
+.github/hooks/impeccable.json
 .DS_Store
 graphify-out/
