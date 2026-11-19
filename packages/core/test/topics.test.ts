@@ -81,6 +81,49 @@ describe("web topic subscription", () => {
     expect(res.status).toBe(502);
   });
 
+  it("cancels the unread error body stream when Instance ID answers non-2xx", async () => {
+    const { userId, token } = await signUpVerified("topic-cancel@x.io");
+    await env.DB.prepare("INSERT INTO device VALUES ('web-cancel', ?, 'web', 0)")
+      .bind(userId)
+      .run();
+    let cancelled = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const req = new Request(input, init);
+      if (req.url.startsWith("https://oauth2.googleapis.com")) {
+        return Response.json({ access_token: "oauth-at", expires_in: 3600 });
+      }
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("error"));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 500 },
+      );
+    });
+    expect((await topic(token, "news/subscribe", { token: "web-cancel" })).status).toBe(502);
+    expect(cancelled).toBe(true);
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const req = new Request(input, init);
+      if (req.url.startsWith("https://oauth2.googleapis.com")) {
+        return Response.json({ access_token: "oauth-at", expires_in: 3600 });
+      }
+      return new Response(
+        new ReadableStream({
+          cancel() {
+            return Promise.reject(new Error("RST_STREAM"));
+          },
+        }),
+        { status: 500 },
+      );
+    });
+    expect((await topic(token, "news/subscribe", { token: "web-cancel" })).status).toBe(502);
+  });
+
   it("an invalid topic answers 400 and no service account answers 503", async () => {
     const { token } = await signUpVerified("topic-d@x.io");
     expect((await topic(token, "bad%20topic!/subscribe", { token: "t" })).status).toBe(400);

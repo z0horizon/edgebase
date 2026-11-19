@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import {
-  insertBroadcast,
+  broadcastStatement,
   insertPersonal,
   listInbox,
   markAllRead,
@@ -9,6 +9,12 @@ import {
   unreadCount,
 } from "../src/inbox/queries";
 import { authed, call, json, signUpVerified } from "./helpers";
+
+const insertBroadcast = (
+  db: D1Database,
+  payload: Parameters<typeof broadcastStatement>[1],
+  now: number,
+) => broadcastStatement(db, payload, now).run();
 
 const DAY = 86_400_000;
 let epochs = 0;
@@ -155,12 +161,49 @@ describe("inbox routes", () => {
   it("the inbox page carries the unread count, so opening the app takes one call", async () => {
     const { userId, token } = await signUpVerified("count-in-list@x.io");
     await insertPersonal(env.INBOX_DB, [userId, userId, userId], p("three"), Date.now());
-    const page = await (await call("/v1/inbox?limit=1", authed(token))).json<{
+    let batchCalls = 0;
+    let unbatchedPrepared = 0;
+    const inboxDb = new Proxy(env.INBOX_DB, {
+      get(target, prop, receiver) {
+        if (prop === "batch") {
+          return async (stmts: D1PreparedStatement[]) => {
+            batchCalls++;
+            return target.batch(stmts);
+          };
+        }
+        if (prop === "prepare") {
+          return (sql: string) => {
+            const stmt = target.prepare(sql);
+            const wrap = (bound: D1PreparedStatement): D1PreparedStatement =>
+              new Proxy(bound, {
+                get(sTarget, sProp, sReceiver) {
+                  if (sProp === "all" || sProp === "first" || sProp === "run") {
+                    unbatchedPrepared++;
+                  }
+                  if (sProp === "bind") {
+                    return (...args: unknown[]) => wrap(sTarget.bind(...args));
+                  }
+                  const v = Reflect.get(sTarget, sProp, sReceiver);
+                  return typeof v === "function" ? v.bind(sTarget) : v;
+                },
+              });
+            return wrap(stmt);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const page = await (
+      await call("/v1/inbox?limit=1", authed(token), { ...env, INBOX_DB: inboxDb })
+    ).json<{
       items: unknown[];
       unreadCount: number;
     }>();
     expect(page.items).toHaveLength(1);
     expect(page.unreadCount).toBe(3);
+    expect(batchCalls).toBe(1);
+    expect(unbatchedPrepared).toBe(0);
   });
 
   it("read, read-all, unread-count and delete work over HTTP for the caller only", async () => {

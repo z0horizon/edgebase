@@ -3,11 +3,11 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { parseEnv } from "node:util";
 import { CRONS } from "@edgebase/core/crons";
 import { experimental_readRawConfig } from "wrangler";
 import {
   ensureDevVars,
-  parseEnvFile,
   readEnvFile,
   renderConfig,
   secretsPayload,
@@ -54,7 +54,7 @@ describe("renderConfig", () => {
     assert.equal(out.queues.consumers[0].dead_letter_queue, "myapp-push-dlq");
   });
 
-  it("takes vars from the env and keeps everything else from the template", () => {
+  it("takes vars from the env, locks send_email to MAIL_FROM, and keeps everything else from the template", () => {
     assert.deepEqual(out.vars, {
       BASE_URL: valid.BASE_URL,
       TRUSTED_ORIGINS: valid.TRUSTED_ORIGINS,
@@ -62,7 +62,17 @@ describe("renderConfig", () => {
       INBOX_TTL_DAYS: valid.INBOX_TTL_DAYS,
       MAIL_FROM: valid.MAIL_FROM,
     });
-    for (const key of ["triggers", "ratelimits", "compatibility_date", "send_email", "main"]) {
+    assert.deepEqual(out.send_email, [
+      { name: "MAIL", allowed_sender_addresses: [valid.MAIL_FROM] },
+    ]);
+    assert.equal(template.upload_source_maps, true);
+    for (const key of [
+      "triggers",
+      "ratelimits",
+      "compatibility_date",
+      "upload_source_maps",
+      "main",
+    ]) {
       assert.deepEqual(out[key], template[key], key);
     }
     assert.equal(
@@ -119,7 +129,7 @@ describe("env file", () => {
       BOTH: `it's "x"`,
       BACKSLASH_N: String.raw`a\nb`,
     };
-    assert.deepEqual(parseEnvFile(serializeEnvFile(env)), env);
+    assert.deepEqual(parseEnv(serializeEnvFile(env)), env);
   });
 
   it("rejects a value with a newline", () => {
@@ -226,6 +236,6 @@ it("an env file rewrite keeps the example's key order, then extra keys, and stay
     [...written.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1]),
     Object.keys(env),
   );
-  assert.deepEqual(parseEnvFile(readFileSync(file, "utf8")), env);
+  assert.deepEqual(parseEnv(readFileSync(file, "utf8")), env);
   assert.equal(statSync(file).mode & 0o777, 0o600);
 });

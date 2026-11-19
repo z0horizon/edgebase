@@ -134,6 +134,40 @@ describe("sendFcm", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("network down"));
     expect(await sendFcm(access, message)).toEqual({ kind: "retry", retryAfterSec: null });
   });
+
+  it("cancels the unread response body stream on 2xx FCM sends to free Worker memory", async () => {
+    let cancelled = false;
+    stubGoogle(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"name":"m/1"}'));
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    expect(await sendFcm(access, message)).toEqual({ kind: "ok" });
+    expect(cancelled).toBe(true);
+
+    // A stream-cancel teardown error after 200 OK must never discard the accepted delivery.
+    stubGoogle(
+      () =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              return Promise.reject(new Error("RST_STREAM"));
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    expect(await sendFcm(access, message)).toEqual({ kind: "ok" });
+  });
 });
 
 describe("buildFcmMessage", () => {

@@ -2,17 +2,7 @@ import { Fingerprint, Pencil, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
-import { SessionCard } from "@/components/SessionCard";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { SessionCard, TrustedDeviceCard } from "@/components/SessionCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,88 +26,48 @@ import {
 } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { type Provider, startOAuth, useProviders } from "@/lib/oauth";
-import { describeDevice, describeNetwork, networkShifted } from "@/lib/state";
 import { describePasskey, supportsPasskeys } from "@/lib/webauthn";
-
-type ConfirmAction =
-  | { kind: "delete-passkey"; passkey: PasskeyRecord }
-  | { kind: "revoke-session"; session: SessionRecord }
-  | { kind: "revoke-other-sessions"; count: number }
-  | { kind: "revoke-device"; device: TrustedDevice }
-  | { kind: "revoke-all-devices"; count: number };
-
-function accountConfirmCopy(action: ConfirmAction): {
-  title: string;
-  description: string;
-  confirmLabel: string;
-} {
-  switch (action.kind) {
-    case "delete-passkey":
-      return {
-        title: `Remove passkey "${describePasskey(action.passkey)}"?`,
-        description: "This authenticator will no longer be able to sign in to your account.",
-        confirmLabel: "Remove passkey",
-      };
-    case "revoke-session":
-      return {
-        title: `Revoke session on ${describeDevice(action.session.userAgent)}?`,
-        description: `Signs out this session (${describeNetwork(action.session)}) immediately.`,
-        confirmLabel: "Revoke session",
-      };
-    case "revoke-other-sessions":
-      return {
-        title: `Sign out ${action.count} other ${action.count === 1 ? "session" : "sessions"}?`,
-        description:
-          "Every other active browser and device is signed out immediately. Your current session stays active.",
-        confirmLabel: "Revoke sessions",
-      };
-    case "revoke-device":
-      return {
-        title: `Remove trusted browser on ${describeDevice(action.device.userAgent)}?`,
-        description: `This browser (${describeNetwork(action.device)}) will require two-factor verification on its next sign-in.`,
-        confirmLabel: "Remove device",
-      };
-    case "revoke-all-devices":
-      return {
-        title: "Revoke all trusted devices?",
-        description:
-          "Clears 30-day 2FA trust across all browsers. Every device will require a second factor on next sign-in.",
-        confirmLabel: "Revoke all",
-      };
-  }
-}
 
 /** Linking, passkeys, active session inspection/revocation, and 2FA trusted-device controls. */
 export function AccountPage({ me }: { me: User }) {
-  const [linked, setLinked] = useState<Set<string> | null>(null);
+  const [linked, setLinked] = useState<Map<string, string> | null>(null);
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
   const [passkeys, setPasskeys] = useState<PasskeyRecord[] | null>(null);
+  const [passkeysFailed, setPasskeysFailed] = useState(false);
   const [sessions, setSessions] = useState<SessionRecord[] | null>(null);
   const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[] | null>(null);
   const [addingPasskey, setAddingPasskey] = useState(false);
   const [newPasskeyName, setNewPasskeyName] = useState("");
   const [renaming, setRenaming] = useState<PasskeyRecord | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const [confirming, setConfirming] = useState<ConfirmAction | null>(null);
   const [busy, setBusy] = useState(false);
   const providers = useProviders();
   const canPasskey = supportsPasskeys();
 
   const loadSecurity = useCallback(async () => {
     const [accountsRes, passkeysRes, sessionsRes, tdRes] = await Promise.allSettled([
-      api<{ providerId: string }[]>("/api/auth/list-accounts"),
+      api<{ id: string; providerId: string }[]>("/api/auth/list-accounts"),
       api<PasskeyRecord[]>("/api/auth/passkey/list-user-passkeys"),
       api<{ sessions: SessionRecord[] }>("/v1/sessions"),
       api<{ devices: TrustedDevice[] }>("/v1/trusted-devices"),
     ]);
     if (accountsRes.status === "fulfilled") {
-      setLinked(new Set(accountsRes.value.map((a) => a.providerId)));
+      setHasPassword(accountsRes.value.some((a) => a.providerId === "credential"));
+      setLinked(
+        new Map(
+          accountsRes.value
+            .filter((a) => a.providerId !== "credential")
+            .map((a) => [a.providerId, a.id]),
+        ),
+      );
     } else {
       toast.error(errorMessage(accountsRes.reason));
     }
     if (passkeysRes.status === "fulfilled") {
+      setPasskeysFailed(false);
       setPasskeys(passkeysRes.value);
     } else {
-      setPasskeys((prev) => prev ?? []);
+      setPasskeysFailed(true);
       toast.error(errorMessage(passkeysRes.reason));
     }
     if (sessionsRes.status === "fulfilled") {
@@ -144,6 +94,22 @@ export function AccountPage({ me }: { me: User }) {
       await startOAuth("/api/auth/link-social", provider);
     } catch (e) {
       toast.error(errorMessage(e));
+      setBusy(false);
+    }
+  };
+
+  const unlink = async (accountId: string, label: string) => {
+    setBusy(true);
+    try {
+      await api("/api/auth/unlink-account", {
+        method: "POST",
+        body: { accountId },
+      });
+      toast.success(`${label} unlinked`);
+      await loadSecurity();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
       setBusy(false);
     }
   };
@@ -252,6 +218,12 @@ export function AccountPage({ me }: { me: User }) {
   };
 
   const otherSessionCount = sessions?.filter((s) => !s.current).length ?? 0;
+  const factorsLoaded = hasPassword !== null && linked !== null && passkeys !== null;
+  const lastAdminFactor =
+    hasPassword === true &&
+    !me.twoFactorEnabled &&
+    (passkeys?.length ?? 0) + (linked?.size ?? 0) <= 1;
+  const soleLoginAccount = hasPassword === false && (linked?.size ?? 0) <= 1;
 
   return (
     <div className="grid gap-5">
@@ -289,7 +261,11 @@ export function AccountPage({ me }: { me: User }) {
         <div className="grid gap-1 px-4 py-3 sm:border-r lg:border-r">
           <span className="text-[11px] text-muted-foreground">WebAuthn passkeys</span>
           <span className="text-[13px] font-medium tabular-nums text-foreground">
-            {passkeys ? `${passkeys.length} / 20 registered` : "Loading…"}
+            {passkeys
+              ? `${passkeys.length} / 20 registered`
+              : passkeysFailed
+                ? "Unavailable"
+                : "Loading…"}
           </span>
         </div>
         <div className="grid gap-1 px-4 py-3">
@@ -324,7 +300,9 @@ export function AccountPage({ me }: { me: User }) {
         </div>
         <div className="divide-y">
           {passkeys === null && (
-            <p className="px-4 py-3 text-xs text-muted-foreground">Loading passkeys…</p>
+            <p className="px-4 py-3 text-xs text-muted-foreground">
+              {passkeysFailed ? "Unable to load passkeys." : "Loading passkeys…"}
+            </p>
           )}
           {passkeys?.length === 0 && (
             <p className="px-4 py-3 text-xs text-muted-foreground">
@@ -370,13 +348,13 @@ export function AccountPage({ me }: { me: User }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={busy || (!me.twoFactorEnabled && passkeys.length <= 1)}
+                  disabled={busy || !factorsLoaded || lastAdminFactor}
                   title={
-                    !me.twoFactorEnabled && passkeys.length <= 1
-                      ? "Add another passkey or enable TOTP before removing your only passkey"
+                    lastAdminFactor
+                      ? "Add another second factor or enable TOTP before removing your last one"
                       : undefined
                   }
-                  onClick={() => setConfirming({ kind: "delete-passkey", passkey: pk })}
+                  onClick={() => handleDeletePasskey(pk.id)}
                 >
                   <Trash2 /> Remove
                 </Button>
@@ -399,23 +377,43 @@ export function AccountPage({ me }: { me: User }) {
               No external OAuth providers are enabled on this Worker deployment.
             </p>
           )}
-          {providers.map(({ id, label }) => (
-            <div key={id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-              <span className="text-[13px] font-medium text-foreground">{label}</span>
-              {linked?.has(id) ? (
-                <Badge variant="success">Linked</Badge>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy || linked === null}
-                  onClick={() => link(id)}
-                >
-                  Link {label}
-                </Button>
-              )}
-            </div>
-          ))}
+          {providers.map(({ id, label }) => {
+            const accountId = linked?.get(id);
+            return (
+              <div key={id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <span className="text-[13px] font-medium text-foreground">{label}</span>
+                {accountId ? (
+                  <div className="flex items-center gap-2">
+                    <Badge variant="success">Linked</Badge>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy || !factorsLoaded || lastAdminFactor || soleLoginAccount}
+                      title={
+                        soleLoginAccount
+                          ? "Cannot unlink your only sign-in method"
+                          : lastAdminFactor
+                            ? "Add another second factor or enable TOTP before removing your last one"
+                            : undefined
+                      }
+                      onClick={() => unlink(accountId, label)}
+                    >
+                      <Trash2 /> Unlink
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || linked === null}
+                    onClick={() => link(id)}
+                  >
+                    Link {label}
+                  </Button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -428,14 +426,7 @@ export function AccountPage({ me }: { me: User }) {
             </p>
           </div>
           {otherSessionCount > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                setConfirming({ kind: "revoke-other-sessions", count: otherSessionCount })
-              }
-            >
+            <Button variant="outline" size="sm" disabled={busy} onClick={revokeOtherSessions}>
               Revoke {otherSessionCount} other {otherSessionCount === 1 ? "session" : "sessions"}
             </Button>
           )}
@@ -452,9 +443,7 @@ export function AccountPage({ me }: { me: User }) {
               key={s.id}
               session={s}
               busy={busy}
-              onRevoke={
-                s.current ? undefined : () => setConfirming({ kind: "revoke-session", session: s })
-              }
+              onRevoke={s.current ? undefined : () => revokeSession(s.id)}
             />
           ))}
         </div>
@@ -472,14 +461,7 @@ export function AccountPage({ me }: { me: User }) {
             </p>
           </div>
           {(trustedDevices?.length ?? 0) > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                setConfirming({ kind: "revoke-all-devices", count: trustedDevices?.length ?? 0 })
-              }
-            >
+            <Button variant="outline" size="sm" disabled={busy} onClick={revokeAllDevices}>
               Revoke all
             </Button>
           )}
@@ -493,55 +475,14 @@ export function AccountPage({ me }: { me: User }) {
               No browsers are currently marked as trusted.
             </p>
           )}
-          {trustedDevices?.map((d) => {
-            const shifted = networkShifted(d);
-            return (
-              <div
-                key={d.id}
-                className="flex flex-col justify-between gap-3 px-4 py-3 sm:flex-row sm:items-center"
-              >
-                <div className="grid min-w-0 gap-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span
-                      className="text-[13px] font-medium text-foreground"
-                      title={d.userAgent ?? undefined}
-                    >
-                      {describeDevice(d.userAgent)}
-                    </span>
-                    {d.current && <Badge variant="success">This browser</Badge>}
-                    {shifted && <Badge variant="warning">ASN / country changed</Badge>}
-                  </div>
-                  <p className="font-mono text-[11px] text-muted-foreground">
-                    {describeNetwork(d)}
-                  </p>
-                  {shifted && (
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                      Trusted from:{" "}
-                      {describeNetwork({
-                        city: d.createdCity,
-                        country: d.createdCountry,
-                        asOrganization: d.createdAsOrganization,
-                        asn: d.createdAsn,
-                        ipAddress: d.createdIp,
-                      })}
-                    </p>
-                  )}
-                  <p className="text-[11px] tabular-nums text-muted-foreground">
-                    Trusted {formatDate(d.createdAt)} · Used {formatDate(d.lastUsedAt)} · Expires{" "}
-                    {formatDate(d.expiresAt)}
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => setConfirming({ kind: "revoke-device", device: d })}
-                >
-                  <Trash2 /> Remove
-                </Button>
-              </div>
-            );
-          })}
+          {trustedDevices?.map((d) => (
+            <TrustedDeviceCard
+              key={d.id}
+              device={d}
+              busy={busy}
+              onRemove={() => revokeDevice(d.id)}
+            />
+          ))}
         </div>
       </section>
 
@@ -606,43 +547,6 @@ export function AccountPage({ me }: { me: User }) {
           </form>
         </DialogContent>
       </Dialog>
-      <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
-        <AlertDialogContent>
-          {confirming && (
-            <>
-              <AlertDialogHeader>
-                <AlertDialogTitle>{accountConfirmCopy(confirming).title}</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {accountConfirmCopy(confirming).description}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => {
-                    const action = confirming;
-                    setConfirming(null);
-                    if (action.kind === "delete-passkey") {
-                      void handleDeletePasskey(action.passkey.id);
-                    } else if (action.kind === "revoke-session") {
-                      void revokeSession(action.session.id);
-                    } else if (action.kind === "revoke-other-sessions") {
-                      void revokeOtherSessions();
-                    } else if (action.kind === "revoke-device") {
-                      void revokeDevice(action.device.id);
-                    } else {
-                      void revokeAllDevices();
-                    }
-                  }}
-                >
-                  {accountConfirmCopy(confirming).confirmLabel}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </>
-          )}
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

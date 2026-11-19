@@ -9,7 +9,7 @@ items are one row per user; a broadcast is one row for everyone.
 - **`inbox_item`** (`packages/core/migrations-inbox/0001_init.sql`): `id` (integer rowid), `user_id`, `title`,
   `body`, `data` (JSON text or null), `category`, `read_at` (epoch ms or null), `created_at`.
   `INDEX(user_id, created_at, id)`, matching the read order. No foreign key: `user` lives in the other database.
-- **`broadcast`**: `id`, `title`, `body`, `data`, `category`, `created_at`. No index besides the rowid.
+- **`broadcast`**: `id`, `title`, `body`, `data`, `category`, `created_at`. `INDEX(created_at, id)` (`0003`).
 - **`inbox_state`**: `user_id` → `read_at`, the "read all" watermark.
 - **`InboxEntry`** (API shape, `packages/core/src/inbox/queries.ts`): `id` (`p_<rowid>` or `b_<rowid>`), `kind`
   (`personal` | `broadcast`), `title`, `body`, `data`, `category`, `read`, `createdAt`.

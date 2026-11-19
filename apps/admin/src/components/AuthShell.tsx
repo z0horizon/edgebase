@@ -1,5 +1,5 @@
+import { cn } from "cn";
 import type { InputHTMLAttributes, ReactNode } from "react";
-import { cn } from "@/lib/utils";
 
 export function AuthShell({
   title,

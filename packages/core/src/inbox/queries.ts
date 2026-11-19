@@ -59,10 +59,6 @@ export function broadcastStatement(
     .bind(p.title, p.body, dataColumn(p), p.category, now);
 }
 
-export async function insertBroadcast(db: D1Database, p: PushPayload, now: number): Promise<void> {
-  await broadcastStatement(db, p, now).run();
-}
-
 /**
  * Runs a push's inbox inserts together with its `inbox_push` row in one transaction; a push
  * whose row exists is skipped, so any number of retries store its inbox once.
@@ -139,38 +135,39 @@ async function watermark(db: D1Database, userId: string): Promise<number> {
 // Reads are a snapshot "as of now": rows past the TTL or stamped after `now` are left out.
 const cutoff = (q: InboxQuery) => q.now - q.ttlDays * DAY_MS;
 
-export async function listInbox(
-  db: D1Database,
-  q: InboxQuery & { cursor: Cursor | null; limit: number },
-): Promise<{ items: InboxEntry[]; nextCursor: string | null }> {
+function pageStatements(db: D1Database, q: InboxQuery & { cursor: Cursor | null; limit: number }) {
   const after = (k: number) => (q.cursor ? ` AND (created_at, ${k}, id) < (?, ?, ?)` : "");
   const cursorParams = q.cursor ? [q.cursor.t, q.cursor.k, q.cursor.i] : [];
-  const [personal, broadcasts, readUntil] = await Promise.all([
+  return [
     db
       .prepare(
         `SELECT id, title, body, data, category, read_at, created_at FROM inbox_item
          WHERE user_id = ? AND created_at BETWEEN ? AND ?${after(PERSONAL)}
          ORDER BY created_at DESC, id DESC LIMIT ?`,
       )
-      .bind(q.userId, cutoff(q), q.now, ...cursorParams, q.limit + 1)
-      .all<Row>(),
+      .bind(q.userId, cutoff(q), q.now, ...cursorParams, q.limit + 1),
     db
       .prepare(
         `SELECT id, title, body, data, category, NULL AS read_at, created_at FROM broadcast
          WHERE created_at BETWEEN ? AND ? AND created_at > ?${broadcastFilter(q)}${after(BROADCAST)}
          ORDER BY created_at DESC, id DESC LIMIT ?`,
       )
-      .bind(cutoff(q), q.now, q.userCreatedAt, ...cursorParams, q.limit + 1)
-      .all<Row>(),
-    watermark(db, q.userId),
-  ]);
+      .bind(cutoff(q), q.now, q.userCreatedAt, ...cursorParams, q.limit + 1),
+  ] as const;
+}
 
+function mergeInboxPage(
+  personal: Row[],
+  broadcasts: Row[],
+  readUntil: number,
+  limit: number,
+): { items: InboxEntry[]; nextCursor: string | null } {
   const merged = [
-    ...personal.results.map((r) => ({ r, k: PERSONAL as 0 | 1 })),
-    ...broadcasts.results.map((r) => ({ r, k: BROADCAST as 0 | 1 })),
+    ...personal.map((r) => ({ r, k: PERSONAL as 0 | 1 })),
+    ...broadcasts.map((r) => ({ r, k: BROADCAST as 0 | 1 })),
   ].sort((a, b) => b.r.created_at - a.r.created_at || b.k - a.k || b.r.id - a.r.id);
 
-  const page = merged.slice(0, q.limit);
+  const page = merged.slice(0, limit);
   const last = page.at(-1);
   return {
     items: page.map(({ r, k }) => ({
@@ -184,9 +181,58 @@ export async function listInbox(
       createdAt: r.created_at,
     })),
     nextCursor:
-      merged.length > q.limit && last
+      merged.length > limit && last
         ? encodeCursor({ t: last.r.created_at, k: last.k, i: last.r.id } satisfies Cursor)
         : null,
+  };
+}
+
+export async function listInbox(
+  db: D1Database,
+  q: InboxQuery & { cursor: Cursor | null; limit: number },
+): Promise<{ items: InboxEntry[]; nextCursor: string | null }> {
+  const [personalStmt, broadcastStmt] = pageStatements(db, q);
+  const [personal, broadcasts, readUntil] = await Promise.all([
+    personalStmt.all<Row>(),
+    broadcastStmt.all<Row>(),
+    watermark(db, q.userId),
+  ]);
+  return mergeInboxPage(personal.results, broadcasts.results, readUntil, q.limit);
+}
+
+/** Fetches the merged inbox page, watermark, and unread count in a single INBOX_DB batch. */
+export async function listInboxWithUnread(
+  db: D1Database,
+  q: InboxQuery & { cursor: Cursor | null; limit: number },
+): Promise<{ items: InboxEntry[]; nextCursor: string | null; unreadCount: number }> {
+  const [personalStmt, broadcastStmt] = pageStatements(db, q);
+  const metaStmt = db
+    .prepare(
+      `WITH w AS (SELECT COALESCE((SELECT read_at FROM inbox_state WHERE user_id = ?1), 0) AS r)
+       SELECT
+         w.r AS readUntil,
+         (SELECT count(*) FROM inbox_item WHERE user_id = ?1 AND created_at BETWEEN ?2 AND ?4
+            AND created_at > w.r AND read_at IS NULL)
+         + (SELECT count(*) FROM broadcast WHERE created_at BETWEEN ?2 AND ?4 AND created_at > w.r
+            AND created_at > ?3${broadcastFilter(q)}) AS unreadCount
+       FROM w`,
+    )
+    .bind(q.userId, cutoff(q), q.userCreatedAt, q.now);
+  const [personalRes, broadcastRes, metaRes] = await db.batch<
+    Row | { readUntil: number; unreadCount: number }
+  >([personalStmt, broadcastStmt, metaStmt]);
+  const meta = (metaRes?.results[0] as { readUntil: number; unreadCount: number } | undefined) ?? {
+    readUntil: 0,
+    unreadCount: 0,
+  };
+  return {
+    ...mergeInboxPage(
+      (personalRes?.results ?? []) as Row[],
+      (broadcastRes?.results ?? []) as Row[],
+      meta.readUntil,
+      q.limit,
+    ),
+    unreadCount: meta.unreadCount,
   };
 }
 

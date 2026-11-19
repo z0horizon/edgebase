@@ -39,9 +39,12 @@ user routes answer `503`.
    (`requireEmailVerification`). Password reset mails a link. Mail is sent with `ctx.waitUntil`
    so the response does not wait for delivery (`packages/core/src/auth/auth.ts`, `packages/core/src/mail.ts`).
 2. Google, Apple and GitHub are social providers, each turned on only when both its client ID
-   and secret are set (`configuredProviders`); an unset provider answers `404` like an unknown one. Native apps sign in to Google and
+   and secret are set (`configuredProviders`); an unset provider answers `404` like an unknown one.
+   `GOOGLE_CLIENT_ID` accepts a comma-separated list (web client ID first, followed by optional
+   iOS/Android client IDs accepted as `idToken` audiences). Native apps sign in to Google and
    Apple with the platform SDK's ID token through `POST /api/auth/sign-in/social` with
-   `{ provider, idToken }`. Google always shows the account picker (`prompt=select_account`).
+   `{ provider, idToken: { token, nonce?, accessToken? } }`. Google always shows the account picker
+   (`prompt=select_account`).
 3. GitHub on native: Expo uses `@better-auth/expo`. Flutter keeps a random `verifier`
    (43–128 chars) and opens the browser OAuth flow with
    `callbackURL = <BASE_URL>/v1/auth/app-callback?challenge=<base64url(SHA-256(verifier))>`.
@@ -59,21 +62,23 @@ user routes answer `503`.
    by its first redemption attempt, right or wrong. Better Auth's own
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.
 4. Sessions last 30 days and are extended at most once a day (`updateAge`), with a 15-minute
-   `freshAge` for passwordless sensitive operations (`delete-user`, `unlink-account`), and are
-   capped at 30 active sessions per user (pruning the oldest on sign-in). Better Auth's raw-token
-   `/api/auth/list-sessions` and `/api/auth/admin/list-user-sessions` endpoints are disabled (`404`)
-   in favour of token-free `/v1/sessions` and `/v1/admin/users/{userId}/sessions`. There is no
-   cookie cache and no secondary storage. Client IP comes from `cf-connecting-ip` and ASN/ISP/geo
+   `freshAge` for passwordless sensitive operations (`delete-user`, `unlink-account`, `passkey`
+   add/rename/delete), and are capped at 30 active sessions per user (pruning the oldest on
+   sign-in). Better Auth's raw-token `/api/auth/list-sessions`, `/api/auth/admin/list-user-sessions`,
+   `/api/auth/get-access-token`, `/api/auth/refresh-token` and `/api/auth/account-info` endpoints
+   are disabled (`404`) in favour of token-free `/v1/sessions` and `/v1/admin/users/{userId}/sessions`.
+   There is no cookie cache and no secondary storage. Client IP comes from `cf-connecting-ip` and ASN/ISP/geo
    from Cloudflare `request.cf`. Active `/v1/*` calls refresh `lastActiveAt` and the current
-   network in `ctx.waitUntil` at most every 15 minutes or immediately when `asn` or `country`
+   network in `ctx.waitUntil` at most every 60 minutes or immediately when `asn` or `country`
    changes, never altering `createdIp`/`createdAsn`/`createdCountry` and never revoking a roaming
    mobile session. When an established user completes sign-in from an `(asn, country)` pair not
    present among their other unexpired sessions or trusted devices, a transactional inbox alert and
    email are sent via `ctx.waitUntil` (capped at 3 alerts per hour per user).
 5. Sign-in, sign-up, password-reset (`request-password-reset`, `reset-password`),
-   `change-password`, `verify-password`, `delete-user`, resend-verification, two-factor, passkey
-   ceremony (`generate-*`, `verify-*`), organization invite-member and app-exchange requests are limited
-   to 10 per minute per `cf-connecting-ip` (normalized to `/64` on IPv6) through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
+   `change-password`, `verify-password`, `delete-user`, `link-social`, `unlink-account`,
+   resend-verification, two-factor, passkey ceremony (`generate-*`, `verify-*`), organization
+   invite-member and app-exchange requests are limited to 10 per minute per `cf-connecting-ip`
+   (normalized to `/64` on IPv6) through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`packages/core/src/auth/middleware.ts`). Better Auth's own limiter is disabled.
 6. `POST /api/auth/delete-user` and admin `remove-user` delete the user; `session`, `account`,
    `device`, `trusted_device`, `passkey`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
@@ -100,21 +105,27 @@ user routes answer `503`.
     ban, set role, impersonate, revoke sessions), but a password session needs two-factor on:
     until then it answers `403 two_factor_required` there and on the admin-session routes of
     api.md, so a leaked password alone reaches nothing. Setting up 2FA or registering the admin's
-    very first passkey (when `0` passkeys exist) stays open to them; once at least one passkey is
-    registered, a plain password session cannot add another passkey (`403 TWO_FACTOR_REQUIRED`). A
-    session from social sign-in or a WebAuthn passkey (`signInProvider` set to `google`, `github`,
-    `apple` or `passkey`) passes without TOTP, since the provider's own sign-in or hardware/biometric
-    `userVerification: "required"` is the second wall. So a provider account joins an admin only through
-    `POST /api/auth/link-social` from that admin's session that itself passes this check; implicit
-    linking by email at sign-in, or a link from a password session without TOTP, is refused
-    (`databaseHooks.account.create.before`). A user who signed up with a provider and is later
-    made admin keeps that provider.
+    very first passkey stays open only when `0` passkeys and `0` social accounts exist; once any
+    passkey or social account is linked, a plain password session cannot enroll a passkey or enable
+    TOTP (`403 TWO_FACTOR_REQUIRED`). A session from social sign-in or a WebAuthn passkey
+    (`signInProvider` set to `google`, `github`, `apple` or `passkey`) passes without TOTP, since
+    the provider's own sign-in or hardware/biometric `userVerification: "required"` is the second
+    wall. So a provider account joins an admin only through `POST /api/auth/link-social` from that
+    admin's session that itself passes this check; implicit linking by email at sign-in, or a link
+    from a password session without TOTP, is refused (`databaseHooks.account.create.before`).
+    Likewise, `GET /api/auth/list-accounts`, `POST /api/auth/unlink-account`, `/delete-user`,
+    `/change-password`, `/revoke-sessions`, `/revoke-other-sessions`, `/two-factor/disable` and
+    `/two-factor/get-totp-uri` reject an unverified admin password session (`403 TWO_FACTOR_REQUIRED`), `/unlink-account` enforces
+    `freshAge <= 15m` and refuses unlinking `credential` passwords (`400 CANNOT_UNLINK_CREDENTIAL`),
+    and a password-backed admin with TOTP off cannot remove their last remaining passkey or social
+    account (`400 LAST_ADMIN_FACTOR`). A user who signed up with a provider and is later made admin
+    keeps that provider.
     Banning deletes the user's sessions and `trusted_device` rows, so the next request answers `401`. The first admin comes
     from `pnpm admin:create` or bootstrap (see deployment.md). The `/admin` page (`apps/admin/`)
     signs admins in with a Passkey, Google, GitHub or Apple, or with email, password and TOTP (or backup code,
     with optional 30-day device trust), walks an
     admin with a password session and no TOTP/passkey through registering a passkey or setting up TOTP (QR code,
-    confirming code, backup codes), links providers and manages passkeys, active sessions and trusted devices
+    confirming code, backup codes), links/unlinks providers and manages passkeys, active sessions and trusted devices
     on its Account view, inspects/revokes user sessions on Users, and sends pushes and edits templates with the
     admin session (see api.md, Authentication). It is served with a CSP that allows only its own
     scripts, and renders user data as text.
@@ -138,7 +149,7 @@ user routes answer `503`.
     per-IP limit, and Better Auth locks the challenge after repeated wrong codes.
 12a. Passkeys (`@better-auth/passkey` at `/api/auth/passkey/*`): WebAuthn registration and
      authentication enforce `userVerification: "required"`, `rpID = hostname(BASE_URL)`, and
-     expected origins from `BASE_URL`, `http(s)://` `TRUSTED_ORIGINS`, plus optional `PASSKEY_ORIGINS`.
+     expected origins from `BASE_URL` and `http(s)://` `TRUSTED_ORIGINS` (plus `http://localhost:5173` in local dev).
      Adding, renaming or deleting a passkey requires a fresh session (`freshAge <= 15m`), caps each
      user at 20 passkeys (`name <= 64` chars), strips `createSession` on registration, and sends an
      email + transactional inbox security alert on registration (sharing the 3/hour alert cap).

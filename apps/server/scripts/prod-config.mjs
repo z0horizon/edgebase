@@ -33,8 +33,6 @@ export const SECRET_KEYS = [
 /** Generated, never typed: bootstrap and ensureDevVars fill them, validate requires them. */
 export const GENERATED_SECRETS = ["BETTER_AUTH_SECRET", "PUSH_API_KEY"];
 
-export const parseEnvFile = (text) => parseEnv(text);
-
 /**
  * `file` with every key of `<file>.example` first, in the example's order (parseEnv sorts them),
  * so a rewrite reads the same on every machine. Missing keys are "".
@@ -44,7 +42,7 @@ export function readEnvFile(file) {
   const keys = [...example.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]);
   return {
     ...Object.fromEntries(keys.map((k) => [k, ""])),
-    ...(existsSync(file) ? parseEnvFile(readFileSync(file, "utf8")) : {}),
+    ...(existsSync(file) ? parseEnv(readFileSync(file, "utf8")) : {}),
   };
 }
 
@@ -174,6 +172,9 @@ export function renderConfig(template, env) {
     c.queue = queueName.PUSH_QUEUE;
     c.dead_letter_queue = queueName.PUSH_DLQ;
   }
+  for (const m of out.send_email ?? []) {
+    if (m.name === "MAIL") m.allowed_sender_addresses = [env.MAIL_FROM];
+  }
   out.vars = Object.fromEntries(VAR_KEYS.map((key) => [key, env[key]]));
   return out;
 }
@@ -226,7 +227,7 @@ export async function writeProdConfig(env) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    await writeProdConfig(parseEnvFile(readFileSync(ENV_FILE, "utf8")));
+    await writeProdConfig(parseEnv(readFileSync(ENV_FILE, "utf8")));
   } catch (error) {
     console.error(
       error.code === "ENOENT" ? `${ENV_FILE} not found: run pnpm bootstrap first` : error.message,

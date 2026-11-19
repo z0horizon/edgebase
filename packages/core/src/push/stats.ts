@@ -6,17 +6,6 @@ import { STATS_LISTED } from "./limits";
 import type { Category } from "./types";
 
 /** A new stats row for a push going out at `sendAt`; its id travels in the push as `data.pushId`. */
-export async function createPushStats(
-  db: D1Database,
-  category: Category,
-  sendAt: number,
-): Promise<number> {
-  const id = await pushStatsInsert(db, category, sendAt).first<number>("id");
-  if (id === null) throw new Error("push_stats insert returned no id");
-  return id;
-}
-
-/** The insert of `createPushStats`, for a batch whose next statement reads `last_insert_rowid()`. */
 export function pushStatsInsert(db: D1Database, category: Category, sendAt: number) {
   return db
     .prepare("INSERT INTO push_stats (category, send_at) VALUES (?, ?) RETURNING id")
@@ -24,32 +13,48 @@ export function pushStatsInsert(db: D1Database, category: Category, sendAt: numb
 }
 
 /**
- * FCM's answers for one queue message: accepted, and finally refused or out of retries. It runs
- * after the sends, so it logs instead of throwing: a throw would make Queues send them again.
+ * Flushes aggregated FCM delivery counts for a consumer batch in one D1 call (one UPDATE per
+ * distinct pushId). Runs after sends and acks, so errors are logged rather than redelivering.
  */
-export async function recordDelivery(
+export async function recordDeliveries(
   db: D1Database,
-  pushId: number,
-  sent: number,
-  failed: number,
+  totals: ReadonlyMap<number, { sent: number; failed: number }>,
 ): Promise<void> {
-  if (!pushId || (sent === 0 && failed === 0)) return;
+  const statements: D1PreparedStatement[] = [];
+  for (const [pushId, { sent, failed }] of totals) {
+    if (!pushId || (sent === 0 && failed === 0)) continue;
+    statements.push(
+      db
+        .prepare("UPDATE push_stats SET sent = sent + ?, failed = failed + ? WHERE id = ?")
+        .bind(sent, failed, pushId),
+    );
+  }
+  if (statements.length === 0) return;
   try {
-    await db
-      .prepare("UPDATE push_stats SET sent = sent + ?, failed = failed + ? WHERE id = ?")
-      .bind(sent, failed, pushId)
-      .run();
+    if (statements.length === 1) await statements[0]?.run();
+    else await db.batch(statements);
   } catch (error) {
-    console.error("push stats update failed", { pushId, sent, failed, error: String(error) });
+    console.error({
+      event: "push_stats_update_failed",
+      pushes: statements.length,
+      error: String(error),
+    });
   }
 }
 
 export async function deleteUserOpens(db: D1Database, userId: string): Promise<void> {
-  await db.prepare("DELETE FROM push_open WHERE user_id = ?").bind(userId).run();
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE push_stats SET opened = MAX(0, opened - 1)
+         WHERE id IN (SELECT push_id FROM push_open WHERE user_id = ?)`,
+      )
+      .bind(userId),
+    db.prepare("DELETE FROM push_open WHERE user_id = ?").bind(userId),
+  ]);
 }
 
-const STATS_COLUMNS = `id, category, users, sent, failed, send_at AS sendAt,
-  (SELECT count(*) FROM push_open WHERE push_id = push_stats.id) AS opened`;
+const STATS_COLUMNS = "id, category, users, sent, failed, opened, send_at AS sendAt";
 
 /** Server routes under /v1/push (API key). */
 export const statsRoutes = new Hono<AppEnv>()

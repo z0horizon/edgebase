@@ -132,6 +132,31 @@ describe("POST /v1/push", () => {
     const { res } = push({ ...base, to: { topic: "all" } }, {}, { authorization: "Bearer x" });
     expect((await res).status).toBe(401);
   });
+
+  it("an immediate push skips a redundant scheduled_push claim update while its initial claim is fresh", async () => {
+    let scheduledUpdates = 0;
+    const db = new Proxy(env.DB, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            if (/^\s*update\s+scheduled_push\b/i.test(sql)) scheduledUpdates++;
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const { res, sent } = push({ ...base, to: { topic: "fast" } }, { DB: db });
+    const { id } = await (await res).json<{ id: number }>();
+    expect(sent).toHaveLength(1);
+    expect(scheduledUpdates).toBe(0);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM scheduled_push WHERE push_id = ?")
+        .bind(id)
+        .first("n"),
+    ).toBe(0);
+  });
 });
 
 describe("Idempotency-Key", () => {
@@ -327,6 +352,59 @@ describe("push stats", () => {
       { ...env, FCM_SERVICE_ACCOUNT: SA },
     );
     expect(await stats.json()).toMatchObject({ id, users: 1, sent: 0, failed: 0, opened: 1 });
+  });
+
+  it("reads opened counts without scanning push_open and decrements when a user is deleted", async () => {
+    const u1 = await signUpVerified("opens-fast-1@x.io");
+    const u2 = await signUpVerified("opens-fast-2@x.io");
+    const { res } = push({ ...base, to: { userIds: [u1.userId, u2.userId] } });
+    const { id } = await (await res).json<{ id: number }>();
+
+    await call("/v1/opens", authed(u1.token, json({ pushId: String(id) })));
+    await call("/v1/opens", authed(u1.token, json({ pushId: String(id) })));
+    await call("/v1/opens", authed(u2.token, json({ pushId: String(id) })));
+
+    let pushOpenQueries = 0;
+    const db = new Proxy(env.DB, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            if (/\bpush_open\b/i.test(sql)) pushOpenQueries++;
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    const listRes = await call(
+      "/v1/push",
+      { headers: KEY },
+      { ...env, DB: db, FCM_SERVICE_ACCOUNT: SA },
+    );
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json<{ pushes: { id: number; opened: number }[] }>()).pushes.find(
+      (p) => p.id === id,
+    );
+    expect(listed?.opened).toBe(2);
+
+    const oneRes = await call(
+      `/v1/push/${id}`,
+      { headers: KEY },
+      { ...env, DB: db, FCM_SERVICE_ACCOUNT: SA },
+    );
+    expect(await oneRes.json()).toMatchObject({ id, opened: 2 });
+    expect(pushOpenQueries).toBe(0);
+
+    const del = await call("/api/auth/delete-user", authed(u1.token, json({})));
+    expect(del.status).toBe(200);
+    const afterDel = await call(
+      `/v1/push/${id}`,
+      { headers: KEY },
+      { ...env, FCM_SERVICE_ACCOUNT: SA },
+    );
+    expect(await afterDel.json()).toMatchObject({ id, opened: 1 });
   });
 
   it("stats need the API key", async () => {

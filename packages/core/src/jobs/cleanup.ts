@@ -63,12 +63,16 @@ type CleanupReport = {
   inboxBytes: number;
 };
 
-// Rowids grow with time, so everything below the first fresh rowid is expired. Finding that
-// rowid stops at the first fresh row, so neither query walks the fresh part of the table.
+// Rowids grow with time, so everything below the first fresh rowid is expired. Capping the search
+// window to CHUNK + 1 rows turns multi-chunk backlog deletes from O(M^2 / CHUNK) into O(M) while
+// still stopping at the very first row when nothing has expired.
 const byRowid = (table: string) =>
   `DELETE FROM ${table} WHERE id IN (
      SELECT id FROM ${table}
-     WHERE id < COALESCE((SELECT id FROM ${table} WHERE created_at >= ?1 ORDER BY id LIMIT 1), 9223372036854775807)
+     WHERE id < COALESCE(
+       (SELECT id FROM (SELECT id, created_at FROM ${table} ORDER BY id LIMIT ${CHUNK + 1}) WHERE created_at >= ?1 LIMIT 1),
+       9223372036854775807
+     )
        AND created_at < ?1
      ORDER BY id LIMIT ${CHUNK})`;
 
@@ -137,9 +141,20 @@ export async function runCleanup(
             "DELETE FROM inbox_state WHERE user_id IN (SELECT value FROM json_each(?))",
           ).bind(ids),
         ]),
-        env.DB.prepare("DELETE FROM push_open WHERE user_id IN (SELECT value FROM json_each(?))")
-          .bind(ids)
-          .run(),
+        env.DB.batch([
+          env.DB.prepare(
+            `WITH dec(push_id, n) AS (
+               SELECT push_id, count(*) FROM push_open
+               WHERE user_id IN (SELECT value FROM json_each(?1))
+               GROUP BY push_id
+             )
+             UPDATE push_stats SET opened = MAX(0, opened - dec.n)
+             FROM dec WHERE push_stats.id = dec.push_id`,
+          ).bind(ids),
+          env.DB.prepare(
+            "DELETE FROM push_open WHERE user_id IN (SELECT value FROM json_each(?))",
+          ).bind(ids),
+        ]),
       ]);
     },
   );
@@ -212,11 +227,7 @@ export async function runCleanup(
     dbBytes: lastSize(dbSteps),
     inboxBytes: lastSize(inboxSteps),
   };
-  if (report.complete) console.info("cleanup", JSON.stringify(report));
-  else
-    console.warn(
-      "cleanup ran out of time; the rest waits for the next run",
-      JSON.stringify(report),
-    );
+  if (report.complete) console.info({ event: "cleanup", ...report });
+  else console.warn({ event: "cleanup_incomplete", ...report });
   return report;
 }

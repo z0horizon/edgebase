@@ -3,3 +3,6 @@
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
+
+/admin/assets/*
+  Cache-Control: public, max-age=31556952, immutable

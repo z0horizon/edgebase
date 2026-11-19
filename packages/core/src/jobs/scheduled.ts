@@ -6,6 +6,8 @@ import { type PushDispatch, PushDispatchSchema } from "../push/types";
 const BATCH = 100;
 /** How long a claim on a `scheduled_push` row lasts; a run that dies leaves it to the next one. */
 export const CLAIM_MS = 90_000;
+/** Remaining claim window above which `deliverStored` skips a redundant D1 renewal write. */
+const FRESH_CLAIM_MS = 60_000;
 
 function parseRequest(raw: string): PushDispatch | null {
   try {
@@ -21,9 +23,14 @@ function parseRequest(raw: string): PushDispatch | null {
  * claim value is the row's `send_at`, and every new claim is later than the last.
  * Returns the claim, or null when another run holds the row.
  */
-async function claim(db: D1Database, id: number, from: number): Promise<number | null> {
-  // Wall clock, not `now`: like cleanup's budget, a claim measures real time spent sending.
-  const until = Math.max(Date.now() + CLAIM_MS, from + 1);
+async function claim(
+  db: D1Database,
+  id: number,
+  from: number,
+  now: number,
+): Promise<number | null> {
+  // Wall clock bounded below by `now`, so real-time leases hold in production and synthetic clocks advance in tests.
+  const until = Math.max(Math.max(now, Date.now()) + CLAIM_MS, from + 1);
   const result = await db
     .prepare("UPDATE scheduled_push SET send_at = ? WHERE id = ? AND send_at = ?")
     .bind(until, id, from)
@@ -43,8 +50,13 @@ export async function deliverStored(
   now: number,
 ): Promise<{ users: number } | null> {
   const { users, messages } = await preparePush(env, row.request, now, row.pushId);
-  // Renewed right before queueing, so the queue call always runs inside a full claim.
-  const held = await claim(env.DB, row.id, row.claimed);
+  // Renew only when the claim could have neared expiry during preparePush; a fresh 90 s claim
+  // cannot be taken over for another minute, saving 2 D1 writes and 1 round-trip on fast sends.
+  const clock = Math.max(now, Date.now());
+  const held =
+    row.claimed - clock >= FRESH_CLAIM_MS
+      ? row.claimed
+      : await claim(env.DB, row.id, row.claimed, now);
   if (held === null) return null;
   if (messages.length > 0) await env.PUSH_QUEUE.sendBatch(messages);
   await env.DB.prepare("DELETE FROM scheduled_push WHERE id = ? AND send_at = ?")
@@ -65,11 +77,11 @@ export async function enqueueDuePushes(env: Env, now: number): Promise<number> {
   for (const row of due.results) {
     const request = parseRequest(row.request);
     if (!request) {
-      console.error("dropping invalid scheduled push", { id: row.id });
+      console.error({ event: "scheduled_push_invalid", id: row.id });
       await env.DB.prepare("DELETE FROM scheduled_push WHERE id = ?").bind(row.id).run();
       continue;
     }
-    const claimed = await claim(env.DB, row.id, row.send_at);
+    const claimed = await claim(env.DB, row.id, row.send_at, now);
     if (claimed === null) continue;
     try {
       // Rows stored before push stats existed get one, kept so a failed send does not make another.
@@ -88,10 +100,7 @@ export async function enqueueDuePushes(env: Env, now: number): Promise<number> {
       if (await deliverStored(env, { id: row.id, request, pushId, claimed }, now)) dispatched++;
     } catch (error) {
       // The claim pushed send_at back, so this row waits behind the others instead of blocking them.
-      console.error("scheduled push failed; retried after its claim", {
-        id: row.id,
-        error: String(error),
-      });
+      console.error({ event: "scheduled_push_failed", id: row.id, error: String(error) });
     }
   }
   return dispatched;

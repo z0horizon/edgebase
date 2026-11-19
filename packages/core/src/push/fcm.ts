@@ -126,7 +126,10 @@ export async function sendFcm(access: FcmAccess, message: FcmMessage): Promise<S
   } catch {
     return { kind: "retry", retryAfterSec: null };
   }
-  if (res.ok) return { kind: "ok" };
+  if (res.ok) {
+    await res.body?.cancel().catch(() => {});
+    return { kind: "ok" };
+  }
 
   const body = await res.json<FcmErrorBody>().catch((): FcmErrorBody => ({}));
   const code = body.error?.details?.find((d) => d.errorCode)?.errorCode ?? body.error?.status ?? "";

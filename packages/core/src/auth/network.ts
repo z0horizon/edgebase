@@ -1,5 +1,68 @@
-const ACTIVITY_TOUCH_MS = 15 * 60_000;
+const ACTIVITY_TOUCH_MS = 60 * 60_000;
 const MAX_UA_LEN = 512;
+const HEX_GROUP = /^[0-9a-f]{1,4}$/;
+
+/**
+ * Normalizes a client IP for per-network rate limiting: IPv4 and IPv4-mapped IPv6 keep their
+ * `/32` address, while native IPv6 addresses collapse to their canonical `/64` prefix.
+ */
+export function normalizeRateLimitIp(raw: string | null | undefined): string {
+  const trimmed = raw?.trim();
+  if (!trimmed || trimmed.length > 128) return "unknown";
+  const unbracketed =
+    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  const ip = (unbracketed.split("%")[0] ?? "").toLowerCase();
+  if (!ip) return "unknown";
+  if (!ip.includes(":")) return ip;
+
+  let normalized = ip;
+  const lastColon = ip.lastIndexOf(":");
+  const tail = ip.slice(lastColon + 1);
+  if (tail.includes(".")) {
+    const octets = tail.split(".");
+    if (octets.length !== 4) return ip;
+    const bytes: number[] = [];
+    for (const part of octets) {
+      if (!/^\d{1,3}$/.test(part)) return ip;
+      const n = Number(part);
+      if (n > 255) return ip;
+      bytes.push(n);
+    }
+    const hi = (((bytes[0] ?? 0) << 8) | (bytes[1] ?? 0)).toString(16);
+    const lo = (((bytes[2] ?? 0) << 8) | (bytes[3] ?? 0)).toString(16);
+    normalized = `${ip.slice(0, lastColon + 1)}${hi}:${lo}`;
+  }
+
+  const halves = normalized.split("::");
+  if (halves.length > 2) return ip;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 ? (halves[1] ? halves[1].split(":") : []) : [];
+  const missing = halves.length === 2 ? 8 - left.length - right.length : 0;
+  if ((halves.length === 1 && left.length !== 8) || (halves.length === 2 && missing < 1)) {
+    return ip;
+  }
+  const groups = [...left, ...Array<string>(missing).fill("0"), ...right];
+  if (groups.length !== 8 || !groups.every((g) => HEX_GROUP.test(g))) return ip;
+  const nums = groups.map((g) => Number.parseInt(g, 16));
+
+  if (
+    nums[0] === 0 &&
+    nums[1] === 0 &&
+    nums[2] === 0 &&
+    nums[3] === 0 &&
+    nums[4] === 0 &&
+    nums[5] === 0xffff
+  ) {
+    const hi = nums[6] ?? 0;
+    const lo = nums[7] ?? 0;
+    return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  }
+
+  return `${nums
+    .slice(0, 4)
+    .map((n) => n.toString(16).padStart(4, "0"))
+    .join(":")}::/64`;
+}
 
 export type ClientNetwork = {
   ipAddress: string | null;
@@ -49,7 +112,7 @@ export type TrackedSession = {
 
 /**
  * Updates `lastActiveAt` and the current network of an active session in the background at most
- * once every 15 minutes, or immediately when the session moves to another ASN or country.
+ * once every 60 minutes, or immediately when the session moves to another ASN or country.
  */
 export function touchSessionActivity(
   db: D1Database,
@@ -87,6 +150,8 @@ export function touchSessionActivity(
         session.id,
       )
       .run()
-      .catch((error) => console.error("session activity touch failed", error)),
+      .catch((error) =>
+        console.error({ event: "session_activity_touch_failed", error: String(error) }),
+      ),
   );
 }

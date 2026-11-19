@@ -30,7 +30,10 @@ export async function setTopic(
     },
     body: JSON.stringify({ to: `/topics/${topic}`, registration_tokens: [token] }),
   });
-  if (!res.ok) return `Instance ID API answered ${res.status}`;
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    return `Instance ID API answered ${res.status}`;
+  }
   const body = await res.json<IidResponse>().catch((): IidResponse => ({}));
   return body.results?.[0]?.error ?? "";
 }

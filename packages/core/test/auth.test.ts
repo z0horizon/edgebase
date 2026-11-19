@@ -243,6 +243,53 @@ describe("auth", () => {
     expect((await res?.json<{ error: { code: string } }>())?.error.code).toBe("rate_limited");
   });
 
+  it("normalizes IPv6 addresses to /64 for AUTH_RL without collapsing IPv4-mapped addresses", async () => {
+    let host = 0;
+    const res = await firstLimited(() => {
+      host++;
+      const variant =
+        host % 2 === 0
+          ? `2001:db8:abcd:12::${host.toString(16)}`
+          : `2001:0DB8:ABCD:0012:ffff:1234:5678:${host.toString(16)}`;
+      return call(
+        "/api/auth/sign-in/email",
+        json(
+          { email: "nobody@x.io", password: "wrong-password" },
+          { headers: { "cf-connecting-ip": variant } },
+        ),
+      );
+    });
+    expect(res?.status).toBe(429);
+
+    // Distinct IPv4-mapped IPv6 addresses must not collapse into a shared ::/64 bucket.
+    const mappedOther = await call(
+      "/api/auth/sign-in/email",
+      json(
+        { email: "nobody@x.io", password: "wrong-password" },
+        { headers: { "cf-connecting-ip": "::ffff:203.0.113.77" } },
+      ),
+    );
+    const mappedExhaust = await firstLimited(() =>
+      call(
+        "/api/auth/sign-in/email",
+        json(
+          { email: "nobody@x.io", password: "wrong-password" },
+          { headers: { "cf-connecting-ip": "::ffff:203.0.113.78" } },
+        ),
+      ),
+    );
+    expect(mappedExhaust?.status).toBe(429);
+    expect(mappedOther.status).not.toBe(429);
+    const mappedStillFree = await call(
+      "/api/auth/sign-in/email",
+      json(
+        { email: "nobody@x.io", password: "wrong-password" },
+        { headers: { "cf-connecting-ip": "::ffff:203.0.113.79" } },
+      ),
+    );
+    expect(mappedStillFree.status).not.toBe(429);
+  });
+
   it("missing BETTER_AUTH_SECRET answers 503 not_configured", async () => {
     const res = await call("/v1/me", {}, { ...env, BETTER_AUTH_SECRET: "" });
     expect(res.status).toBe(503);
@@ -256,6 +303,8 @@ it.each([
   "/api/auth/change-password",
   "/api/auth/verify-password",
   "/api/auth/delete-user",
+  "/api/auth/link-social",
+  "/api/auth/unlink-account",
   "/v1/auth/app-exchange",
 ])(
   "11th call to %s within a minute from one IP answers 429",
@@ -270,6 +319,8 @@ it.each([
 );
 
 describe("social providers", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   const social = (provider: string, bindings: Env) =>
     call(
       "/api/auth/sign-in/social",
@@ -284,6 +335,136 @@ describe("social providers", () => {
     const res = await social("github", env);
     expect(res.status).toBe(200);
     expect((await res.json<{ url: string }>()).url).toContain("github.com");
+  });
+
+  it("Google OAuth uses primary clientId with select_account and verifies idToken across comma-separated audiences", async () => {
+    const keyPair = (await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"],
+    )) as CryptoKeyPair;
+    const { kty, n, e } = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as JsonWebKey;
+    const jwk = { kty, n, e, kid: "g-kid-1", alg: "RS256", use: "sig" };
+    const enc = new TextEncoder();
+    const signGoogleIdToken = async (claims: Record<string, unknown>) => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const header = base64url(
+        enc.encode(JSON.stringify({ alg: "RS256", kid: "g-kid-1", typ: "JWT" })),
+      );
+      const payload = base64url(
+        enc.encode(
+          JSON.stringify({
+            iss: "https://accounts.google.com",
+            iat: nowSec,
+            exp: nowSec + 300,
+            email_verified: true,
+            ...claims,
+          }),
+        ),
+      );
+      const signingInput = `${header}.${payload}`;
+      const sig = await crypto.subtle.sign(
+        "RSASSA-PKCS1-v1_5",
+        keyPair.privateKey,
+        enc.encode(signingInput),
+      );
+      return `${signingInput}.${base64url(new Uint8Array(sig))}`;
+    };
+
+    const bindings = { ...env, GOOGLE_CLIENT_ID: "google-web, google-ios" };
+    const start = await social("google", bindings);
+    expect(start.status).toBe(200);
+    const authUrl = new URL((await start.json<{ url: string }>()).url);
+    expect(authUrl.origin).toBe("https://accounts.google.com");
+    expect(authUrl.searchParams.get("client_id")).toBe("google-web");
+    expect(authUrl.searchParams.get("prompt")).toBe("select_account");
+
+    const webJwt = await signGoogleIdToken({
+      sub: "g-web-sub",
+      aud: "google-web",
+      email: "g-web@x.io",
+      name: "Google Web",
+      picture: "https://lh3.googleusercontent.com/a/default",
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const req = new Request(input);
+      const url = req.url.split("?")[0] ?? "";
+      if (url === "https://oauth2.googleapis.com/token") {
+        return Response.json({ access_token: "ga", token_type: "Bearer", id_token: webJwt });
+      }
+      if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+        return Response.json({ keys: [jwk] });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const cookie = start.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    const state = authUrl.searchParams.get("state") ?? "";
+    const cb = await call(
+      `/api/auth/callback/google?code=gc&state=${encodeURIComponent(state)}`,
+      { headers: { "cf-connecting-ip": freshIp(), cookie } },
+      bindings,
+    );
+    expect(cb.headers.get("location")).toBe("https://web.test/");
+    const webSessionCookie = cb.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    expect(
+      await (
+        await call("/api/auth/get-session", { headers: { cookie: webSessionCookie } }, bindings)
+      ).json(),
+    ).toMatchObject({
+      user: { email: "g-web@x.io", emailVerified: true },
+      session: { signInProvider: "google" },
+    });
+
+    const iosJwt = await signGoogleIdToken({
+      sub: "g-ios-sub",
+      aud: "google-ios",
+      email: "g-ios@x.io",
+      name: "Google iOS",
+    });
+    const iosSignIn = await call(
+      "/api/auth/sign-in/social",
+      json(
+        { provider: "google", idToken: { token: iosJwt } },
+        { headers: { "cf-connecting-ip": freshIp() } },
+      ),
+      bindings,
+    );
+    expect(iosSignIn.status).toBe(200);
+    const iosBearer = iosSignIn.headers.get("set-auth-token") ?? "";
+    expect(
+      await (await call("/api/auth/get-session", authed(iosBearer), bindings)).json(),
+    ).toMatchObject({
+      user: { email: "g-ios@x.io" },
+      session: { signInProvider: "google" },
+    });
+
+    const wrongAudJwt = await signGoogleIdToken({
+      sub: "g-evil-sub",
+      aud: "other-client",
+      email: "g-evil@x.io",
+      name: "Evil",
+    });
+    const wrongRes = await call(
+      "/api/auth/sign-in/social",
+      json(
+        { provider: "google", idToken: { token: wrongAudJwt } },
+        { headers: { "cf-connecting-ip": freshIp() } },
+      ),
+      bindings,
+    );
+    expect(wrongRes.status).toBe(401);
   });
 
   it("GET /v1/auth/providers lists only providers with credentials", async () => {
@@ -387,6 +568,102 @@ describe("admin, two-factor, organizations, locale", () => {
     expect(enable.status).toBe(200);
   });
 
+  it("reads the admin session from D1 once per /api/auth/admin/* request", async () => {
+    const { userId, token } = await signUpVerified("admin-single-read@x.io");
+    await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+      .bind(userId)
+      .run();
+    let sessionSelects = 0;
+    const db = new Proxy(env.DB, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            if (/^\s*select\b/i.test(sql) && /\bsession\b/i.test(sql)) sessionSelects++;
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const res = await call("/api/auth/admin/list-users", authed(token), { ...env, DB: db });
+    expect(res.status).toBe(200);
+    expect(sessionSelects).toBe(1);
+  });
+
+  it("blocks forged dotted Bearer + unverified admin cookie on /admin/*, destructive self-mutations, and two_factor cookie smuggling", async () => {
+    const email = "admin-hardening-bypass@x.io";
+    const { userId } = await signUpVerified(email);
+    const nowIso = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId),
+      env.DB.prepare(
+        `INSERT INTO account (id, accountId, providerId, userId, createdAt, updatedAt)
+         VALUES ('acc-gh-admin', 'gh-123', 'github', ?, ?, ?)`,
+      ).bind(userId, nowIso, nowIso),
+    ]);
+
+    const signIn = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    expect(signIn.status).toBe(200);
+    const leakedToken = signIn.headers.get("set-auth-token") ?? "";
+    const leakedCookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+    // Critical #1: Forged dotted Bearer alongside valid unverified admin cookie must NOT bypass 2FA.
+    const mixedBypass = await call("/api/auth/admin/list-users", {
+      headers: {
+        cookie: leakedCookie,
+        authorization: "Bearer forged.signature",
+        "cf-connecting-ip": freshIp(),
+      },
+    });
+    expect(mixedBypass.status).toBe(403);
+    expect(await mixedBypass.json()).toMatchObject({ error: { code: "two_factor_required" } });
+
+    // Forged dotted Bearer alone must fail closed with 401.
+    const forgedOnly = await call("/api/auth/admin/list-users", {
+      headers: { authorization: "Bearer forged.signature", "cf-connecting-ip": freshIp() },
+    });
+    expect(forgedOnly.status).toBe(401);
+
+    // Important #3b: Smuggled junk two_factor cookie alongside session cookie must not bypass 2FA check.
+    const smuggledTotp = await call(
+      "/api/auth/two-factor/verify-totp",
+      json(
+        { code: "000000", trustDevice: true },
+        {
+          headers: {
+            cookie: `${leakedCookie}; better-auth.two_factor=junk`,
+            "cf-connecting-ip": freshIp(),
+          },
+        },
+      ),
+    );
+    expect(smuggledTotp.status).toBe(403);
+
+    // Important #3a: Unverified admin password session cannot change password, disable 2FA, or delete the admin account.
+    for (const [path, payload] of [
+      [
+        "/api/auth/change-password",
+        { currentPassword: PASSWORD, newPassword: `${PASSWORD}-new`, revokeOtherSessions: true },
+      ],
+      ["/api/auth/two-factor/disable", { password: PASSWORD }],
+      ["/api/auth/delete-user", {}],
+    ] as const) {
+      const res = await call(
+        path,
+        authed(leakedToken, json(payload, { headers: { "cf-connecting-ip": freshIp() } })),
+      );
+      expect(res.status, path).toBe(403);
+    }
+
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM user WHERE id = ?").bind(userId).first("n"),
+    ).toBe(1);
+  });
+
   const githubLinked = (userId: string) =>
     env.DB.prepare("SELECT count(*) AS n FROM account WHERE userId = ? AND providerId = 'github'")
       .bind(userId)
@@ -425,6 +702,193 @@ describe("admin, two-factor, organizations, locale", () => {
     const signIn = await githubOAuth(email);
     expect(signIn.location).toBe("/admin/");
     expect((await call("/api/auth/admin/list-users", signIn.session)).status).toBe(200);
+  });
+
+  it("guards list-accounts and unlink-account against unverified password sessions, stale sessions, and removing an admin's last second factor", async () => {
+    const email = "admin-unlink@x.io";
+    const { userId, token } = await signUpVerified(email);
+    await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")
+      .bind(userId)
+      .run();
+    expect(
+      (await githubOAuth(email, { linkWith: token, callbackURL: "/admin/#account" })).location,
+    ).toBe("/admin/#account");
+    await env.DB.prepare("UPDATE user SET twoFactorEnabled = 0 WHERE id = ?").bind(userId).run();
+
+    const ghSignIn = await githubOAuth(email);
+    const listRes = await call("/api/auth/list-accounts", ghSignIn.session);
+    expect(listRes.status).toBe(200);
+    const accounts = await listRes.json<{ id: string; providerId: string }[]>();
+    const ghAccountId = accounts.find((a) => a.providerId === "github")?.id ?? "";
+    const credAccountId = accounts.find((a) => a.providerId === "credential")?.id ?? "";
+    expect(ghAccountId).not.toBe("");
+    expect(credAccountId).not.toBe("");
+
+    // Raw OAuth provider token endpoints are disabled (404), matching /api/auth/list-sessions.
+    expect(
+      (
+        await call("/api/auth/get-access-token", {
+          ...json({ accountId: ghAccountId }),
+          headers: { ...ghSignIn.session.headers, "content-type": "application/json" },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await call("/api/auth/refresh-token", {
+          ...json({ accountId: ghAccountId }),
+          headers: { ...ghSignIn.session.headers, "content-type": "application/json" },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (await call(`/api/auth/account-info?accountId=${ghAccountId}`, ghSignIn.session)).status,
+    ).toBe(404);
+
+    // Plain password session (including unsigned raw bearer) cannot inspect/unlink accounts OR enroll a rogue passkey/TOTP when a social factor already exists.
+    const leakedSignIn = await call(
+      "/api/auth/sign-in/email",
+      json({ email, password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+    const leakedPwToken = leakedSignIn.headers.get("set-auth-token") ?? "";
+    const unsignedLeakedToken = (await leakedSignIn.json<{ token: string }>()).token;
+    expect((await call("/api/auth/list-accounts", authed(leakedPwToken))).status).toBe(403);
+    expect((await call("/api/auth/list-accounts", authed(unsignedLeakedToken))).status).toBe(403);
+    expect(
+      (
+        await call(
+          "/api/auth/unlink-account",
+          authed(
+            leakedPwToken,
+            json({ accountId: ghAccountId }, { headers: { "cf-connecting-ip": freshIp() } }),
+          ),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await call(
+          "/api/auth/unlink-account",
+          authed(
+            unsignedLeakedToken,
+            json({ accountId: ghAccountId }, { headers: { "cf-connecting-ip": freshIp() } }),
+          ),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await call(
+          "/api/auth/passkey/generate-register-options",
+          authed(leakedPwToken, { headers: { "cf-connecting-ip": freshIp() } }),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await call(
+          "/api/auth/two-factor/enable",
+          authed(
+            leakedPwToken,
+            json({ password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+          ),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await call(
+          "/api/auth/two-factor/enable",
+          authed(
+            unsignedLeakedToken,
+            json({ password: PASSWORD }, { headers: { "cf-connecting-ip": freshIp() } }),
+          ),
+        )
+      ).status,
+    ).toBe(403);
+
+    // Password credentials cannot be deleted via /unlink-account without password verification.
+    expect(
+      (
+        await call("/api/auth/unlink-account", {
+          ...json({ accountId: credAccountId }),
+          headers: {
+            ...ghSignIn.session.headers,
+            "content-type": "application/json",
+            "cf-connecting-ip": freshIp(),
+          },
+        })
+      ).status,
+    ).toBe(400);
+
+    // Deleting a non-existent passkey answers 404 (not 400 LAST_ADMIN_FACTOR).
+    expect(
+      (
+        await call("/api/auth/passkey/delete-passkey", {
+          ...json({ id: "missing-passkey" }),
+          headers: {
+            ...ghSignIn.session.headers,
+            "content-type": "application/json",
+            "cf-connecting-ip": freshIp(),
+          },
+        })
+      ).status,
+    ).toBe(404);
+
+    // Verified admin session still cannot remove its only second-wall factor while password exists and TOTP is off.
+    expect(
+      (
+        await call("/api/auth/unlink-account", {
+          ...json({ accountId: ghAccountId }),
+          headers: {
+            ...ghSignIn.session.headers,
+            "content-type": "application/json",
+            "cf-connecting-ip": freshIp(),
+          },
+        })
+      ).status,
+    ).toBe(400);
+    expect(await githubLinked(userId)).toBe(1);
+
+    // Adding a passkey provides a second remaining factor, but a stale session (>15m) is still rejected.
+    await env.DB.prepare(
+      `INSERT INTO passkey (id, name, publicKey, userId, credentialID, counter, deviceType, backedUp, createdAt)
+       VALUES ('pk-unlink-keep', 'YubiKey', 'pub', ?, 'cred-unlink-keep', 0, 'singleDevice', 0, ?)`,
+    )
+      .bind(userId, new Date().toISOString())
+      .run();
+    const staleIso = new Date(Date.now() - 20 * 60_000).toISOString();
+    await env.DB.prepare("UPDATE session SET createdAt = ? WHERE userId = ?")
+      .bind(staleIso, userId)
+      .run();
+    expect(
+      (
+        await call("/api/auth/unlink-account", {
+          ...json({ accountId: ghAccountId }),
+          headers: { ...ghSignIn.session.headers, "content-type": "application/json" },
+        })
+      ).status,
+    ).toBe(403);
+
+    // Fresh GitHub session unlinks GitHub cleanly; the remaining passkey is now the last factor and cannot be removed.
+    const freshGh = await githubOAuth(email);
+    expect(
+      (
+        await call("/api/auth/unlink-account", {
+          ...json({ accountId: ghAccountId }),
+          headers: { ...freshGh.session.headers, "content-type": "application/json" },
+        })
+      ).status,
+    ).toBe(200);
+    expect(await githubLinked(userId)).toBe(0);
+    expect(
+      (
+        await call("/api/auth/passkey/delete-passkey", {
+          ...json({ id: "pk-unlink-keep" }),
+          headers: { ...freshGh.session.headers, "content-type": "application/json" },
+        })
+      ).status,
+    ).toBe(400);
   });
 
   it("a client cannot mark its password session as social", async () => {
@@ -631,7 +1095,7 @@ describe("session network telemetry and freshness", () => {
     expect(forge.status).toBe(400);
   });
 
-  it("updates current network and lastActiveAt on ASN shift or after 15 minutes while keeping origin immutable", async () => {
+  it("updates current network and lastActiveAt on ASN shift or after 60 minutes while keeping origin immutable", async () => {
     const email = "roam@x.io";
     await signUpVerified(email);
     const originIp = freshIp();
@@ -657,8 +1121,8 @@ describe("session network telemetry and freshness", () => {
     const initial = await sessionRow();
     expect(initial?.["createdAsn"]).toBe(45899);
 
-    // Same ASN & country within 15 minutes: does not rewrite lastActiveAt.
-    const fixedTime = new Date(Date.now() - 5 * 60_000).toISOString();
+    // Same ASN & country within 60 minutes (e.g. 30m later): does not rewrite lastActiveAt.
+    const fixedTime = new Date(Date.now() - 30 * 60_000).toISOString();
     await env.DB.prepare("UPDATE session SET lastActiveAt = ? WHERE id = ?")
       .bind(fixedTime, sessionId)
       .run();
@@ -689,8 +1153,8 @@ describe("session network telemetry and freshness", () => {
     });
     expect(roamed?.["lastActiveAt"]).not.toBe(fixedTime);
 
-    // After > 15 minutes on the same ASN, lastActiveAt also refreshes.
-    const staleTime = new Date(Date.now() - 16 * 60_000).toISOString();
+    // After > 60 minutes on the same ASN, lastActiveAt also refreshes.
+    const staleTime = new Date(Date.now() - 61 * 60_000).toISOString();
     await env.DB.prepare("UPDATE session SET lastActiveAt = ? WHERE id = ?")
       .bind(staleTime, sessionId)
       .run();

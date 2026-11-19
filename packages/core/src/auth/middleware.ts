@@ -2,6 +2,7 @@ import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../app";
 import { jsonError, sha256 } from "../http";
 import { adminNeedsTwoFactor, createAuth, webTrustedOrigins } from "./auth";
+import { normalizeRateLimitIp } from "./network";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -41,7 +42,7 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
 };
 
 export const authRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
-  const key = c.req.header("cf-connecting-ip") ?? "unknown";
+  const key = normalizeRateLimitIp(c.req.header("cf-connecting-ip"));
   if (!(await c.env.AUTH_RL.limit({ key })).success) {
     return jsonError(429, "rate_limited", "Too many attempts, try again in a minute");
   }
@@ -58,15 +59,6 @@ export const topicRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
 
 const twoFactorRequired = () =>
   jsonError(403, "two_factor_required", "Turn on two-factor authentication to use admin features");
-
-/** An admin password session without TOTP may sign in, but only to set it up. */
-export const requireAdminTwoFactor: MiddlewareHandler<AppEnv> = async (c, next) => {
-  const session = await createAuth(c.env, c.executionCtx, c.req.raw).api.getSession({
-    headers: c.req.raw.headers,
-  });
-  if (session && adminNeedsTwoFactor(session)) return twoFactorRequired();
-  await next();
-};
 
 /** Use after requireUser on `/v1/admin/*`: requires `role === "admin"` and 2FA rule satisfied. */
 export const requireAdminConsole: MiddlewareHandler<AppEnv> = async (c, next) => {

@@ -24,7 +24,7 @@ Used on desktop and laptop screens in both bright daytime offices and dark late-
 
 ## Capabilities and Constraints
 
-- Views: Sign-in (Passkey, OAuth providers, Email + Password + TOTP/Backup Code + 30-day device trust), Admin Second-Factor Onboarding (Passkey or TOTP QR + backup codes), Users (debounced live email search, pagination, confirmed role grant/revoke, ban/unban, per-user active session telemetry & revocation, multi-user push selection), Notifications group (Dispatches delivery/failure/open metrics, Send push composer with auto-detected `{{variable}}` fields and live locale preview, and Templates CRUD up to 500 templates with structured per-locale translations and 1-click Send handoff), and Account & Security (passkeys, linked OAuth providers, active sessions, trusted devices).
+- Views: Sign-in (Passkey, OAuth providers, Email + Password + TOTP/Backup Code + 30-day device trust), Admin Second-Factor Onboarding (Passkey or TOTP QR + backup codes), Users (search, pagination, role grant, ban/unban, per-user active session telemetry & revocation, multi-user push selection), Send Push (broadcast/topic/selected users, category, inbox persistence, scheduling, template & variable preview, translations), Sent Pushes (delivery/failure/open metrics), Templates (CRUD up to 500 templates with `{{placeholder}}` highlighting), and Account & Security (passkeys, linked OAuth providers, active sessions, trusted devices).
 - Technical constraints: React 19 + Tailwind CSS v4 + Vite static build into `apps/server/public/admin`, strict CSP (`script-src 'self'`, no external font CDNs), zero bloated UI dependencies.
 
 ## Brand Commitments

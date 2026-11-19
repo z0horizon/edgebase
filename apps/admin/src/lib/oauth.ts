@@ -37,7 +37,7 @@ export async function startOAuth(
   provider: Provider,
 ) {
   // Relative paths resolve against the API's BASE_URL, which serves this page.
-  const back = location.pathname;
+  const back = `${location.pathname}${location.hash}`;
   const { url } = await api<{ url: string }>(path, {
     method: "POST",
     body: { provider, callbackURL: back, errorCallbackURL: back },

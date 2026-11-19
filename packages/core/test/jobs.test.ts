@@ -154,6 +154,20 @@ describe("runCleanup bounds", () => {
     }
   });
 
+  it("cleans multi-chunk expired inbox backlogs in linear O(M) rowsRead without quadratic re-scans", async () => {
+    await env.INBOX_DB.prepare("DELETE FROM inbox_item").run();
+    await seedInbox("expired-backlog", 50_005, NOW - 35 * DAY);
+    await seedInbox("fresh-tail", 1_000, NOW);
+    try {
+      const report = await runCleanup(env, NOW);
+      expect(report.inbox).toBe(50_005);
+      // Linear ~6 D1 rows_read per deleted row (~300k), vs >475k under per-chunk O(M^2) re-scans.
+      expect(report.rowsRead).toBeLessThan(310_000);
+    } finally {
+      await env.INBOX_DB.prepare("DELETE FROM inbox_item").run();
+    }
+  });
+
   it("skips remaining tables when a small step finishes past the time budget", async () => {
     const u = await seedUser();
     await env.DB.prepare(
@@ -368,6 +382,24 @@ describe("scheduled push claims", () => {
     expect(
       takeover.sent.filter((s) => (s.body as { topic: string }).topic === "claims"),
     ).toHaveLength(1);
+  });
+
+  it("a future wall-clock claim taken over at synthetic now > claimed queues nothing", async () => {
+    const claimed = Date.now() + CLAIM_MS;
+    const id = await store(claimed);
+    const futureNow = claimed + 1;
+    const takeover = fakeQueue();
+    expect(
+      await enqueueDuePushes({ ...env, PUSH_QUEUE: takeover.queue }, futureNow),
+    ).toBeGreaterThan(0);
+    const late = fakeQueue();
+    const result = await deliverStored(
+      { ...env, PUSH_QUEUE: late.queue },
+      { id, request: topicRequest, pushId: 0, claimed },
+      futureNow,
+    );
+    expect(result).toBeNull();
+    expect(late.sent).toEqual([]);
   });
 
   it("a row that keeps failing does not hold back the rows behind it", async () => {

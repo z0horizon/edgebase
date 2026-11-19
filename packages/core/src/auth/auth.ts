@@ -62,33 +62,43 @@ const pickNum = (obj: Record<string, unknown>, key: string): number | null =>
   typeof obj[key] === "number" ? (obj[key] as number) : null;
 
 const has = (...values: (string | undefined)[]) => values.every((value) => value?.trim());
+const csv = (value: string | undefined) =>
+  (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
 /** Only providers whose credentials are set, so a project can start with any subset. */
 export function configuredProviders(env: Env) {
+  const googleIds = csv(env.GOOGLE_CLIENT_ID);
   return {
-    ...(has(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET) && {
-      google: {
-        clientId: env.GOOGLE_CLIENT_ID,
-        clientSecret: env.GOOGLE_CLIENT_SECRET,
-        // Sign-out only ends our session; without this Google silently reuses its signed-in account.
-        prompt: "select_account" as const,
-      },
-    }),
+    ...(googleIds.length > 0 &&
+      has(env.GOOGLE_CLIENT_SECRET) && {
+        google: {
+          clientId: googleIds,
+          clientSecret: env.GOOGLE_CLIENT_SECRET.trim(),
+          // Sign-out only ends our session; without this Google silently reuses its signed-in account.
+          prompt: "select_account" as const,
+        },
+      }),
     ...(has(env.APPLE_CLIENT_ID, env.APPLE_CLIENT_SECRET) && {
       apple: {
-        clientId: env.APPLE_CLIENT_ID,
-        clientSecret: env.APPLE_CLIENT_SECRET,
-        appBundleIdentifier: env.APPLE_APP_BUNDLE_IDENTIFIER,
+        clientId: env.APPLE_CLIENT_ID.trim(),
+        clientSecret: env.APPLE_CLIENT_SECRET.trim(),
+        appBundleIdentifier: env.APPLE_APP_BUNDLE_IDENTIFIER?.trim(),
       },
     }),
     ...(has(env.GITHUB_CLIENT_ID, env.GITHUB_CLIENT_SECRET) && {
-      github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET },
+      github: {
+        clientId: env.GITHUB_CLIENT_ID.trim(),
+        clientSecret: env.GITHUB_CLIENT_SECRET.trim(),
+      },
     }),
   };
 }
 
 /** TRUSTED_ORIGINS as a list: app schemes (`myapp://`) and web origins. */
-export const trustedOrigins = (env: Env) => env.TRUSTED_ORIGINS.split(",").map((o) => o.trim());
+export const trustedOrigins = (env: Env) => csv(env.TRUSTED_ORIGINS);
 
 /** HTTP(S) web origins from TRUSTED_ORIGINS (excludes native custom URL schemes). */
 export const webTrustedOrigins = (env: Env) =>
@@ -384,8 +394,10 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
           userVerification: "required",
         },
       }),
-      passkeyPolicyPlugin(env, ctx, net, securityState),
+      // Order matters: the security plugin's before-hook records the two-factor cookie that the
+      // policy plugin's gate on /two-factor/verify-totp reads.
       edgebaseSecurityPlugin(env, ctx, net, securityState),
+      passkeyPolicyPlugin(env, ctx, net, securityState),
       organization({
         // Bounds organization and member rows per user; pending invitations are capped at 100 per
         // organization by default and expire after 48 h.

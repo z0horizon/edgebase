@@ -13,7 +13,6 @@ import {
 import {
   authRateLimit,
   requireAdminConsole,
-  requireAdminTwoFactor,
   requireApiKey,
   requireAuthConfig,
   requireUser,
@@ -77,6 +76,8 @@ app.on(
     "/api/auth/change-password",
     "/api/auth/verify-password",
     "/api/auth/delete-user",
+    "/api/auth/link-social",
+    "/api/auth/unlink-account",
     "/api/auth/send-verification-email",
     // Six-digit codes: without a limit they are guessed in minutes.
     "/api/auth/two-factor/*",
@@ -99,13 +100,15 @@ app.on(
 );
 // Native apps redeem one-time tokens only through /v1/auth/app-exchange, which checks the verifier.
 app.post("/api/auth/one-time-token/verify", () => jsonError(404, "not_found", "Route not found"));
-// Better Auth's session list endpoints include raw `session.token` bearer secrets; callers use
-// token-free `/v1/sessions` and `/v1/admin/users/:userId/sessions` instead.
+// Better Auth's session list and provider token endpoints expose raw bearer/OAuth secrets;
+// callers use token-free `/v1/sessions` and `/v1/admin/users/:userId/sessions` instead.
 app.get("/api/auth/list-sessions", () => jsonError(404, "not_found", "Route not found"));
 app.post("/api/auth/admin/list-user-sessions", () =>
   jsonError(404, "not_found", "Route not found"),
 );
-app.use("/api/auth/admin/*", requireAdminTwoFactor);
+app.post("/api/auth/get-access-token", () => jsonError(404, "not_found", "Route not found"));
+app.post("/api/auth/refresh-token", () => jsonError(404, "not_found", "Route not found"));
+app.get("/api/auth/account-info", () => jsonError(404, "not_found", "Route not found"));
 app.on(["GET", "POST"], "/api/auth/*", (c) =>
   createAuth(c.env, c.executionCtx, c.req.raw).handler(c.req.raw),
 );
@@ -156,7 +159,13 @@ app.route("/v1/inbox", inboxRoutes);
 
 app.notFound(() => jsonError(404, "not_found", "Route not found"));
 
-app.onError((error) => {
-  console.error(error);
+app.onError((error, c) => {
+  console.error({
+    event: "unhandled_error",
+    method: c.req.method,
+    path: c.req.path,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
   return jsonError(500, "internal", "Internal error");
 });

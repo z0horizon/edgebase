@@ -40,7 +40,7 @@ async function send(c: Context<AppEnv>, body: PushRequest, now: number): Promise
     );
     if (sent) return c.json({ id, ...sent }, 202);
   } catch (error) {
-    console.error("push dispatch failed; the minute cron retries it", { id, error: String(error) });
+    console.error({ event: "push_dispatch_deferred", id, error: String(error) });
   }
   return c.json({ id, scheduled: true }, 202);
 }
@@ -95,7 +95,7 @@ async function sendOnce(
         .run();
     } catch (error) {
       // The push was already accepted; returning 500 here would make the caller resend without a key.
-      console.error("failed to record idempotent push response", { key, error: String(error) });
+      console.error({ event: "push_idempotency_save_failed", key, error: String(error) });
     }
   } else {
     // A 400 sent nothing; the corrected request may reuse the key.

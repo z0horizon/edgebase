@@ -138,15 +138,7 @@ export function serializeTrustCookie(
   const secure = isSecureUrl(baseURL);
   const name = secure ? SECURE_COOKIE_NAME : COOKIE_BASE;
   const val = maxAgeSeconds <= 0 ? "" : encodeURIComponent(token);
-  const parts = [
-    `${name}=${val}`,
-    `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-  ];
-  if (secure) parts.push("Secure");
-  return parts.join("; ");
+  return `${name}=${val}; Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
 async function hmacSha256Bytes(secret: string, message: string): Promise<Uint8Array> {
@@ -171,6 +163,29 @@ async function signBetterCallCookie(value: string, secret: string): Promise<stri
   return encodeURIComponent(`${value}.${sigB64}`);
 }
 
+async function verifySignedBearer(
+  valuePart: string,
+  sigPart: string,
+  secret: string,
+): Promise<boolean> {
+  if (!valuePart || !sigPart) return false;
+  const sigBytes = await hmacSha256Bytes(secret, valuePart);
+  const expectedB64 = btoa(String.fromCharCode(...sigBytes));
+  const expectedB64NoPad = expectedB64.replace(/=+$/, "");
+  const expectedB64Url = base64url(sigBytes);
+  const givenDigest = await sha256(sigPart);
+  const [d1, d2, d3] = await Promise.all([
+    sha256(expectedB64),
+    sha256(expectedB64NoPad),
+    sha256(expectedB64Url),
+  ]);
+  return (
+    crypto.subtle.timingSafeEqual(givenDigest, d1) ||
+    crypto.subtle.timingSafeEqual(givenDigest, d2) ||
+    crypto.subtle.timingSafeEqual(givenDigest, d3)
+  );
+}
+
 export async function headersWithBearerCookie(
   headersIn: Headers | undefined,
   cookieName: string,
@@ -187,9 +202,15 @@ export async function headersWithBearerCookie(
   } catch {
     // keep raw
   }
-  const encoded = decoded.includes(".")
-    ? encodeURIComponent(decoded)
-    : await signBetterCallCookie(decoded, secret);
+  let tokenValue = decoded;
+  if (decoded.includes(".")) {
+    const dot = decoded.indexOf(".");
+    const valuePart = decoded.slice(0, dot);
+    const sigPart = decoded.slice(dot + 1);
+    if (!(await verifySignedBearer(valuePart, sigPart, secret))) return headersIn;
+    tokenValue = valuePart;
+  }
+  const encoded = await signBetterCallCookie(tokenValue, secret);
   const next = new Headers(headersIn);
   const keptCookies = omitCookies(next.get("cookie"), new Set([cookieName]));
   next.set(
@@ -499,7 +520,9 @@ export function edgebaseSecurityPlugin(
       Promise.all([
         pruneUserSessionsStatement(env.DB, user.id).run(),
         notifyNewNetworkSignIn(env, user, sessionId, net, now, excludeTrustedDeviceId),
-      ]).catch((error) => console.error("post-signin security task failed", error)),
+      ]).catch((error) =>
+        console.error({ event: "post_signin_security_failed", error: String(error) }),
+      ),
     );
   };
 

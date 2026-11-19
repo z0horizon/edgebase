@@ -19,7 +19,7 @@ Daily limits, reset at 00:00 UTC; past them requests fail instead of costing mon
 | 100k Worker requests | ~10k daily users at 10 API calls each (cron uses ~1.5k) |
 | 100k D1 rows written | ~40k daily users without inbox items (~2.3 writes each: session, device); ~16k with one personal inbox item each (~6 writes) |
 | 5M D1 rows read | ~150k API calls of a few dozen rows |
-| 10k Queue operations | ~3,300 messages: ~165k users reached by `userIds` pushes, or thousands of broadcasts |
+| 10k Queue operations | ~3,300 messages (24 h retention): thousands of broadcasts, or small `userIds` pushes keeping each consumer batch under Free's 50-subrequest per-invocation limit |
 | 500 MB per D1 database | ~1M inbox items, e.g. 10k users × 1 item a day × 30-day TTL ≈ 120 MB |
 
 So expect **up to about 10k daily users**, fewer if clients call the API more often. Requests run
@@ -36,11 +36,10 @@ or more headroom.
 | D1 rows written | 50M / month | $1.00 / M |
 | D1 storage | 5 GB | $0.75 / GB-month; 10 GB max per database |
 | Queues | 1M operations / month | $0.40 / M (a message is about 3 operations) |
-| Workers Logs | 20M log events / month | $0.60 / M |
+| Email Sending | 3,000 outbound emails / month | $0.35 / 1,000 emails (verified destination addresses are free) |
+| Workers Logs | 20M log events / month | $0.60 / M (from Dec 1, 2026: shared Cloudflare Observability pricing — 50 GB ingestion + 10 GB-month storage included, then $0.25 / GB and $0.10 / GB-month) |
 
-FCM is free. Email Sending is billed separately. Logs are sampled at 10%
-(`observability.head_sampling_rate` in `apps/server/wrangler.jsonc`), so 200M requests a month stay within the
-included log events.
+FCM is free. Logs are sampled at 10% (`observability.head_sampling_rate` in `apps/server/wrangler.jsonc`) and traces at 5%, so 200M requests a month stay within the included observability quota.
 
 ## What a push costs
 
@@ -50,12 +49,14 @@ included log events.
 | Topic broadcast with `inbox: false` | 0 | 1 | no |
 | To `userIds` with `inbox: true` | ~4 per user (row and index, insert and delete) | 1 per 50 users | yes |
 | To `userIds` with `inbox: false` | 0 | 1 per 50 users | yes |
-| Each open reported with `POST /v1/opens` | ~4 (key and `user_id` index, insert and delete after 90 days) | 0 | yes |
+| Each open reported with `POST /v1/opens` | ~5 (key, `user_id` index, `push_stats.opened` increment, and delete after 90 days) | 0 | yes |
 
 So the included 50M row writes hold about 12M personal inbox items a month (~400k a day). A
-broadcast is nearly free at any size until clients report opens: then it costs ~4 writes per user
-who opens it. Every push also writes its `push_stats` row, one update per queue message, a
-`scheduled_push` row (insert, claim, delete) and, with `inbox: true`, one `inbox_push` row,
+broadcast is nearly free at any size until clients report opens: then it costs ~5 writes per user
+who opens it (`GET /v1/push` reads the pre-aggregated `opened` counter directly without scanning
+`push_open`). Every push also writes its `push_stats` row, one update per consumer batch (up to 5
+queue messages coalesced), a `scheduled_push` row (insert and delete; immediate pushes skip a
+second claim write while fresh) and, with `inbox: true`, one `inbox_push` row,
 none of which grows with users. TTL changes storage only: every item is written once and deleted once
 whatever its lifetime.
 
@@ -65,8 +66,8 @@ Without any push, a signed-in user costs:
 
 | Source | Cost |
 |---|---|
-| Each API call (`GET /v1/inbox`, `unread-count`, …) | 1 Worker request, a few ms CPU, a few dozen rows read (session, user, inbox page) |
-| Session refresh, at most once a day (`updateAge` in `packages/core/src/auth/auth.ts`) | ~2 writes (row and `session_expires_at` index); `lastActiveAt` / current network updates in the background at most once per 15 min of activity or on ASN/country shift (1 unindexed row write) |
+| Each API call (`GET /v1/inbox`, `unread-count`, …) | 1 Worker request, a few ms CPU, a few dozen rows read (`GET /v1/inbox` runs in one `INBOX_DB` batch) |
+| Session refresh, at most once a day (`updateAge` in `packages/core/src/auth/auth.ts`) | ~2 writes (row and `session_expires_at` index); `lastActiveAt` / current network updates in the background at most once per 60 min of activity or on ASN/country shift (1 unindexed row write) |
 | Device refresh, at most once every 7 days per device | ~2 writes (row and `device_updated_at` index) |
 
 Rows read are cheap: 25B a month cover ~800M reads of a few dozen rows. Requests and the daily
@@ -92,14 +93,14 @@ at ~3 ms CPU, one device per user, 10% of users open the daily push.
 | Requests | 300M | ~$87 |
 | CPU | ~900M ms | ~$17 |
 | Inbox writes: 30M inserts × 2 + 30M deletes × 2 | 120M | |
-| Session refresh: 30M × 2 | 60M | |
+| Session refresh (`updateAge`): 30M × 2 + extra hourly activity touches (~30M × 1) | ~90M | |
 | Device refresh: ~4.3M × 2 | ~9M | |
-| Opens: 3M × 4 | 12M | |
-| **Row writes total** | **~200M** | **~$150** |
+| Opens: 3M × 5 | 15M | |
+| **Row writes total** | **~234M** | **~$184** |
 | Inbox storage: ~30M rows × ~400 B | **~12 GB** | over the 10 GB limit of `INBOX_DB` |
 | Queues: 30M users / 50 per message ≈ 600k messages | ~1.8M operations | under $1 |
 
-Total about **$260 / month** plus the $5 plan, and `INBOX_DB` must be sharded or trimmed first.
+Total about **$290 / month** plus the $5 plan, and `INBOX_DB` must be sharded or trimmed first.
 
 Mitigations, in order of effect:
 
@@ -115,6 +116,6 @@ Mitigations, in order of effect:
 - Every row written costs one extra write per index it touches; deletes count as writes.
 - `inbox_item` uses an integer rowid key (2 writes per insert); a TEXT key would add an
   automatic index (3 writes).
-- Device upserts write only on change or after 7 days; session expiry refreshes at most once a day, and `lastActiveAt` touches are throttled to 15 minutes (or ASN/country changes).
+- Device upserts write only on change or after 7 days; session expiry refreshes at most once a day, and `lastActiveAt` touches are throttled to 60 minutes (or ASN/country changes).
 - Broadcasts write one row, never one per user; "read all" is one write.
 - An open is stored once per user and push (`INSERT OR IGNORE`), so repeated reports write nothing.

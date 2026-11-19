@@ -1,5 +1,5 @@
 import { buildFcmMessage, type FcmAccess, getAccessToken, type SendResult, sendFcm } from "./fcm";
-import { recordDelivery } from "./stats";
+import { recordDeliveries } from "./stats";
 import type { PushPayload, PushQueueMessage, PushTarget } from "./types";
 
 type UserTargets = Exclude<PushQueueMessage, { kind: "topic" }>;
@@ -70,7 +70,7 @@ async function retryLater(env: Env, message: PushQueueMessage, retryAfterSec: nu
 
 function logDrop(result: SendResult, target: string) {
   if (result.kind === "drop")
-    console.error("fcm dropped", { target, status: result.status, code: result.code });
+    console.error({ event: "fcm_dropped", target, status: result.status, code: result.code });
 }
 
 /** Stats for FCM's answers: accepted, and finally failed (refused, or out of retries). */
@@ -86,11 +86,14 @@ function tally(results: SendResult[], message: PushQueueMessage) {
 /** The push_stats row of a message; messages queued before push stats existed have none. */
 const pushIdOf = (message: PushQueueMessage) => Number(message.payload.data?.["pushId"] ?? 0);
 
+type DeliveryDelta = { pushId: number; sent: number; failed: number };
+
 async function handleMessage(
   env: Env,
   access: () => Promise<FcmAccess>,
   message: PushQueueMessage,
-): Promise<void> {
+): Promise<DeliveryDelta> {
+  const pushId = pushIdOf(message);
   if (message.kind === "topic") {
     const result = await sendFcm(
       await access(),
@@ -98,13 +101,11 @@ async function handleMessage(
     );
     if (result.kind === "retry") await retryLater(env, message, result.retryAfterSec);
     logDrop(result, `topic:${message.topic}`);
-    const { sent, failed } = tally([result], message);
-    await recordDelivery(env.DB, pushIdOf(message), sent, failed);
-    return;
+    return { pushId, ...tally([result], message) };
   }
 
   const targets = await targetsOf(env.DB, message);
-  if (targets.length === 0) return;
+  if (targets.length === 0) return { pushId, sent: 0, failed: 0 };
   const payload: PushPayload = message.payload;
   const token = await access();
   const results = await mapLimit(targets, CONCURRENCY, (t) =>
@@ -124,11 +125,10 @@ async function handleMessage(
     }
     logDrop(result, t.token);
   });
+  const counts = tally(results, message);
   // The sends already happened: a failure from here on must not make Queues redeliver the whole
   // message to devices that got it. A lost retry or a dead token left behind is the lesser harm.
   try {
-    const { sent, failed } = tally(results, message);
-    await recordDelivery(env.DB, pushIdOf(message), sent, failed);
     if (dead.length > 0) await deleteTokens(env.DB, dead);
     if (retry.length > 0) {
       await retryLater(
@@ -138,12 +138,14 @@ async function handleMessage(
       );
     }
   } catch (error) {
-    console.error("push follow-up failed after send", {
+    console.error({
+      event: "push_followup_failed",
       dead: dead.length,
       retry: retry.length,
       error: String(error),
     });
   }
+  return { pushId, ...counts };
 }
 
 export async function handlePushBatch(
@@ -156,14 +158,25 @@ export async function handlePushBatch(
     access ??= getAccessToken(env.FCM_SERVICE_ACCOUNT, Date.now());
     return access;
   };
+  const totals = new Map<number, { sent: number; failed: number }>();
   for (const message of batch.messages) {
     try {
-      await handleMessage(env, getAccess, message.body);
+      const { pushId, sent, failed } = await handleMessage(env, getAccess, message.body);
+      if (pushId && (sent > 0 || failed > 0)) {
+        const cur = totals.get(pushId);
+        if (cur) {
+          cur.sent += sent;
+          cur.failed += failed;
+        } else {
+          totals.set(pushId, { sent, failed });
+        }
+      }
       message.ack();
     } catch (error) {
-      console.error("push message failed", { id: message.id, error: String(error) });
+      console.error({ event: "push_message_failed", id: message.id, error: String(error) });
       // Queues' max_retries then moves it to the DLQ.
       message.retry();
     }
   }
+  await recordDeliveries(env.DB, totals);
 }

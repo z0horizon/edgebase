@@ -1,8 +1,8 @@
 import { STATS_KEPT_DAYS, STATS_LISTED } from "@edgebase/core/limits";
-import { RefreshCw, Send } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { PageHeader } from "@/components/PageHeader";
+import { PageHeader, PushUnconfiguredBanner } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -47,31 +47,20 @@ export function PushesPage() {
   return (
     <>
       <PageHeader
-        title="Dispatches"
-        description={`Recent ${STATS_LISTED} notification batches with ${STATS_KEPT_DAYS}-day delivery and open retention.`}
+        title="Sent pushes"
+        description={`Recent ${STATS_LISTED} dispatches with ${STATS_KEPT_DAYS}-day delivery and open retention.`}
       >
         <Button variant="outline" size="sm" onClick={load}>
           <RefreshCw /> Refresh
         </Button>
-        <Button
-          size="sm"
-          onClick={() => {
-            location.hash = "#notifications/send";
-          }}
-        >
-          <Send /> Send push
-        </Button>
       </PageHeader>
 
       {pushUnconfigured && (
-        <div
-          role="status"
-          className="mb-4 rounded-md border border-amber-600/30 bg-amber-500/10 px-3.5 py-2.5 text-xs leading-relaxed text-amber-900 dark:border-amber-400/25 dark:text-amber-200"
-        >
+        <PushUnconfiguredBanner>
           Push delivery is disabled on this environment. Configure{" "}
           <code className="font-mono font-medium">FCM_SERVICE_ACCOUNT</code> in Worker secrets to
           record and inspect push dispatches.
-        </div>
+        </PushUnconfiguredBanner>
       )}
 
       {pushes && pushes.length > 0 && (
@@ -135,12 +124,12 @@ export function PushesPage() {
             {pushes?.length === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="h-28 text-center text-xs text-muted-foreground">
-                  No notifications recorded yet.{" "}
+                  No push batches recorded yet.{" "}
                   <a
-                    href="#notifications/send"
+                    href="#send"
                     className="font-medium text-primary-ink underline underline-offset-4"
                   >
-                    Send a push
+                    Dispatch a push
                   </a>
                 </TableCell>
               </TableRow>

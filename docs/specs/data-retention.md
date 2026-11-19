@@ -33,9 +33,9 @@ per table, rows read, whether it finished (`complete`), and both databases' size
    next hour. Deleted rows are counted from `RETURNING`, since D1's `meta.changes` also counts
    cascaded rows. Short chunks keep D1's single writer free for live traffic.
 2. Inbox and broadcast rowids grow with time, so every row below the first fresh rowid is
-   expired. Each chunk looks up that rowid (stopping at the first fresh row) and deletes only
-   below it, so cleanup never walks the fresh part of the table. A row written with a clock far
-   behind its neighbours is deleted late, never early.
+   expired. Each chunk looks up that rowid within the oldest 5001 rows (stopping at the first fresh
+   row) and deletes only below it, so cleanup never walks the fresh part of the table and scales
+   linearly ($O(M)$) on multi-chunk backlogs. A row written with a clock far behind its neighbours is deleted late, never early.
 3. Inbox reads apply the same TTL, so rows past it are hidden even before the cron removes them.
 4. Devices refresh at least every 7 days while the app is used (push rule 1), so 60 days without
    a refresh means the app is gone.

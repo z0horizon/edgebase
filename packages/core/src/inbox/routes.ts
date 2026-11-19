@@ -2,7 +2,14 @@ import { type Context, Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { decodeCursor, jsonError, parseBody } from "../http";
-import { type Cursor, deleteItem, listInbox, markAllRead, markRead, unreadCount } from "./queries";
+import {
+  type Cursor,
+  deleteItem,
+  listInboxWithUnread,
+  markAllRead,
+  markRead,
+  unreadCount,
+} from "./queries";
 
 const CursorSchema = v.object({
   t: v.pipe(v.number(), v.integer()),
@@ -43,11 +50,7 @@ export const inboxRoutes = new Hono<AppEnv>()
     const limit = v.safeParse(LimitSchema, c.req.query("limit"));
     if (!limit.success) return jsonError(400, "invalid_limit", "limit must be an integer 1-100");
     const q = inboxQuery(c);
-    const [page, unread] = await Promise.all([
-      listInbox(c.env.INBOX_DB, { ...q, cursor, limit: limit.output }),
-      unreadCount(c.env.INBOX_DB, q),
-    ]);
-    return c.json({ ...page, unreadCount: unread });
+    return c.json(await listInboxWithUnread(c.env.INBOX_DB, { ...q, cursor, limit: limit.output }));
   })
   .get("/unread-count", async (c) => {
     return c.json({ count: await unreadCount(c.env.INBOX_DB, inboxQuery(c)) });

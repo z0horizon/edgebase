@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { handlePushBatch } from "../src/push/consumer";
 import { resetFcmCacheForTests } from "../src/push/fcm";
-import { createPushStats } from "../src/push/stats";
+import { pushStatsInsert } from "../src/push/stats";
 import type { PushQueueMessage } from "../src/push/types";
 import { fakeQueue, makeServiceAccount, seedUser } from "./helpers";
 
@@ -174,7 +174,7 @@ describe("handlePushBatch", () => {
   it("counts accepted tokens as sent and refused or out-of-retries ones as failed", async () => {
     const u = await seedUser();
     for (const t of ["s-ok", "s-dead", "s-bad"]) await addDevice(t, u);
-    const pushId = await createPushStats(env.DB, "transactional", Date.now());
+    const pushId = await pushStatsInsert(env.DB, "transactional", Date.now()).first<number>("id");
     const withId = { ...payload, data: { pushId: String(pushId) } };
     stubFcm({
       "s-dead": fcmError(404, "UNREGISTERED"),
@@ -188,5 +188,59 @@ describe("handlePushBatch", () => {
     expect(
       await env.DB.prepare("SELECT sent, failed FROM push_stats WHERE id = ?").bind(pushId).first(),
     ).toEqual({ sent: 1, failed: 3 });
+  });
+
+  it("coalesces push_stats delivery updates into one D1 write per pushId across a multi-message batch", async () => {
+    const [u1, u2] = [await seedUser(), await seedUser()];
+    await addDevice("b-tok-1", u1);
+    await addDevice("b-tok-2", u2);
+    const pushId = await pushStatsInsert(env.DB, "transactional", Date.now()).first<number>("id");
+    const withId = { ...payload, data: { pushId: String(pushId) } };
+    stubFcm();
+
+    let statsUpdates = 0;
+    const db = new Proxy(env.DB, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            if (/^\s*update\s+push_stats\b/i.test(sql)) statsUpdates++;
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    const q = fakeQueue();
+    const dlq = fakeQueue();
+    const batch = createMessageBatch<PushQueueMessage>("edgebase-push", [
+      {
+        id: "bm-1",
+        timestamp: new Date(),
+        attempts: 1,
+        body: { kind: "users", userIds: [u1], payload: withId, attempt: 0 },
+      },
+      {
+        id: "bm-2",
+        timestamp: new Date(),
+        attempts: 1,
+        body: { kind: "users", userIds: [u2], payload: withId, attempt: 0 },
+      },
+    ]);
+    const ctx = createExecutionContext();
+    await handlePushBatch(batch, {
+      ...env,
+      DB: db,
+      FCM_SERVICE_ACCOUNT: SA,
+      PUSH_QUEUE: q.queue,
+      PUSH_DLQ: dlq.queue,
+    });
+    const result = await getQueueResult(batch, ctx);
+    expect(result.explicitAcks).toEqual(["bm-1", "bm-2"]);
+    expect(statsUpdates).toBe(1);
+    expect(
+      await env.DB.prepare("SELECT sent, failed FROM push_stats WHERE id = ?").bind(pushId).first(),
+    ).toEqual({ sent: 2, failed: 0 });
   });
 });

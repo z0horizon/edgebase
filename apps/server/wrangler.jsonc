@@ -2,7 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "edgebase",
   "main": "src/index.ts",
-  "compatibility_date": "2026-10-15",
+  "upload_source_maps": true,
+  "compatibility_date": "2026-11-04",
   "compatibility_flags": ["nodejs_compat"],
   // Logs and traces are sampled so high traffic stays within the included observability quota.
   "observability": {
@@ -39,8 +40,10 @@
     "consumers": [
       {
         "queue": "edgebase-push",
-        // One message can fan out to 500 FCM requests; one per invocation stays under the subrequest limit.
-        "max_batch_size": 1,
+        // Each message fans out to <= 500 FCM requests; 5 per batch (<= 2,500 subrequests) stays
+        // well under Workers Paid's 10,000 subrequest limit while coalescing push_stats writes.
+        "max_batch_size": 5,
+        "max_batch_timeout": 1,
         "max_retries": 3,
         "dead_letter_queue": "edgebase-push-dlq"
       }

@@ -38,7 +38,7 @@ Fill in the optional keys of `.env.production`, then `pnpm bootstrap` again:
 
 | Keys | Where to get them |
 |---|---|
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Cloud console, OAuth client (web) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Cloud console, OAuth client (web; append `,ios-id,android-id` to `GOOGLE_CLIENT_ID` if native SDKs omit `serverClientId`) |
 | `APPLE_CLIENT_ID`, `APPLE_APP_BUNDLE_IDENTIFIER` | Apple Developer: Services ID and the app's bundle ID |
 | `APPLE_CLIENT_SECRET` | `node apps/server/scripts/apple-secret.mjs <teamId> <keyId> <servicesId> AuthKey.p8` |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub OAuth app |
@@ -106,8 +106,8 @@ other calls (`/v1/push`, `/v1/templates`) stay guarded by the admin session and 
 
 - **Apple client secret** expires after 6 months: rerun `apps/server/scripts/apple-secret.mjs`, put the result in
   `.env.production` and `pnpm bootstrap` before then.
-- **Watch the cleanup log** (`cleanup {...}` hourly): `dbBytes` and `inboxBytes` approaching 10 GB
-  means it is time for the mitigations in [cost.md](cost.md); repeated "ran out of time" warnings
+- **Watch the cleanup log** (`{"event":"cleanup",...}` hourly): `dbBytes` and `inboxBytes` approaching 10 GB
+  means it is time for the mitigations in [cost.md](cost.md); repeated `cleanup_incomplete` warnings
   mean deletes are falling behind writes.
 - **DLQ** `edgebase-push-dlq` has no consumer; inspect it in the dashboard when pushes go missing.
 

@@ -6,6 +6,11 @@ export async function sendMail(
   try {
     await env.MAIL.send({ to: msg.to, from: env.MAIL_FROM, subject: msg.subject, text: msg.text });
   } catch (error) {
-    console.error("mail send failed", { to: msg.to, subject: msg.subject, error: String(error) });
+    console.error({
+      event: "mail_send_failed",
+      to: msg.to,
+      subject: msg.subject,
+      error: String(error),
+    });
   }
 }

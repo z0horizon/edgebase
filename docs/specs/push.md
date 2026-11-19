@@ -99,8 +99,9 @@ FCM and retries per token.
    the push.
 6. `UNAUTHENTICATED` from FCM (our access token rejected, e.g. after a service-account key
    rotation) evicts the cached access token and retries the push.
-7. The consumer takes one message per invocation (`max_batch_size: 1`): a message can fan out
-   to 500 FCM requests, and this keeps an invocation under the Workers subrequest limit.
+7. The consumer takes up to 5 messages per invocation (`max_batch_size: 5`, `max_batch_timeout: 1`):
+   each message fans out to at most 500 FCM requests (≤ 2,500 subrequests per batch, well under
+   Workers Paid's 10,000 subrequest limit) and coalesces `push_stats` updates across the batch.
 5. Once a message's FCM requests have been sent, a failure while deleting dead tokens or
    queueing the retry is logged and the message is still acked, so devices that got the push are
    not sent it again; the cost is a lost retry for the failed tokens. An unexpected error before
@@ -110,18 +111,18 @@ FCM and retries per token.
 ## Stats
 
 1. Every accepted push gets a `push_stats` row: `category`, `users` (eligible users, set at
-   dispatch; `0` for a topic), `sent`, `failed`, `send_at` (`sendAt`, or the time it was accepted).
-2. The consumer adds FCM's answers per queue message (`packages/core/src/push/stats.ts`, `recordDelivery`):
+   dispatch; `0` for a topic), `sent`, `failed`, `opened`, `send_at` (`sendAt`, or the time it was accepted).
+2. The consumer adds FCM's answers once per distinct `pushId` in each batch (`packages/core/src/push/stats.ts`, `recordDeliveries`):
    `sent` counts tokens FCM accepted (for a topic, one for the topic), which is not proof the
    device displayed it; `failed` counts dead tokens, dropped requests and tokens whose last retry
    failed. Tokens still being retried count in neither. A stats write that fails is logged and
    never makes Queues resend.
 3. `POST /v1/opens { pushId }` (user session) records that the caller opened the push, at most
-   once per user and push; an unknown or pruned `pushId` writes nothing and still answers `204`.
+   once per user and push (incrementing `push_stats.opened` via an `AFTER INSERT` trigger); an unknown or pruned `pushId` writes nothing and still answers `204`.
    It does not check that the push reached the caller, so `opened` can exceed `users`. Deleting
-   the account deletes the user's opens.
+   the account deletes the user's opens and decrements `push_stats.opened`.
 4. `GET /v1/push/{id}` (API key) answers `{ id, category, users, sent, failed, opened, sendAt }`,
-   `opened` being unique users. Stats and opens are deleted 90 days after `send_at`.
+   reading `opened` directly from `push_stats` without scanning `push_open`. Stats and opens are deleted 90 days after `send_at`.
 
 ## Topics
 
