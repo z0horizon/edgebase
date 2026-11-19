@@ -22,7 +22,7 @@ What changed for people building on EdgeBase. The format follows
 - `EMAIL_SENDING=off` (default `on`, needs `EMAIL_PASSWORD=off`): sends no mail and deploys without the mail binding, so Email Sending and `MAIL_FROM` are not needed; security alerts reach only the in-app inbox and organization invitations are not mailed.
 - `SESSION_REFRESH_DAYS` (1 to 14, default 1): how often an active session's 30-day expiry is pushed forward; a higher number saves D1 writes, and an unused session may then expire up to that many days early.
 - `SESSION_ACTIVITY=off` (default `on`) stops the background write of a session's `lastActiveAt` and current network.
-- `CUSTOM_DOMAIN` in `.env.production` (optional): deploy then serves the Worker on that hostname and turns its `workers.dev` and preview URLs off, so a zone's WAF and rate limiting rules see every request; `BASE_URL` must be `https://<CUSTOM_DOMAIN>`. `docs/deployment.md` describes the WAF rule, Bot Fight Mode and spend limit to pair with it.
+- `CUSTOM_DOMAIN` in `.env.production` (optional): deploy then serves the Worker on that hostname and turns its `workers.dev` and preview URLs off, so a zone's WAF and rate limiting rules see every request; `BASE_URL` must be `https://<CUSTOM_DOMAIN>`. `docs/deployment.md` describes the WAF rules and spend limit to pair with it.
 - `APP_NAME` (default `EdgeBase`; `pnpm bootstrap` sets it to `PROJECT_NAME` when empty) names the product to people: mail subjects start with `<APP_NAME>: `, it is the TOTP issuer and passkey relying-party name (both were `EdgeBase` / the `BASE_URL` host), the admin page's sidebar, sign-in subtitle, push preview and tab title use it, and `GET /v1/auth/providers` returns it as `appName`.
 
 ### Fixed

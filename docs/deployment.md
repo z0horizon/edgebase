@@ -143,10 +143,15 @@ the Worker runs and is billed. To put your zone's rules in front of every reques
 2. Changing `BASE_URL` changes the OAuth redirect URIs (step 2), and passkeys are bound to its
    hostname: passkeys registered on the old hostname stop working. Choose the domain before
    users enroll.
-3. In the zone, turn on Bot Fight Mode and add a WAF custom rule that blocks every path the
+3. In the zone, add a WAF custom rule (the Free plan has 5) that blocks every path the
    Worker does not serve, for example
    `not (starts_with(http.request.uri.path, "/api/auth/") or starts_with(http.request.uri.path, "/v1/") or starts_with(http.request.uri.path, "/admin") or http.request.uri.path eq "/health")`.
    Add your own route prefixes from `apps/server` to it, or the rule blocks them too.
+   The Free plan also has one rate limiting rule, per IP over 10 seconds: use it as a flood stop
+   (for example 100 requests per 10 seconds), well above what one phone or office network sends.
+   Leave Bot Fight Mode off: it challenges API and mobile app traffic, your servers calling
+   `/v1/push` included, and no rule can exempt them. Super Bot Fight Mode (Pro) can be skipped
+   per path if you need bot filtering.
 4. Set a spend limit and budget alerts (dashboard → Billing). The limit covers Workers and
    Durable Objects only, not D1, Queues or Email Sending; recorded spend can pass it before the
    block applies; and at the limit new Worker invocations are blocked, which takes the API down
