@@ -10,7 +10,7 @@
   two-factor gets `403 two_factor_required` here and on `/api/auth/admin/*`; a session from
   Google, GitHub, Apple or a passkey is not asked for it. `get-session` shows which as
   `session.signInProvider` (the provider, or `null`).
-- **Captcha** (only when `TURNSTILE_SECRET_KEY` is set): `X-Captcha-Response: <Turnstile token>` on
+- **Captcha** (when `TURNSTILE_SECRET_KEY` is set, which deploys require unless `EMAIL_PASSWORD=off`): `X-Captcha-Response: <Turnstile token>` on
   `POST /api/auth/sign-up/email`, `/api/auth/request-password-reset` and
   `/api/auth/send-verification-email`. Missing answers `400`, rejected answers `403`. Mobile apps
   get the token by rendering the Turnstile widget in a WebView, since Turnstile has no native SDK.
@@ -33,7 +33,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | 409 | `idempotency_in_progress`, `limit_reached` | key still running; template cap reached |
 | 413 | `payload_too_large` | request body exceeds 64 KB |
 | 422 | `idempotency_mismatch` | `Idempotency-Key` reused with another body |
-| 429 | `rate_limited` | auth rate limit, or a signed-in non-admin user's 120 calls (60 writing calls) a minute; `Retry-After: 60` |
+| 429 | `rate_limited` | auth rate limit (10 a minute per IP, 5 a minute per email address), or a signed-in non-admin user's 120 calls (60 writing calls) a minute; `Retry-After: 60` |
 | 500 | `internal` | unexpected error |
 | 502 | `upstream_error` | Google's Instance ID API refused a topic change |
 | 503 | `not_configured` | a required secret is missing |

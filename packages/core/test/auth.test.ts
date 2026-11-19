@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { socialProviderOf } from "../src/auth/auth";
 import { base64url, sha256 } from "../src/http";
 import { authed, call, freshIp, json, PASSWORD, signUpVerified } from "./helpers";
@@ -16,6 +16,9 @@ async function firstLimited(attempt: () => Promise<Response>): Promise<Response 
   }
   return undefined;
 }
+
+// A new address per attempt, so tests of the per-IP limit never meet the per-email one.
+let emailCounter = 0;
 
 const ip = (n: number) => ({ "cf-connecting-ip": `203.0.113.${n}` });
 
@@ -254,7 +257,7 @@ describe("auth", () => {
       return call(
         "/api/auth/sign-in/email",
         json(
-          { email: "nobody@x.io", password: "wrong-password" },
+          { email: `nobody-${emailCounter++}@x.io`, password: "wrong-password" },
           { headers: { "cf-connecting-ip": variant } },
         ),
       );
@@ -265,7 +268,7 @@ describe("auth", () => {
     const mappedOther = await call(
       "/api/auth/sign-in/email",
       json(
-        { email: "nobody@x.io", password: "wrong-password" },
+        { email: `nobody-${emailCounter++}@x.io`, password: "wrong-password" },
         { headers: { "cf-connecting-ip": "::ffff:203.0.113.77" } },
       ),
     );
@@ -273,7 +276,7 @@ describe("auth", () => {
       call(
         "/api/auth/sign-in/email",
         json(
-          { email: "nobody@x.io", password: "wrong-password" },
+          { email: `nobody-${emailCounter++}@x.io`, password: "wrong-password" },
           { headers: { "cf-connecting-ip": "::ffff:203.0.113.78" } },
         ),
       ),
@@ -283,7 +286,7 @@ describe("auth", () => {
     const mappedStillFree = await call(
       "/api/auth/sign-in/email",
       json(
-        { email: "nobody@x.io", password: "wrong-password" },
+        { email: `nobody-${emailCounter++}@x.io`, password: "wrong-password" },
         { headers: { "cf-connecting-ip": "::ffff:203.0.113.79" } },
       ),
     );
@@ -337,6 +340,29 @@ it("APP_NAME labels the TOTP issuer and the passkey relying party", async () => 
   );
   expect(options.status).toBe(200);
   expect((await options.json<{ rp: { name: string } }>()).rp.name).toBe("My App");
+});
+
+it("the 6th attempt on one email within a minute answers 429 from any IP, other emails go on", async () => {
+  const attempt = (email: string) =>
+    call(
+      "/api/auth/sign-in/email",
+      json({ email, password: "wrong-password-1" }, { headers: { "cf-connecting-ip": freshIp() } }),
+    );
+  let limited: Response | undefined;
+  let calls = 0;
+  // The window may reset once while this runs, so allow up to twice the limit.
+  while (!limited && calls < 11) {
+    calls++;
+    const res = await attempt(" Stuffed@Example.com ");
+    if (res.status === 429) limited = res;
+  }
+  expect(limited?.status).toBe(429);
+  expect(calls).toBeGreaterThan(5);
+  expect(limited?.headers.get("retry-after")).toBe("60");
+  expect(await limited?.json()).toMatchObject({ error: { code: "rate_limited" } });
+  // Case and spaces do not make a new budget; another address has its own.
+  expect((await attempt("stuffed@example.com")).status).toBe(429);
+  expect((await attempt("someone-else@example.com")).status).not.toBe(429);
 });
 
 describe("per-user limits on signed-in routes", () => {
@@ -1202,7 +1228,7 @@ describe("session network telemetry and freshness", () => {
     expect(forge.status).toBe(400);
   });
 
-  it("updates current network and lastActiveAt on ASN shift or after 60 minutes while keeping origin immutable", async () => {
+  it("updates current network and lastActiveAt on country shift, hourly on ASN shift and every 6 hours otherwise, keeping origin immutable", async () => {
     const email = "roam@x.io";
     await signUpVerified(email);
     const originIp = freshIp();
@@ -1228,23 +1254,42 @@ describe("session network telemetry and freshness", () => {
     const initial = await sessionRow();
     expect(initial?.["createdAsn"]).toBe(45899);
 
-    // Same ASN & country within 60 minutes (e.g. 30m later): does not rewrite lastActiveAt.
-    const fixedTime = new Date(Date.now() - 30 * 60_000).toISOString();
-    await env.DB.prepare("UPDATE session SET lastActiveAt = ? WHERE id = ?")
-      .bind(fixedTime, sessionId)
-      .run();
-    await call("/v1/me", {
-      ...authed(token, { headers: { "cf-connecting-ip": freshIp() } }),
-      cf: { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" },
-    });
-    expect((await sessionRow())?.["lastActiveAt"]).toBe(fixedTime);
+    const vnpt = { asn: 45899, asOrganization: "VNPT Corp", country: "VN", city: "Hanoi" };
+    const viettel = { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" };
+    const singtel = { asn: 7473, asOrganization: "Singtel", country: "SG", city: "Singapore" };
+    const idleFor = async (minutes: number) => {
+      const at = new Date(Date.now() - minutes * 60_000).toISOString();
+      await env.DB.prepare("UPDATE session SET lastActiveAt = ? WHERE id = ?")
+        .bind(at, sessionId)
+        .run();
+      return at;
+    };
+    const me = (ipAddress: string, cf: Record<string, unknown>) =>
+      call("/v1/me", { ...authed(token, { headers: { "cf-connecting-ip": ipAddress } }), cf });
 
-    // Switching Wi-Fi -> mobile carrier (new ASN) immediately updates current network & lastActiveAt, keeping created* intact.
+    // SESSION_ACTIVITY=off: even a new country writes nothing.
+    let at = await idleFor(7 * 60);
+    await call(
+      "/v1/me",
+      { ...authed(token, { headers: { "cf-connecting-ip": freshIp() } }), cf: singtel },
+      { ...env, SESSION_ACTIVITY: "off" },
+    );
+    expect(await sessionRow()).toMatchObject({ country: "VN", lastActiveAt: at });
+
+    // Same network: nothing is written inside 6 hours.
+    at = await idleFor(5 * 60);
+    await me(freshIp(), vnpt);
+    expect((await sessionRow())?.["lastActiveAt"]).toBe(at);
+
+    // Wi-Fi -> mobile carrier (new ASN) inside the hour: no write, so hopping does not cost one each time.
+    at = await idleFor(30);
+    await me(freshIp(), viettel);
+    expect(await sessionRow()).toMatchObject({ asn: 45899, lastActiveAt: at });
+
+    // The same hop an hour after the last write updates the current network, keeping created* intact.
+    at = await idleFor(61);
     const mobileIp = freshIp();
-    await call("/v1/me", {
-      ...authed(token, { headers: { "cf-connecting-ip": mobileIp } }),
-      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" },
-    });
+    await me(mobileIp, viettel);
     const roamed = await sessionRow();
     expect(roamed).toMatchObject({
       ipAddress: mobileIp,
@@ -1258,18 +1303,17 @@ describe("session network telemetry and freshness", () => {
       createdCountry: "VN",
       createdCity: "Hanoi",
     });
-    expect(roamed?.["lastActiveAt"]).not.toBe(fixedTime);
+    expect(roamed?.["lastActiveAt"]).not.toBe(at);
 
-    // After > 60 minutes on the same ASN, lastActiveAt also refreshes.
-    const staleTime = new Date(Date.now() - 61 * 60_000).toISOString();
-    await env.DB.prepare("UPDATE session SET lastActiveAt = ? WHERE id = ?")
-      .bind(staleTime, sessionId)
-      .run();
-    await call("/v1/me", {
-      ...authed(token, { headers: { "cf-connecting-ip": mobileIp } }),
-      cf: { asn: 7552, asOrganization: "Viettel Group", country: "VN", city: "Da Nang" },
-    });
-    expect((await sessionRow())?.["lastActiveAt"]).not.toBe(staleTime);
+    // Another country is written at once.
+    at = await idleFor(1);
+    await me(freshIp(), singtel);
+    expect(await sessionRow()).toMatchObject({ asn: 7473, country: "SG", createdCountry: "VN" });
+
+    // After 6 hours on the same network, lastActiveAt refreshes.
+    at = await idleFor(6 * 60 + 1);
+    await me(freshIp(), singtel);
+    expect((await sessionRow())?.["lastActiveAt"]).not.toBe(at);
   });
 
   it("enforces a 15-minute freshAge on passwordless sensitive actions like delete-user", async () => {
@@ -2144,6 +2188,12 @@ describe("security review regressions", () => {
 });
 
 describe("audit hardening: token isolation, CSRF, body/column/session/alert lifecycle bounds", () => {
+  // These tests sign one account in many times within a minute, which EMAIL_RL exists to stop.
+  beforeEach(() => {
+    vi.spyOn(env.EMAIL_RL, "limit").mockResolvedValue({ success: true });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
   it("blocks raw token session-list endpoints and serves token-free active-only /v1/admin/users/:userId/sessions", async () => {
     const admin = await signUpVerified("sec-admin@x.io");
     await env.DB.prepare("UPDATE user SET role = 'admin', twoFactorEnabled = 1 WHERE id = ?")

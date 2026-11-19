@@ -18,6 +18,7 @@ export const VAR_KEYS = [
   "INBOX_TTL_DAYS",
   "MAIL_FROM",
   "EMAIL_PASSWORD",
+  "SESSION_ACTIVITY",
 ];
 export const SECRET_KEYS = [
   "BETTER_AUTH_SECRET",
@@ -137,6 +138,16 @@ export function validate(env) {
     "must be at most 40 characters, without < > or control characters",
   );
   check("EMAIL_PASSWORD", (v) => /^(on|off)?$/.test(v), "must be on, off or empty (on)");
+  check("SESSION_ACTIVITY", (v) => /^(on|off)?$/.test(v), "must be on, off or empty (on)");
+  // Without Turnstile, sign-up and password reset let anyone send mail to any address at the
+  // sender's cost; the per-IP and per-email limits slow one machine or one address, not a botnet.
+  if ((env.EMAIL_PASSWORD ?? "") !== "off") {
+    check(
+      "TURNSTILE_SECRET_KEY",
+      (v) => v !== "",
+      "must be set while email and password sign-in is on (Cloudflare dashboard > Turnstile, free), or set EMAIL_PASSWORD=off",
+    );
+  }
   const domain = env.CUSTOM_DOMAIN ?? "";
   const domainOk = HOSTNAME.test(domain) && !domain.endsWith(".workers.dev");
   check(
@@ -206,7 +217,7 @@ export function renderConfig(template, env) {
   for (const m of out.send_email ?? []) {
     if (m.name === "MAIL") m.allowed_sender_addresses = [env.MAIL_FROM];
   }
-  // An optional var left empty (APP_NAME, EMAIL_PASSWORD) keeps the template's default; required ones are validated.
+  // An optional var left empty (APP_NAME, EMAIL_PASSWORD, SESSION_ACTIVITY) keeps the template's default; required ones are validated.
   out.vars = Object.fromEntries(VAR_KEYS.map((key) => [key, env[key] || template.vars[key]]));
   return out;
 }

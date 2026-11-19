@@ -31,6 +31,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
 | `PUSH_DLQ` | Queue `edgebase-push-dlq` | pushes that failed 5 attempts |
 | `AUTH_RL` | Rate limiting | 10 auth attempts / 60 s per IP |
 | `TOPIC_RL` | Rate limiting | 20 web topic changes / 60 s per user |
+| `EMAIL_RL` | Rate limiting | 5 attempts / 60 s per email address on sign-in, sign-up, password reset and resend verification |
 | `USER_RL` | Rate limiting | 120 calls / 60 s per non-admin user on signed-in `/v1` routes (not `/v1/admin/*`) |
 | `USER_WRITE_RL` | Rate limiting | 60 writing calls (not GET/HEAD/OPTIONS) / 60 s per user on the same routes |
 | Static assets (no binding) | Static assets `apps/server/public/` | the `/admin` page, built from `apps/admin/`, served before the Worker runs |

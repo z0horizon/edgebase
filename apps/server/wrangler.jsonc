@@ -33,6 +33,9 @@
     { "name": "TOPIC_RL", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } },
     // Per user on the signed-in /v1 routes, so one account calling in a loop cannot run up
     // Worker requests or D1 writes: every call, and separately every call that writes.
+    // Per email address on the routes that take one, so many IPs cannot guess one account's
+    // password or mail one address over and over.
+    { "name": "EMAIL_RL", "namespace_id": "1005", "simple": { "limit": 5, "period": 60 } },
     { "name": "USER_RL", "namespace_id": "1003", "simple": { "limit": 120, "period": 60 } },
     { "name": "USER_WRITE_RL", "namespace_id": "1004", "simple": { "limit": 60, "period": 60 } }
   ],
@@ -67,6 +70,8 @@
     "INBOX_TTL_DAYS": "30",
     // "off" turns email and password sign-in, sign-up, password reset and verification mail off.
     "EMAIL_PASSWORD": "on",
+    // "off" stops the background write that keeps a session's lastActiveAt and current network fresh.
+    "SESSION_ACTIVITY": "on",
     "MAIL_FROM": "no-reply@example.com"
   }
 }

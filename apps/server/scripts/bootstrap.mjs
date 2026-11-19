@@ -102,6 +102,7 @@ for (const key of [
   "TRUSTED_ORIGINS",
   "MAIL_FROM",
   "INBOX_TTL_DAYS",
+  "TURNSTILE_SECRET_KEY",
 ]) {
   const problemsOf = () => validate(env).filter((p) => p.startsWith(`${key} `));
   if (yes) {

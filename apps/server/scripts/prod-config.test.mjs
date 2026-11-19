@@ -29,6 +29,7 @@ const valid = {
   INBOX_DB_ID: "22222222-2222-2222-2222-222222222222",
   BETTER_AUTH_SECRET: "auth-secret",
   PUSH_API_KEY: "push-key",
+  TURNSTILE_SECRET_KEY: "turnstile-secret",
 };
 
 describe("renderConfig", () => {
@@ -63,6 +64,7 @@ describe("renderConfig", () => {
       INBOX_TTL_DAYS: valid.INBOX_TTL_DAYS,
       MAIL_FROM: valid.MAIL_FROM,
       EMAIL_PASSWORD: "on",
+      SESSION_ACTIVITY: "on",
     });
     assert.deepEqual(out.send_email, [
       { name: "MAIL", allowed_sender_addresses: [valid.MAIL_FROM] },
@@ -161,6 +163,16 @@ describe("validate", () => {
     assert.deepEqual(validate({ ...valid, EMAIL_PASSWORD: "off", APP_NAME: "My App" }), []);
   });
 
+  it("requires Turnstile while email and password sign-in is on", () => {
+    const { TURNSTILE_SECRET_KEY: _, ...bare } = valid;
+    for (const mode of [undefined, "", "on"]) {
+      const problems = validate({ ...bare, EMAIL_PASSWORD: mode });
+      assert.equal(problems.length, 1, problems.join("; "));
+      assert.match(problems[0], /^TURNSTILE_SECRET_KEY must be set .* or set EMAIL_PASSWORD=off$/);
+    }
+    assert.deepEqual(validate({ ...bare, EMAIL_PASSWORD: "off" }), []);
+  });
+
   it("requires BASE_URL to be the custom domain", () => {
     const env = { ...valid, CUSTOM_DOMAIN: "api.myapp.example" };
     assert.deepEqual(validate(env), []);
@@ -182,6 +194,7 @@ describe("validate", () => {
     ["MAIL_FROM", ""],
     ["APP_SCHEME", ""],
     ["EMAIL_PASSWORD", "false"],
+    ["SESSION_ACTIVITY", "no"],
     ["CUSTOM_DOMAIN", "https://api.myapp.example"],
     ["CUSTOM_DOMAIN", "myapp.me.workers.dev"],
     ["CUSTOM_DOMAIN", "API.myapp.example"],
@@ -203,7 +216,10 @@ describe("secretsPayload", () => {
   const readFile = (path) => files[path];
 
   it("sends every secret, with empty ones as null so wrangler deletes them", () => {
-    const payload = secretsPayload({ ...valid, GITHUB_CLIENT_ID: "gh" }, readFile);
+    const payload = secretsPayload(
+      { ...valid, TURNSTILE_SECRET_KEY: "", GITHUB_CLIENT_ID: "gh" },
+      readFile,
+    );
     assert.equal(payload.BETTER_AUTH_SECRET, "auth-secret");
     assert.equal(payload.GITHUB_CLIENT_ID, "gh");
     assert.equal(payload.GOOGLE_CLIENT_ID, null);

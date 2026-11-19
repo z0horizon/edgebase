@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../app";
-import { jsonError, sha256 } from "../http";
+import { base64url, jsonError, sha256 } from "../http";
 import { adminNeedsTwoFactor, createAuth, webTrustedOrigins } from "./auth";
 import { normalizeRateLimitIp } from "./network";
 
@@ -52,6 +52,30 @@ export const authRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
   const key = normalizeRateLimitIp(c.req.header("cf-connecting-ip"));
   if (!(await c.env.AUTH_RL.limit({ key })).success) {
     return rateLimited("Too many attempts, try again in a minute");
+  }
+  await next();
+};
+
+/**
+ * Use after authRateLimit on routes whose JSON body names an `email`: AUTH_RL stops one machine,
+ * this stops many machines working on one address (password guessing, repeated reset or
+ * verification mail). A body without a usable email is left to the route's own validation.
+ */
+export const emailRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const body: unknown = await c.req.raw
+    .clone()
+    .json()
+    .catch(() => null);
+  const email =
+    typeof body === "object" && body !== null && "email" in body && typeof body.email === "string"
+      ? body.email.trim().toLowerCase()
+      : "";
+  // The key is a digest: a rate-limit key is capped in length and should not hold an address.
+  if (
+    email !== "" &&
+    !(await c.env.EMAIL_RL.limit({ key: base64url(await sha256(email)) })).success
+  ) {
+    return rateLimited("Too many attempts for this email, try again in a minute");
   }
   await next();
 };

@@ -1,5 +1,6 @@
 import type { BetterAuthPlugin } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
+import { sessionActivityEnabled } from "../config";
 import { base64url, sha256 } from "../http";
 import { type ClientNetwork, type TrackedSession, touchSessionActivity } from "./network";
 import { notifyNewNetworkSignIn } from "./security-alerts";
@@ -647,7 +648,7 @@ export function edgebaseSecurityPlugin(
               const returned = ctx.context.returned as { session?: TrackedSession } | null;
               const active =
                 returned?.session ?? (ctx.context.session?.session as TrackedSession | undefined);
-              if (active) {
+              if (active && sessionActivityEnabled(env)) {
                 touchSessionActivity(env.DB, execCtx, active, net, now);
               }
               return;

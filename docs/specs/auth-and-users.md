@@ -75,8 +75,8 @@ user routes answer `503`.
    are disabled (`404`) in favour of token-free `/v1/sessions` and `/v1/admin/users/{userId}/sessions`.
    There is no cookie cache and no secondary storage. Client IP comes from `cf-connecting-ip` and ASN/ISP/geo
    from Cloudflare `request.cf`. Active `/v1/*` calls refresh `lastActiveAt` and the current
-   network in `ctx.waitUntil` at most every 60 minutes or immediately when `asn` or `country`
-   changes, never altering `createdIp`/`createdAsn`/`createdCountry` and never revoking a roaming
+   network in `ctx.waitUntil` at once when `country` changes, at most hourly when only `asn`
+   changed and otherwise every 6 hours (never with `SESSION_ACTIVITY=off`), never altering `createdIp`/`createdAsn`/`createdCountry` and never revoking a roaming
    mobile session. When an established user completes sign-in from an `(asn, country)` pair not
    present among their other unexpired sessions or trusted devices, a transactional inbox alert and
    email are sent via `ctx.waitUntil` (capped at 3 alerts per hour per user).
@@ -86,6 +86,8 @@ user routes answer `503`.
    invite-member and app-exchange requests are limited to 10 per minute per `cf-connecting-ip`
    (normalized to `/64` on IPv6) through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`packages/core/src/auth/middleware.ts`). Better Auth's own limiter is disabled.
+   `sign-in/email`, `sign-up/email`, `request-password-reset` and `send-verification-email` are also
+   limited to 5 a minute per email address in the body, lowercased, from any IP (`EMAIL_RL`).
    Signed-in `/v1` routes (`/v1/me`, sessions, trusted devices, devices, inbox, opens, topics; not
    `/v1/admin/*`) allow a non-admin user 120 calls a minute (`USER_RL`), of which at most 60 may
    write (`USER_WRITE_RL`: any method but GET/HEAD/OPTIONS); over either answers `429 rate_limited`.
@@ -110,7 +112,8 @@ user routes answer `503`.
 10. When `TURNSTILE_SECRET_KEY` is set, `sign-up/email`, `request-password-reset` and
     `send-verification-email` need an `x-captcha-response` header holding a Cloudflare Turnstile
     token: missing answers `400`, rejected by Turnstile answers `403` (Better Auth `captcha`
-    plugin, `packages/core/src/auth/auth.ts`). Unset, these routes need no token. The per-IP limit of rule 5 stops
+    plugin, `packages/core/src/auth/auth.ts`). Unset, these routes need no token; `prod-config`
+    refuses to deploy without it unless `EMAIL_PASSWORD=off`. The per-IP limit of rule 5 stops
     one machine; Turnstile stops many machines sending emails to random addresses.
 11. Roles come from the Better Auth `admin` plugin: new users get `role = "user"` (rows from before
     `0004` have null, treated the same); `admin` reaches `/api/auth/admin/*` (list, create, remove,

@@ -13,6 +13,7 @@ import {
 } from "./auth/auth";
 import {
   authRateLimit,
+  emailRateLimit,
   requireAdminConsole,
   requireApiKey,
   requireAuthConfig,
@@ -106,6 +107,16 @@ app.on(
     "/v1/auth/app-exchange",
   ],
   authRateLimit,
+);
+app.on(
+  "POST",
+  [
+    "/api/auth/sign-in/email",
+    "/api/auth/sign-up/email",
+    "/api/auth/request-password-reset",
+    "/api/auth/send-verification-email",
+  ],
+  emailRateLimit,
 );
 // Passkey ceremony option generators are GETs that write challenges to `verification`; guard both GET and POST.
 app.on(

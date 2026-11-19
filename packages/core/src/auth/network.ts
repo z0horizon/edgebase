@@ -1,4 +1,6 @@
-const ACTIVITY_TOUCH_MS = 60 * 60_000;
+const ACTIVITY_TOUCH_MS = 6 * 60 * 60_000;
+// Phones hop between Wi-Fi and mobile carriers all day; one write per hop would dominate session writes.
+const ASN_TOUCH_MS = 60 * 60_000;
 const MAX_UA_LEN = 512;
 const HEX_GROUP = /^[0-9a-f]{1,4}$/;
 
@@ -111,8 +113,9 @@ export type TrackedSession = {
 };
 
 /**
- * Updates `lastActiveAt` and the current network of an active session in the background at most
- * once every 60 minutes, or immediately when the session moves to another ASN or country.
+ * Updates `lastActiveAt` and the current network of an active session in the background: at once
+ * when the session moves to another country, at most hourly when only its ASN changed, and
+ * otherwise at most every 6 hours.
  */
 export function touchSessionActivity(
   db: D1Database,
@@ -122,11 +125,10 @@ export function touchSessionActivity(
   now: number,
 ): void {
   const lastMs = session.lastActiveAt ? Date.parse(session.lastActiveAt) : Number.NaN;
-  const stale = Number.isNaN(lastMs) || now - lastMs >= ACTIVITY_TOUCH_MS;
-  const networkShifted =
-    (net.asn !== null && net.asn !== (session.asn ?? null)) ||
-    (net.country !== null && net.country !== (session.country ?? null));
-  if (!stale && !networkShifted) return;
+  const idleMs = Number.isNaN(lastMs) ? Number.POSITIVE_INFINITY : now - lastMs;
+  const countryShifted = net.country !== null && net.country !== (session.country ?? null);
+  const asnShifted = net.asn !== null && net.asn !== (session.asn ?? null);
+  if (!countryShifted && idleMs < (asnShifted ? ASN_TOUCH_MS : ACTIVITY_TOUCH_MS)) return;
 
   ctx.waitUntil(
     db
