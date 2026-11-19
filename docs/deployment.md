@@ -172,6 +172,8 @@ a loop; `AUTH_RL`, `TOPIC_RL` and Turnstile (step 2) are the in-Worker limits fo
 
 ## Clients
 
+- On every app start or return to the foreground, one `POST /v1/sync` (see [api.md](api.md)) does
+  the device registration, open reports, read marks, user and inbox below in a single request.
 - Web: `better-auth/client` with cookies; FCM web token from the Firebase JS SDK, then `PUT /v1/devices`.
 - Expo: `@better-auth/expo` client; Google/Apple ID token sign-in; FCM token via React Native Firebase.
 - Flutter: REST with `Authorization: Bearer` (token from the `set-auth-token` header on sign-in);

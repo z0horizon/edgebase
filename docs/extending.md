@@ -43,7 +43,7 @@ export default worker;
 - `parseBody(c, schema)`: a valibot-checked JSON body, or the `400` response to return.
 - `jsonError(status, code, message)`: the one error shape.
 
-Keep away from the paths EdgeBase owns: `/api/auth/*`, `/v1/auth/*`, `/v1/me`, `/v1/devices`,
+Keep away from the paths EdgeBase owns: `/api/auth/*`, `/v1/auth/*`, `/v1/me`, `/v1/sync`, `/v1/devices`,
 `/v1/inbox`, `/v1/opens`, `/v1/topics`, `/v1/push`, `/v1/templates`, `/health` and `/admin/`.
 
 ## Your own tables

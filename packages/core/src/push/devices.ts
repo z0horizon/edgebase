@@ -39,7 +39,7 @@ export async function upsertDevice(
   return { written };
 }
 
-const DeviceSchema = v.object({
+export const DeviceSchema = v.object({
   token: v.pipe(v.string(), v.minLength(1), v.maxLength(4096)),
   platform: PlatformSchema,
 });

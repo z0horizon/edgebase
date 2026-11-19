@@ -33,3 +33,7 @@ items are one row per user; a broadcast is one row for everyone.
 7. `DELETE /v1/inbox/:id` deletes a personal item of the caller (`404` otherwise). Broadcasts
    cannot be deleted per user.
 8. Deleting a user removes their `inbox_item` and `inbox_state` rows (see auth-and-users rule 6).
+9. `POST /v1/sync` (`packages/core/src/sync.ts`) applies `read` or `readAll`, a device registration
+   and open reports, then answers the user and the first inbox page with `unreadCount`, so one
+   request replaces the separate calls an app makes on start. Each part follows the rule of the
+   route it stands for.

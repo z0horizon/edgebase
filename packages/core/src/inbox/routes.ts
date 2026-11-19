@@ -22,7 +22,7 @@ const LimitSchema = v.optional(
   "20",
 );
 
-function inboxQuery(c: Context<AppEnv>) {
+export function inboxQuery(c: Context<AppEnv>) {
   const user = c.get("user");
   return {
     userId: user.id,
@@ -34,7 +34,7 @@ function inboxQuery(c: Context<AppEnv>) {
 }
 
 /** Row id of a personal item id (`p_<n>`); broadcasts and anything else give null. */
-function personalId(id: string): number | null {
+export function personalId(id: string): number | null {
   const match = /^p_(\d+)$/.exec(id);
   return match ? Number(match[1]) : null;
 }

@@ -71,18 +71,25 @@ export const statsRoutes = new Hono<AppEnv>()
     return row ? c.json(row) : jsonError(404, "not_found", "No such push");
   });
 
-const OpenSchema = v.object({ pushId: v.pipe(v.string(), v.regex(/^\d{1,15}$/)) });
+export const PushIdSchema = v.pipe(v.string(), v.regex(/^\d{1,15}$/));
+const OpenSchema = v.object({ pushId: PushIdSchema });
+
+/** Counts `userId` once per push opened; ids of pruned or unknown pushes write nothing. */
+export async function recordOpens(db: D1Database, userId: string, pushIds: string[]) {
+  if (pushIds.length === 0) return;
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO push_open (push_id, user_id)
+       SELECT id, ?2 FROM push_stats WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?1))`,
+    )
+    .bind(JSON.stringify(pushIds), userId)
+    .run();
+}
 
 /** User route: the app reports that its user opened a push, passing the push's `data.pushId`. */
 export const openRoutes = new Hono<AppEnv>().post("/", async (c) => {
   const body = await parseBody(c, OpenSchema);
   if (body instanceof Response) return body;
-  // Each user counts once per push; ids of pruned or unknown pushes write nothing.
-  await c.env.DB.prepare(
-    `INSERT OR IGNORE INTO push_open (push_id, user_id)
-     SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM push_stats WHERE id = ?1)`,
-  )
-    .bind(Number(body.pushId), c.get("user").id)
-    .run();
+  await recordOpens(c.env.DB, c.get("user").id, [body.pushId]);
   return c.body(null, 204);
 });

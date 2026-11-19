@@ -45,6 +45,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | GET | `/health` | none | liveness, answers `{ "ok": true }` |
 | ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, passkey, verify email, reset password, delete user, update user, admin, two-factor, organization |
 | GET | `/v1/me` | user | the signed-in user |
+| POST | `/v1/sync` | user | an app start in one call: device, opens, reads, user and inbox |
 | GET | `/v1/sessions` | user | list active sessions of the caller (without raw tokens or `freshAge` lockout) |
 | DELETE | `/v1/sessions/{id}` | user | revoke one session of the caller by opaque id |
 | POST | `/v1/sessions/revoke-others` | user | revoke all other sessions of the caller |
@@ -83,6 +84,31 @@ Answers the session user: `id`, `name`, `email`, `emailVerified`, `image`, `mark
 `locale`, `role`, `banned`, `banReason`, `banExpires`, `twoFactorEnabled`, `twoFactorEnabledAt`,
 `passwordChangedAt`, `createdAt`, `updatedAt`, and `adminNeedsTwoFactor`: true for an admin whose
 session must set up TOTP or a passkey before admin features (a password session without it). `401` without a session.
+
+### `POST /v1/sync`
+What an app does when it comes to the foreground, in one request instead of three to five. Every
+field is optional; `{}` returns the user and the first inbox page.
+
+```json
+{
+  "device": { "token": "<fcm token>", "platform": "ios" },
+  "opens": ["<pushId>"],
+  "read": ["p_12"],
+  "readAll": false,
+  "inbox": { "limit": 20 }
+}
+```
+
+- `device`: as `PUT /v1/devices`.
+- `opens`: up to 20 push ids, as `POST /v1/opens` for each.
+- `read`: up to 100 inbox ids, as `POST /v1/inbox/read`; `readAll: true` is `POST /v1/inbox/read-all`
+  instead.
+- `inbox`: `{ limit }` (1 to 100, default 20), or `false` to leave the inbox out.
+
+Answers `{ user, inbox? }`: `user` as `GET /v1/me`, `inbox` as the first page of `GET /v1/inbox`
+(`items`, `nextCursor`, `unreadCount`), read after the writes above. Page on with
+`GET /v1/inbox?cursor=`. It counts as one writing call against the per-user limit. `400` for an
+invalid body, `401` without a session.
 
 ### Sessions & trusted devices
 Active sessions are inspected and revoked through `/v1/sessions` (works throughout the 30-day

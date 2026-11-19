@@ -77,6 +77,9 @@ server setting.
 
 ## Client rules that keep cost down
 
+- Call `POST /v1/sync` once when the app comes to the foreground: it registers the device token,
+  reports opens, marks items read and returns the user and the inbox, one request where the
+  separate routes take three to five. Batch what happened since the last call into the next one.
 - Fetch the inbox when the app comes to the foreground or a push arrives, not on a timer.
 - Use the `unreadCount` that comes with every `GET /v1/inbox` page; call
   `GET /v1/inbox/unread-count` only to refresh a badge without the list.

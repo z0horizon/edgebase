@@ -3,7 +3,6 @@ import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { appCallback, appExchange } from "./auth/app-callback";
 import {
-  adminNeedsTwoFactor,
   configuredProviders,
   createAuth,
   emailPasswordEnabled,
@@ -35,6 +34,7 @@ import { pushRoutes } from "./push/routes";
 import { openRoutes } from "./push/stats";
 import { templateRoutes } from "./push/templates";
 import { topicRoutes } from "./push/topics";
+import { mePayload, sync } from "./sync";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -148,6 +148,7 @@ app.on(["GET", "POST"], "/api/auth/*", (c) =>
 // app-callback checks its own session so it can redirect failures back to the app.
 for (const path of [
   "/v1/me",
+  "/v1/sync",
   "/v1/sessions",
   "/v1/sessions/*",
   "/v1/trusted-devices",
@@ -171,13 +172,9 @@ app.route("/v1/templates", templateRoutes);
 app.route("/v1/opens", openRoutes);
 app.route("/v1/topics", topicRoutes);
 // The admin page reads the two-factor rule from here instead of keeping its own copy.
-app.get("/v1/me", (c) => {
-  const user = c.get("user");
-  return c.json({
-    ...user,
-    adminNeedsTwoFactor: adminNeedsTwoFactor({ user, session: c.get("session") }),
-  });
-});
+app.get("/v1/me", (c) => c.json(mePayload(c)));
+// One call for an app coming to the foreground; see sync().
+app.post("/v1/sync", sync);
 // The admin page names the product and shows only the providers whose credentials are set, and
 // the password form only when it is on.
 app.get("/v1/auth/providers", (c) =>
