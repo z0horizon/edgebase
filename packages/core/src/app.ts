@@ -26,6 +26,7 @@ import {
   trustedDeviceRoutes,
 } from "./auth/security-routes";
 import { SET_TRUST_DEVICE_HEADER, TRUST_DEVICE_HEADER } from "./auth/trusted-devices";
+import { batch } from "./batch";
 import { appName } from "./config";
 import { jsonError } from "./http";
 import { inboxRoutes } from "./inbox/routes";
@@ -149,6 +150,7 @@ app.on(["GET", "POST"], "/api/auth/*", (c) =>
 for (const path of [
   "/v1/me",
   "/v1/sync",
+  "/v1/batch",
   "/v1/sessions",
   "/v1/sessions/*",
   "/v1/trusted-devices",
@@ -175,6 +177,11 @@ app.route("/v1/topics", topicRoutes);
 app.get("/v1/me", (c) => c.json(mePayload(c)));
 // One call for an app coming to the foreground; see sync().
 app.post("/v1/sync", sync);
+// Several /v1 calls in one request; each sub-request re-enters the app, its own routes included.
+app.post(
+  "/v1/batch",
+  batch((req, c) => app.fetch(req, c.env, c.executionCtx)),
+);
 // The admin page names the product and shows only the providers whose credentials are set, and
 // the password form only when it is on.
 app.get("/v1/auth/providers", (c) =>

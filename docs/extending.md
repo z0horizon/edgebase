@@ -43,8 +43,17 @@ export default worker;
 - `parseBody(c, schema)`: a valibot-checked JSON body, or the `400` response to return.
 - `jsonError(status, code, message)`: the one error shape.
 
-Keep away from the paths EdgeBase owns: `/api/auth/*`, `/v1/auth/*`, `/v1/me`, `/v1/sync`, `/v1/devices`,
+Keep away from the paths EdgeBase owns: `/api/auth/*`, `/v1/auth/*`, `/v1/me`, `/v1/sync`, `/v1/batch`, `/v1/devices`,
 `/v1/inbox`, `/v1/opens`, `/v1/topics`, `/v1/push`, `/v1/templates`, `/health` and `/admin/`.
+
+## Fewer requests
+
+Worker requests are the largest cost at small and medium scale, so plan for few calls per screen:
+
+- Clients can send up to 10 calls to `/v1/*` routes, yours included, in one `POST /v1/batch`
+  (see [api.md](api.md)). It needs no server code, and each call still passes your middleware.
+- For a screen that is opened often, one route that returns everything the screen shows is cheaper
+  still: the session is read once and the queries share one `db.batch([...])` round trip.
 
 ## Your own tables
 

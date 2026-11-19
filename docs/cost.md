@@ -80,6 +80,8 @@ server setting.
 - Call `POST /v1/sync` once when the app comes to the foreground: it registers the device token,
   reports opens, marks items read and returns the user and the inbox, one request where the
   separate routes take three to five. Batch what happened since the last call into the next one.
+- Send other calls together with `POST /v1/batch` (up to 10 per request); it saves requests, not
+  row reads or writes.
 - Fetch the inbox when the app comes to the foreground or a push arrives, not on a timer.
 - Use the `unreadCount` that comes with every `GET /v1/inbox` page; call
   `GET /v1/inbox/unread-count` only to refresh a badge without the list.

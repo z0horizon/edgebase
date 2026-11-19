@@ -46,6 +46,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | ANY | `/api/auth/*` | varies | Better Auth: sign-up/in, sign-out, social, passkey, verify email, reset password, delete user, update user, admin, two-factor, organization |
 | GET | `/v1/me` | user | the signed-in user |
 | POST | `/v1/sync` | user | an app start in one call: device, opens, reads, user and inbox |
+| POST | `/v1/batch` | user | up to 10 `/v1/*` calls in one request |
 | GET | `/v1/sessions` | user | list active sessions of the caller (without raw tokens or `freshAge` lockout) |
 | DELETE | `/v1/sessions/{id}` | user | revoke one session of the caller by opaque id |
 | POST | `/v1/sessions/revoke-others` | user | revoke all other sessions of the caller |
@@ -109,6 +110,24 @@ Answers `{ user, inbox? }`: `user` as `GET /v1/me`, `inbox` as the first page of
 (`items`, `nextCursor`, `unreadCount`), read after the writes above. Page on with
 `GET /v1/inbox?cursor=`. It counts as one writing call against the per-user limit. `400` for an
 invalid body, `401` without a session.
+
+### `POST /v1/batch`
+Runs up to 10 calls to `/v1/*` routes, yours included, in one request, to save Worker requests.
+
+```json
+{ "requests": [
+  { "method": "GET", "path": "/v1/inbox/unread-count" },
+  { "method": "PUT", "path": "/v1/devices", "body": { "token": "<fcm token>", "platform": "ios" } }
+] }
+```
+
+Answers `200 { "responses": [{ "status": 200, "body": { "count": 3 } }, { "status": 204, "body": null }] }`,
+one entry per call in the same order. Calls run one after another as the caller (its session,
+`Origin` and network are passed on; `X-API-Key` and other headers are not), and each is checked,
+validated and counted against the per-user limit exactly as a direct call, so one may answer `429`
+or `400` while the others succeed. `method` is `GET`, `POST`, `PUT` or `DELETE`; `body` is sent as
+JSON; response headers are not returned. `400` for more than 10 calls, a path outside `/v1/`, or a
+nested `/v1/batch`; `401` without a session. The whole request body is limited to 64 KB.
 
 ### Sessions & trusted devices
 Active sessions are inspected and revoked through `/v1/sessions` (works throughout the 30-day
