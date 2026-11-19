@@ -65,6 +65,7 @@ describe("renderConfig", () => {
       MAIL_FROM: valid.MAIL_FROM,
       EMAIL_PASSWORD: "on",
       SESSION_ACTIVITY: "on",
+      SESSION_REFRESH_DAYS: "1",
     });
     assert.deepEqual(out.send_email, [
       { name: "MAIL", allowed_sender_addresses: [valid.MAIL_FROM] },
@@ -195,6 +196,9 @@ describe("validate", () => {
     ["APP_SCHEME", ""],
     ["EMAIL_PASSWORD", "false"],
     ["SESSION_ACTIVITY", "no"],
+    ["SESSION_REFRESH_DAYS", "0"],
+    ["SESSION_REFRESH_DAYS", "15"],
+    ["SESSION_REFRESH_DAYS", "1.5"],
     ["CUSTOM_DOMAIN", "https://api.myapp.example"],
     ["CUSTOM_DOMAIN", "myapp.me.workers.dev"],
     ["CUSTOM_DOMAIN", "API.myapp.example"],

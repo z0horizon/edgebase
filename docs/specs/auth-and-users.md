@@ -67,7 +67,8 @@ user routes answer `503`.
    so the waiting app always hears back. A token is spent
    by its first redemption attempt, right or wrong. Better Auth's own
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.
-4. Sessions last 30 days and are extended at most once a day (`updateAge`), with a 15-minute
+4. Sessions last 30 days and are extended at most once every `SESSION_REFRESH_DAYS` (1 to 14,
+   default 1; Better Auth `updateAge`), with a 15-minute
    `freshAge` for passwordless sensitive operations (`delete-user`, `unlink-account`, `passkey`
    add/rename/delete), and are capped at 30 active sessions per user (pruning the oldest on
    sign-in). Better Auth's raw-token `/api/auth/list-sessions`, `/api/auth/admin/list-user-sessions`,

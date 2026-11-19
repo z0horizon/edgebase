@@ -67,7 +67,7 @@ Without any push, a signed-in user costs:
 | Source | Cost |
 |---|---|
 | Each API call (`GET /v1/inbox`, `unread-count`, …) | 1 Worker request, a few ms CPU, a few dozen rows read (`GET /v1/inbox` runs in one `INBOX_DB` batch) |
-| Session refresh, at most once a day (`updateAge` in `packages/core/src/auth/auth.ts`) | ~2 writes (row and `session_expires_at` index); with `SESSION_ACTIVITY=on` (default), `lastActiveAt` and the current network update in the background at once on a new country, at most hourly on a new ASN, else every 6 hours (1 unindexed row write); `off` writes none |
+| Session refresh, at most once every `SESSION_REFRESH_DAYS` (default 1) | ~2 writes (row and `session_expires_at` index); with `SESSION_ACTIVITY=on` (default), `lastActiveAt` and the current network update in the background at once on a new country, at most hourly on a new ASN, else every 6 hours (1 unindexed row write); `off` writes none |
 | Each sign-in or sign-out | ~5 writes for the `session` row (row, key, token, user and expiry indexes), the same when it is deleted; a remembered 2FA device adds ~5 (`trusted_device`) |
 | Device refresh, at most once every 7 days per device | ~2 writes (row and `device_updated_at` index) |
 
@@ -98,7 +98,7 @@ at ~3 ms CPU, one device per user, 10% of users open the daily push.
 | Requests | 300M | ~$87 |
 | CPU | ~900M ms | ~$17 |
 | Inbox writes: 30M inserts × 2 + 30M deletes × 2 | 120M | |
-| Session refresh (`updateAge`): 30M × 2 | 60M | |
+| Session refresh (`SESSION_REFRESH_DAYS=1`): 30M × 2 | 60M | |
 | Session activity touches: ~1–1.5 per user per day (0 with `SESSION_ACTIVITY=off`) | ~30–45M | |
 | Device refresh: ~4.3M × 2 | ~9M | |
 | Opens: 3M × 5 | 15M | |
@@ -117,8 +117,8 @@ Mitigations, in order of effect:
 1. Follow the client rules above; halving API calls saves ~$50.
 2. Send with `inbox: true` only when the push should be kept; many pushes do not need history.
 3. Lower `INBOX_TTL_DAYS` to 14–21 (storage only, not writes).
-4. Raise the session `updateAge` to a few days: session writes fall by that factor, and a session
-   may then end up to that many days before 30 days of inactivity.
+4. Raise `SESSION_REFRESH_DAYS` (1 to 14): session refresh writes fall by that factor (3 saves
+   ~$40), and a session may then end up to that many days before 30 days of inactivity.
 5. Set `SESSION_ACTIVITY=off` when you do not show users or admins where and when a session was
    last active: saves the activity touches (~$30–45).
 6. Shard `INBOX_DB` by a hash of `user_id` (roadmap).
@@ -128,6 +128,6 @@ Mitigations, in order of effect:
 - Every row written costs one extra write per index it touches; deletes count as writes.
 - `inbox_item` uses an integer rowid key (2 writes per insert); a TEXT key would add an
   automatic index (3 writes).
-- Device upserts write only on change or after 7 days; session expiry refreshes at most once a day, and `lastActiveAt` touches are throttled to 6 hours (1 hour on a new ASN, none on a new country; off with `SESSION_ACTIVITY=off`).
+- Device upserts write only on change or after 7 days; session expiry refreshes at most once every `SESSION_REFRESH_DAYS`, and `lastActiveAt` touches are throttled to 6 hours (1 hour on a new ASN, none on a new country; off with `SESSION_ACTIVITY=off`).
 - Broadcasts write one row, never one per user; "read all" is one write.
 - An open is stored once per user and push (`INSERT OR IGNORE`), so repeated reports write nothing.

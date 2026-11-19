@@ -321,6 +321,27 @@ it.each([
   20_000,
 );
 
+it("SESSION_REFRESH_DAYS sets how often an active session's expiry is pushed forward", async () => {
+  const { userId, token } = await signUpVerified("refresh-days@example.com");
+  const expiry = () =>
+    env.DB.prepare("SELECT expiresAt FROM session WHERE userId = ?")
+      .bind(userId)
+      .first<string>("expiresAt");
+  // A session last extended two days ago has 28 of its 30 days left.
+  const twoDaysOld = new Date(Date.now() + 28 * 86_400_000).toISOString();
+  await env.DB.prepare("UPDATE session SET expiresAt = ? WHERE userId = ?")
+    .bind(twoDaysOld, userId)
+    .run();
+  for (const days of ["3", "14"]) {
+    await call("/v1/me", authed(token), { ...env, SESSION_REFRESH_DAYS: days });
+    expect(await expiry()).toBe(twoDaysOld);
+  }
+  // Out of range falls back to the default of one day, which extends it.
+  await call("/v1/me", authed(token), { ...env, SESSION_REFRESH_DAYS: "90" });
+  const extended = await expiry();
+  expect(Date.parse(extended ?? "")).toBeGreaterThan(Date.parse(twoDaysOld) + 86_400_000);
+});
+
 it("APP_NAME labels the TOTP issuer and the passkey relying party", async () => {
   const named = { ...env, APP_NAME: "My App" };
   const { token } = await signUpVerified("app-name-labels@example.com");

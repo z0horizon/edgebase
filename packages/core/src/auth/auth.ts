@@ -4,7 +4,7 @@ import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { admin, bearer, captcha, oneTimeToken, organization, twoFactor } from "better-auth/plugins";
 import * as v from "valibot";
-import { appName } from "../config";
+import { appName, sessionRefreshDays } from "../config";
 import { deleteUserInbox } from "../inbox/queries";
 import { sendMail } from "../mail";
 import { deleteUserOpens } from "../push/stats";
@@ -216,7 +216,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
     // Sessions stay in D1 with no cookie cache so a revoked session fails on the very next request.
     session: {
       expiresIn: 30 * DAY_SECONDS,
-      updateAge: DAY_SECONDS,
+      updateAge: sessionRefreshDays(env) * DAY_SECONDS,
       freshAge: FRESH_SESSION_SECONDS,
       additionalFields: {
         signInProvider: { type: "string", required: false, input: false },

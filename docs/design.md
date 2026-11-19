@@ -42,7 +42,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
 - **Sessions in D1, no cache.** Every user request reads its session from D1, so sign-out, ban or
   password change take effect on the next request. KV or a cookie cache would delay revocation by
   up to a minute. Smart Placement runs the Worker near D1 to keep that read short, and `updateAge`
-  of one day keeps session writes to about one per session per day.
+  of one day (`SESSION_REFRESH_DAYS`) keeps session writes to about one per session per day.
 - **Two D1 databases.** The inbox is the largest and most-written table. Keeping it out of `DB`
   keeps sign-in fast and gives each database its own 10 GB. The cost is no foreign key from the
   inbox to `user`; account deletion removes inbox rows in a Better Auth hook.

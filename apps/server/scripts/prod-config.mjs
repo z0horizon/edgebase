@@ -19,6 +19,7 @@ export const VAR_KEYS = [
   "MAIL_FROM",
   "EMAIL_PASSWORD",
   "SESSION_ACTIVITY",
+  "SESSION_REFRESH_DAYS",
 ];
 export const SECRET_KEYS = [
   "BETTER_AUTH_SECRET",
@@ -138,6 +139,11 @@ export function validate(env) {
     "must be at most 40 characters, without < > or control characters",
   );
   check("EMAIL_PASSWORD", (v) => /^(on|off)?$/.test(v), "must be on, off or empty (on)");
+  check(
+    "SESSION_REFRESH_DAYS",
+    (v) => v === "" || /^([1-9]|1[0-4])$/.test(v),
+    "must be a whole number of days from 1 to 14, or empty (1)",
+  );
   check("SESSION_ACTIVITY", (v) => /^(on|off)?$/.test(v), "must be on, off or empty (on)");
   // Without Turnstile, sign-up and password reset let anyone send mail to any address at the
   // sender's cost; the per-IP and per-email limits slow one machine or one address, not a botnet.
@@ -217,7 +223,7 @@ export function renderConfig(template, env) {
   for (const m of out.send_email ?? []) {
     if (m.name === "MAIL") m.allowed_sender_addresses = [env.MAIL_FROM];
   }
-  // An optional var left empty (APP_NAME, EMAIL_PASSWORD, SESSION_ACTIVITY) keeps the template's default; required ones are validated.
+  // An optional var left empty (APP_NAME, EMAIL_PASSWORD, SESSION_*) keeps the template's default; required ones are validated.
   out.vars = Object.fromEntries(VAR_KEYS.map((key) => [key, env[key] || template.vars[key]]));
   return out;
 }
