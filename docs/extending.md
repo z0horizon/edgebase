@@ -52,6 +52,8 @@ Worker requests are the largest cost at small and medium scale, so plan for few 
 
 - Clients can send up to 10 calls to `/v1/*` routes, yours included, in one `POST /v1/batch`
   (see [api.md](api.md)). It needs no server code, and each call still passes your middleware.
+  It is not a transaction and repeats its writes when retried, unless the client sends an
+  `Idempotency-Key`; api.md lists what it is not for.
 - For a screen that is opened often, one route that returns everything the screen shows is cheaper
   still: the session is read once and the queries share one `db.batch([...])` round trip.
 

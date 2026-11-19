@@ -71,3 +71,65 @@ it("each call in a batch counts against the per-user limit", async () => {
   expect(statuses).toContain(429);
   expect(statuses.indexOf(429)).toBeGreaterThan(40);
 }, 30_000);
+
+it("an Idempotency-Key replays the first answer per user instead of running the batch again", async () => {
+  const a = await signUpVerified("batch-idem-a@example.com");
+  const b = await signUpVerified("batch-idem-b@example.com");
+  const item = { title: "t", body: "b", category: "transactional" as const };
+  const count = [{ method: "GET", path: "/v1/inbox/unread-count" }];
+  const keyed = (token: string, requests: unknown, key = "retry-1") =>
+    call("/v1/batch", authed(token, json({ requests }, { headers: { "idempotency-key": key } })));
+
+  const first = await keyed(a.token, count);
+  expect(first.headers.get("idempotent-replayed")).toBeNull();
+  expect(await first.json()).toEqual({ responses: [{ status: 200, body: { count: 0 } }] });
+
+  // The retry answers what the first run answered, though the inbox has changed since.
+  await insertPersonal(env.INBOX_DB, [a.userId, b.userId], item, Date.now() - 1000);
+  const replay = await keyed(a.token, count);
+  expect(replay.status).toBe(200);
+  expect(replay.headers.get("idempotent-replayed")).toBe("true");
+  expect(await replay.json()).toEqual({ responses: [{ status: 200, body: { count: 0 } }] });
+
+  // Another user's same key is their own; another body under the key is refused.
+  expect(await (await keyed(b.token, count)).json()).toEqual({
+    responses: [{ status: 200, body: { count: 1 } }],
+  });
+  const other = await keyed(a.token, [{ method: "GET", path: "/v1/me" }]);
+  expect(other.status).toBe(422);
+  expect(await other.json()).toMatchObject({ error: { code: "idempotency_mismatch" } });
+  expect((await keyed(a.token, count, "bad key")).status).toBe(400);
+  // An invalid batch frees its key for the corrected request.
+  expect((await keyed(a.token, [{ method: "GET", path: "/nope" }], "retry-2")).status).toBe(400);
+  expect((await keyed(a.token, count, "retry-2")).status).toBe(200);
+});
+
+it("a replay of an answer over 64 KB keeps each status without the bodies", async () => {
+  const { userId, token } = await signUpVerified("batch-idem-big@example.com");
+  const now = Date.now();
+  for (let i = 0; i < 100; i++) {
+    await insertPersonal(
+      env.INBOX_DB,
+      [userId],
+      { title: `t${i}`, body: "x".repeat(500), category: "transactional" },
+      now - 1000 - i,
+    );
+  }
+  const requests = [
+    { method: "GET", path: "/v1/inbox?limit=100" },
+    { method: "GET", path: "/v1/inbox?limit=100" },
+    { method: "POST", path: "/v1/inbox/read-all" },
+  ];
+  const send = () =>
+    call("/v1/batch", authed(token, json({ requests }, { headers: { "idempotency-key": "big" } })));
+  const first = await (await send()).json<BatchBody>();
+  expect(JSON.stringify(first).length).toBeGreaterThan(64 * 1024);
+  expect(await (await send()).json()).toEqual({
+    responses: [
+      { status: 200, body: null },
+      { status: 200, body: null },
+      { status: 204, body: null },
+    ],
+    truncated: true,
+  });
+});

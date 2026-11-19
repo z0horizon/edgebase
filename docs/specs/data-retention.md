@@ -20,7 +20,7 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 | `scheduled_push` | `DB` | when sent (by the request for an immediate push, else the minute cron), or 24 h past intended `send_at` | `scheduled_push_send_at` + `push_stats` PK |
 | `inbox_state` | `INBOX_DB` | when the user is deleted | primary key |
 | `invitation` | `DB` | `expiresAt` < now | `invitation_expires_at` |
-| `push_idempotency` | `DB` | `created_at` older than 24 h | `push_idempotency_created_at` |
+| `push_idempotency` (push and batch keys) | `DB` | `created_at` older than 24 h | `push_idempotency_created_at` |
 | `push_open` | `DB` | its push's stats row is due for deletion, or the user is deleted | `push_stats_send_at` + primary key, `push_open_user_id` |
 | `push_stats` | `DB` | `send_at` older than 90 days and no opens left | `push_stats_send_at` |
 | `push_template` | `DB` | capped at 500 rows on write (`PUT` answers `409`) | primary key |

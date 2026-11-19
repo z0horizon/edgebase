@@ -46,6 +46,9 @@ FCM and retries per token.
 
 ## Idempotency
 
+The same mechanism (`packages/core/src/idempotency.ts`) serves `POST /v1/batch`, whose keys are
+stored as `batch:<userId>:<key>` in the same table and answered with `200`.
+
 1. `POST /v1/push` with `Idempotency-Key: <1–255 printable ASCII>` claims the key in
    `push_idempotency` before doing anything (`packages/core/src/push/routes.ts`). The `202` answer is stored and
    replayed with `Idempotent-Replayed: true` to every repeat of the same key for 24 h, so a push

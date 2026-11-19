@@ -129,6 +129,28 @@ or `400` while the others succeed. `method` is `GET`, `POST`, `PUT` or `DELETE`;
 JSON; response headers are not returned. `400` for more than 10 calls, a path outside `/v1/`, or a
 nested `/v1/batch`; `401` without a session. The whole request body is limited to 64 KB.
 
+Header `Idempotency-Key` (1 to 255 printable characters, a new one per batch): the answer is kept
+for 24 h and a repeat with the same key and body gets it back with `Idempotent-Replayed: true`
+instead of running again. Keys are per user. A stored answer over 64 KB keeps each `status` with
+`body: null` and adds `"truncated": true`. `422 idempotency_mismatch` for the key with another
+body, `409 idempotency_in_progress` while the first request still runs. It costs about 5 D1 row
+writes, so send it only with batches that write.
+
+What a batch is not:
+
+- **Not a transaction.** A call can succeed while a later one fails, and nothing is undone. Work
+  that must all happen or not at all belongs in one route of your own using `db.batch([...])`.
+- **Not safe to retry without a key.** A batch repeated after a timeout runs its writes again. Use
+  `Idempotency-Key` for any batch with a write that must not repeat (an order, a payment); to retry
+  only the calls that failed, send them as a new batch under a new key.
+- **Not an error by status.** The batch answers `200` even when calls inside it fail: check every
+  `status`.
+- **Not visible per path.** Logs, metrics, WAF rules and caches see one `POST /v1/batch`, so a GET
+  inside it is never cached and a zone rule for one path does not apply.
+- **Not for everything.** Sign-in and the other `/api/auth/*` routes, routes that take
+  `X-API-Key` or another header of their own, uploads and non-JSON bodies cannot go through it.
+  Calls run one after another, so a slow one delays the rest.
+
 ### Sessions & trusted devices
 Active sessions are inspected and revoked through `/v1/sessions` (works throughout the 30-day
 session lifetime without the 15-minute `freshAge` gate and never exposes raw session tokens):
