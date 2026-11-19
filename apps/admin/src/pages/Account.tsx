@@ -1,10 +1,16 @@
-import { Fingerprint, Pencil, Trash2 } from "lucide-react";
+import { cn } from "cn";
+import { Fingerprint, KeyRound, Monitor, Moon, Pencil, Sun, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { FormError } from "@/components/FormError";
 import { PageHeader } from "@/components/PageHeader";
+import { PasswordField } from "@/components/PasswordField";
+import { ProviderIcon } from "@/components/ProviderButtons";
 import { SessionCard, TrustedDeviceCard } from "@/components/SessionCard";
+import { AccentSwatchPicker } from "@/components/ThemeCustomizer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -25,23 +31,33 @@ import {
   type User,
 } from "@/lib/api";
 import { formatDate } from "@/lib/format";
-import { type Provider, startOAuth, useProviders } from "@/lib/oauth";
+import { type Provider, startOAuth, useSignInOptions } from "@/lib/oauth";
+import { type ThemePreference, useTheme } from "@/lib/theme";
 import { describePasskey, supportsPasskeys } from "@/lib/webauthn";
 
-/** Linking, passkeys, active session inspection/revocation, and 2FA trusted-device controls. */
-export function AccountPage({ me }: { me: User }) {
+/** Linking, passkeys, active session inspection/revocation, password & theme controls. */
+export function AccountPage({
+  me,
+  onRefresh,
+}: {
+  me: User;
+  onRefresh?: (() => Promise<void>) | undefined;
+}) {
   const [linked, setLinked] = useState<Map<string, string> | null>(null);
   const [hasPassword, setHasPassword] = useState<boolean | null>(null);
   const [passkeys, setPasskeys] = useState<PasskeyRecord[] | null>(null);
   const [passkeysFailed, setPasskeysFailed] = useState(false);
   const [sessions, setSessions] = useState<SessionRecord[] | null>(null);
   const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[] | null>(null);
-  const [addingPasskey, setAddingPasskey] = useState(false);
-  const [newPasskeyName, setNewPasskeyName] = useState("");
   const [renaming, setRenaming] = useState<PasskeyRecord | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [changingPw, setChangingPw] = useState(false);
+  const [revokeOthersOnPw, setRevokeOthersOnPw] = useState(true);
+  const [pwError, setPwError] = useState("");
   const [busy, setBusy] = useState(false);
-  const providers = useProviders();
+
+  const { providers, emailPassword } = useSignInOptions();
+  const { preference, setPreference } = useTheme();
   const canPasskey = supportsPasskeys();
 
   const loadSecurity = useCallback(async () => {
@@ -166,13 +182,10 @@ export function AccountPage({ me }: { me: User }) {
     }
   };
 
-  const handleAddPasskey = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const handleAddPasskey = async () => {
     setBusy(true);
     try {
-      await registerPasskey(newPasskeyName);
-      setAddingPasskey(false);
-      setNewPasskeyName("");
+      await registerPasskey();
       toast.success("Passkey added");
       await loadSecurity();
     } catch (e) {
@@ -217,6 +230,41 @@ export function AccountPage({ me }: { me: User }) {
     }
   };
 
+  const handleChangePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const currentPassword = String(form.get("currentPassword") ?? "");
+    const newPassword = String(form.get("newPassword") ?? "");
+    const confirmPassword = String(form.get("confirmPassword") ?? "");
+    if (newPassword.length < 8) {
+      setPwError("New password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwError("New passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    setPwError("");
+    try {
+      await api("/api/auth/change-password", {
+        method: "POST",
+        body: {
+          currentPassword,
+          newPassword,
+          revokeOtherSessions: revokeOthersOnPw,
+        },
+      });
+      setChangingPw(false);
+      toast.success("Password updated");
+      await Promise.all([loadSecurity(), onRefresh?.()]);
+    } catch (e) {
+      setPwError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const otherSessionCount = sessions?.filter((s) => !s.current).length ?? 0;
   const factorsLoaded = hasPassword !== null && linked !== null && passkeys !== null;
   const lastAdminFactor =
@@ -224,26 +272,28 @@ export function AccountPage({ me }: { me: User }) {
     !me.twoFactorEnabled &&
     (passkeys?.length ?? 0) + (linked?.size ?? 0) <= 1;
   const soleLoginAccount = hasPassword === false && (linked?.size ?? 0) <= 1;
+  const passkeyCount = passkeys?.length ?? 0;
+  const passkeyPct = Math.min(100, Math.round((passkeyCount / 20) * 100));
 
   return (
     <div className="grid gap-5">
       <PageHeader
         title="Account & Security"
-        description="Manage FIDO2 passkeys, linked OAuth providers, active edge sessions, and 30-day trusted devices."
+        description="Manage FIDO2 passkeys, linked OAuth providers, active edge sessions, 30-day trusted devices, and interface preferences."
       />
 
       <section
         aria-label="Security posture"
         className="grid grid-cols-1 divide-y overflow-hidden rounded-md border bg-card sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4 lg:divide-x"
       >
-        <div className="grid gap-1 px-4 py-3 sm:border-r sm:border-b lg:border-r lg:border-b-0">
+        <div className="grid gap-1.5 px-4 py-3 sm:border-r sm:border-b lg:border-r-0 lg:border-b-0">
           <span className="text-[11px] text-muted-foreground">Operator account</span>
-          <div className="flex items-center gap-1.5 min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-[13px] font-medium text-foreground">{me.email}</span>
             <Badge variant="default">Admin</Badge>
           </div>
         </div>
-        <div className="grid gap-1 px-4 py-3 sm:border-b lg:border-b-0">
+        <div className="grid gap-1.5 px-4 py-3 sm:border-b lg:border-b-0">
           <span className="text-[11px] text-muted-foreground">Authenticator (TOTP)</span>
           <div className="flex items-center gap-2">
             {me.twoFactorEnabled ? (
@@ -258,21 +308,100 @@ export function AccountPage({ me }: { me: User }) {
             )}
           </div>
         </div>
-        <div className="grid gap-1 px-4 py-3 sm:border-r lg:border-r">
-          <span className="text-[11px] text-muted-foreground">WebAuthn passkeys</span>
+        <div className="grid gap-1.5 px-4 py-3 sm:border-r lg:border-r-0">
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>WebAuthn passkeys</span>
+            <span className="font-mono text-[10px]">CAP 20</span>
+          </div>
           <span className="text-[13px] font-medium tabular-nums text-foreground">
             {passkeys
-              ? `${passkeys.length} / 20 registered`
+              ? `${passkeyCount} / 20 registered`
               : passkeysFailed
                 ? "Unavailable"
                 : "Loading…"}
           </span>
+          <div className="h-[3px] overflow-hidden rounded-xs bg-muted" role="presentation">
+            <div
+              className="h-full bg-primary transition-[width] duration-200"
+              style={{ width: `${passkeyPct}%` }}
+            />
+          </div>
         </div>
-        <div className="grid gap-1 px-4 py-3">
+        <div className="grid gap-1.5 px-4 py-3">
           <span className="text-[11px] text-muted-foreground">Password changed</span>
-          <span className="text-[13px] tabular-nums text-foreground">
-            {me.passwordChangedAt ? formatDate(me.passwordChangedAt) : "—"}
-          </span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13px] tabular-nums text-foreground">
+              {me.passwordChangedAt ? formatDate(me.passwordChangedAt) : "—"}
+            </span>
+            {hasPassword && emailPassword !== false && (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  setPwError("");
+                  setChangingPw(true);
+                }}
+              >
+                <KeyRound /> Change
+              </Button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-md border bg-card">
+        <div className="grid gap-0.5 border-b bg-muted/35 px-4 py-3">
+          <h2 className="text-[13px] font-semibold text-foreground">Interface preferences</h2>
+          <p className="text-xs text-muted-foreground">
+            Customize appearance mode and primary accent color across all views. Saved locally per
+            browser.
+          </p>
+        </div>
+        <div className="divide-y">
+          <div className="flex flex-col justify-between gap-3 px-4 py-3 sm:flex-row sm:items-center">
+            <div className="grid gap-0.5">
+              <span className="text-[13px] font-medium text-foreground">Color mode</span>
+              <span className="text-xs text-muted-foreground">
+                Follow OS setting or force Light / Dark theme.
+              </span>
+            </div>
+            <fieldset
+              aria-label="Color mode"
+              className="inline-flex gap-0.5 rounded-md border bg-muted/50 p-0.5"
+            >
+              {(
+                [
+                  ["system", "System", Monitor],
+                  ["light", "Light", Sun],
+                  ["dark", "Dark", Moon],
+                ] as const
+              ).map(([id, label, Icon]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setPreference(id as ThemePreference)}
+                  aria-pressed={preference === id}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors",
+                    preference === id
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-3.5" /> {label}
+                </button>
+              ))}
+            </fieldset>
+          </div>
+          <div className="flex flex-col justify-between gap-3 px-4 py-3.5 sm:flex-row sm:items-center">
+            <div className="grid gap-0.5">
+              <span className="text-[13px] font-medium text-foreground">Primary accent color</span>
+              <span className="text-xs text-muted-foreground">
+                Updates primary buttons, active tabs, highlights, and progress meters immediately.
+              </span>
+            </div>
+            <AccentSwatchPicker />
+          </div>
         </div>
       </section>
 
@@ -291,8 +420,8 @@ export function AccountPage({ me }: { me: User }) {
             <Button
               variant="outline"
               size="sm"
-              disabled={busy || (passkeys?.length ?? 0) >= 20}
-              onClick={() => setAddingPasskey(true)}
+              disabled={busy || passkeyCount >= 20}
+              onClick={handleAddPasskey}
             >
               <Fingerprint /> Add passkey
             </Button>
@@ -346,7 +475,7 @@ export function AccountPage({ me }: { me: User }) {
                   <Pencil /> Rename
                 </Button>
                 <Button
-                  variant="outline"
+                  variant="destructive-outline"
                   size="sm"
                   disabled={busy || !factorsLoaded || lastAdminFactor}
                   title={
@@ -381,12 +510,15 @@ export function AccountPage({ me }: { me: User }) {
             const accountId = linked?.get(id);
             return (
               <div key={id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                <span className="text-[13px] font-medium text-foreground">{label}</span>
+                <div className="flex items-center gap-2.5">
+                  <ProviderIcon provider={id} />
+                  <span className="text-[13px] font-medium text-foreground">{label}</span>
+                </div>
                 {accountId ? (
                   <div className="flex items-center gap-2">
                     <Badge variant="success">Linked</Badge>
                     <Button
-                      variant="outline"
+                      variant="destructive-outline"
                       size="sm"
                       disabled={busy || !factorsLoaded || lastAdminFactor || soleLoginAccount}
                       title={
@@ -426,7 +558,7 @@ export function AccountPage({ me }: { me: User }) {
             </p>
           </div>
           {otherSessionCount > 0 && (
-            <Button variant="outline" size="sm" disabled={busy} onClick={revokeOtherSessions}>
+            <Button variant="destructive" size="sm" disabled={busy} onClick={revokeOtherSessions}>
               Revoke {otherSessionCount} other {otherSessionCount === 1 ? "session" : "sessions"}
             </Button>
           )}
@@ -461,7 +593,7 @@ export function AccountPage({ me }: { me: User }) {
             </p>
           </div>
           {(trustedDevices?.length ?? 0) > 0 && (
-            <Button variant="outline" size="sm" disabled={busy} onClick={revokeAllDevices}>
+            <Button variant="destructive" size="sm" disabled={busy} onClick={revokeAllDevices}>
               Revoke all
             </Button>
           )}
@@ -486,39 +618,6 @@ export function AccountPage({ me }: { me: User }) {
         </div>
       </section>
 
-      <Dialog open={addingPasskey} onOpenChange={(open) => !open && setAddingPasskey(false)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Register passkey</DialogTitle>
-            <DialogDescription>
-              Assign a label to identify this authenticator. Requires a fresh session within the
-              last 15 minutes.
-            </DialogDescription>
-          </DialogHeader>
-          <form className="grid gap-4" onSubmit={handleAddPasskey}>
-            <div className="grid gap-1.5">
-              <Label htmlFor="passkey-name">Label (optional)</Label>
-              <Input
-                id="passkey-name"
-                maxLength={64}
-                placeholder="Work MacBook Touch ID"
-                value={newPasskeyName}
-                onChange={(e) => setNewPasskeyName(e.target.value)}
-                autoFocus
-              />
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setAddingPasskey(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={busy}>
-                <Fingerprint /> Register
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
         <DialogContent>
           <DialogHeader>
@@ -542,6 +641,65 @@ export function AccountPage({ me }: { me: User }) {
               </Button>
               <Button type="submit" disabled={busy || !renameValue.trim()}>
                 Save
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={changingPw} onOpenChange={(open) => !open && setChangingPw(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change password</DialogTitle>
+            <DialogDescription>
+              Updating your password rotates credentials and clears all 30-day trusted devices.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="grid gap-3.5" onSubmit={handleChangePassword}>
+            <PasswordField
+              id="acct-cur-pw"
+              name="currentPassword"
+              label="Current password"
+              autoComplete="current-password"
+              required
+              autoFocus
+            />
+            <PasswordField
+              id="acct-new-pw"
+              name="newPassword"
+              label="New password"
+              autoComplete="new-password"
+              minLength={8}
+              maxLength={128}
+              placeholder="At least 8 characters"
+              required
+            />
+            <PasswordField
+              id="acct-confirm-pw"
+              name="confirmPassword"
+              label="Confirm new password"
+              autoComplete="new-password"
+              minLength={8}
+              maxLength={128}
+              required
+            />
+            <div className="flex items-center gap-2 pt-0.5">
+              <Checkbox
+                id="acct-revoke-others"
+                checked={revokeOthersOnPw}
+                onCheckedChange={(v) => setRevokeOthersOnPw(v === true)}
+              />
+              <Label htmlFor="acct-revoke-others" className="cursor-pointer font-normal">
+                Revoke all other active sessions
+              </Label>
+            </div>
+            <FormError message={pwError} />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setChangingPw(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy}>
+                Update password
               </Button>
             </DialogFooter>
           </form>

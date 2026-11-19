@@ -46,10 +46,7 @@ function highlightPlaceholders(text: string): ReactNode[] {
     const start = match.index;
     if (start > cursor) nodes.push(text.slice(cursor, start));
     nodes.push(
-      <code
-        key={start}
-        className="rounded-xs border border-primary/25 bg-accent px-1 py-0.5 font-mono text-[11px] font-medium text-accent-foreground"
-      >
+      <code key={start} className="font-mono text-[0.92em] font-medium text-primary-ink">
         {match[0]}
       </code>,
     );
@@ -126,7 +123,7 @@ export function TemplatesPage() {
       )}
 
       <div className="overflow-hidden rounded-md border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3.5 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/25 px-3.5 py-2.5">
           <div className="relative w-full sm:w-72">
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -201,14 +198,12 @@ export function TemplatesPage() {
               const locales = ["default", ...Object.keys(t.translations ?? {})];
               return (
                 <TableRow key={t.name}>
-                  <TableCell className="align-top">
-                    <code className="rounded-sm border bg-muted/60 px-1.5 py-0.5 font-mono text-xs font-medium text-foreground">
-                      {t.name}
-                    </code>
+                  <TableCell className="py-3 align-top">
+                    <span className="font-mono text-xs font-medium text-foreground">{t.name}</span>
                   </TableCell>
-                  <TableCell className="max-w-md whitespace-normal align-top">
-                    <div className="grid gap-0.5">
-                      <span className="text-[13px] font-medium leading-snug break-words text-foreground">
+                  <TableCell className="max-w-md py-3 whitespace-normal align-top">
+                    <div className="grid gap-1">
+                      <span className="text-[13px] leading-snug font-medium break-words text-foreground">
                         {highlightPlaceholders(t.title)}
                       </span>
                       {t.body && (
@@ -218,28 +213,24 @@ export function TemplatesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="hidden align-top sm:table-cell">
+                  <TableCell className="hidden py-3 align-top sm:table-cell">
                     {t.category ? (
                       <Badge variant={t.category === "marketing" ? "warning" : "secondary"}>
                         {t.category === "marketing" ? "Marketing" : "Transactional"}
                       </Badge>
                     ) : (
-                      <Badge variant="outline">Any</Badge>
+                      <span className="text-xs text-muted-foreground">Any</span>
                     )}
                   </TableCell>
-                  <TableCell className="hidden align-top md:table-cell">
-                    <div className="flex flex-wrap gap-1">
-                      {locales.map((l) => (
-                        <Badge key={l} variant="outline" className="font-mono text-[10px]">
-                          {l}
-                        </Badge>
-                      ))}
-                    </div>
+                  <TableCell className="hidden py-3 align-top md:table-cell">
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {locales.join(", ")}
+                    </span>
                   </TableCell>
-                  <TableCell className="hidden text-right align-top text-xs tabular-nums text-muted-foreground lg:table-cell">
+                  <TableCell className="hidden py-3 text-right align-top text-xs tabular-nums text-muted-foreground lg:table-cell">
                     {formatDate(t.updatedAt)}
                   </TableCell>
-                  <TableCell className="text-right align-top">
+                  <TableCell className="py-2.5 text-right align-top">
                     <div className="inline-flex items-center gap-0.5">
                       <Button
                         variant="ghost"
@@ -253,6 +244,7 @@ export function TemplatesPage() {
                         variant="ghost"
                         size="icon-sm"
                         aria-label={`Delete ${t.name}`}
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                         onClick={() => setDeleting(t)}
                       >
                         <Trash2 />

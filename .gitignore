@@ -17,3 +17,4 @@ apps/admin/.impeccable/mocks/
 .github/hooks/impeccable.json
 .DS_Store
 graphify-out/
+.impeccable/

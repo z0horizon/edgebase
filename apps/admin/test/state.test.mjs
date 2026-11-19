@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  accessibleOnColor,
+  contrastRatio,
+  normalizeHex,
+  parseAccentPreference,
+  resolveAccentTokens,
+} from "../src/lib/accent.ts";
+import { parseAuthUrl } from "../src/lib/auth-url.ts";
+import {
   clearSessionDrafts,
   describeDevice,
   describeNetwork,
@@ -160,5 +168,66 @@ describe("webauthn helpers", () => {
       describePasskey({ name: "", aaguid: "00000000-0000-0000-0000-000000000000" }),
       "Passkey",
     );
+  });
+});
+
+describe("accent palette resolution", () => {
+  it("normalizes custom hex inputs and parses presets safely", () => {
+    assert.equal(normalizeHex("0ea5e9"), "#0EA5E9");
+    assert.equal(normalizeHex("invalid"), null);
+    assert.equal(parseAccentPreference("cobalt"), "cobalt");
+    assert.equal(parseAccentPreference("custom:#0ea5e9"), "custom:#0EA5E9");
+    assert.equal(parseAccentPreference("custom:nope"), "ocean");
+  });
+
+  it("guarantees accessible text contrast for presets and arbitrary custom accents", () => {
+    assert.equal(accessibleOnColor("#FACC15"), "#141518");
+    assert.equal(accessibleOnColor("#2554D9"), "#FFFFFF");
+    const lightCustom = resolveAccentTokens("custom:#FACC15", false);
+    assert.ok(contrastRatio(lightCustom.primaryInk, "#FFFFFF") >= 4.5);
+    assert.ok(contrastRatio(lightCustom.accentForeground, lightCustom.accent) >= 4.5);
+    const darkCustom = resolveAccentTokens("custom:#1E293B", true);
+    assert.ok(contrastRatio(darkCustom.primaryInk, "#181A1D") >= 4.5);
+  });
+});
+
+describe("parseAuthUrl", () => {
+  it("extracts password reset token and cleans URL without triggering OAuth error", () => {
+    const res = parseAuthUrl("?token=abc123", "#reset-password");
+    assert.equal(res.state.initialMode, "reset");
+    assert.equal(res.state.resetToken, "abc123");
+    assert.equal(res.state.oauthError, "");
+    assert.equal(res.cleanedHash, "#reset-password");
+  });
+
+  it("distinguishes invalid reset and verification links from OAuth errors", () => {
+    const resetErr = parseAuthUrl("?error=INVALID_TOKEN", "#reset-password");
+    assert.equal(resetErr.state.initialMode, "reset");
+    assert.ok(resetErr.state.authError.length > 0);
+    assert.equal(resetErr.state.oauthError, "");
+
+    const verifyErr = parseAuthUrl("?error=INVALID_TOKEN", "#verified");
+    assert.equal(verifyErr.state.initialMode, "verified");
+    assert.ok(verifyErr.state.authError.includes("verification"));
+    assert.equal(verifyErr.state.oauthError, "");
+
+    const bareTokenErr = parseAuthUrl("?error=INVALID_TOKEN", "");
+    assert.equal(bareTokenErr.state.initialMode, "reset");
+    assert.equal(bareTokenErr.state.oauthError, "");
+
+    const oauthErr = parseAuthUrl("?error=access_denied", "");
+    assert.equal(oauthErr.state.initialMode, "signin");
+    assert.equal(oauthErr.state.oauthError, "Sign-in failed (access denied).");
+  });
+
+  it("checks contrast of all presets including dark Indigo button contrast", () => {
+    const darkIndigo = resolveAccentTokens("indigo", true);
+    assert.ok(contrastRatio(darkIndigo.primary, darkIndigo.primaryForeground) >= 4.5);
+  });
+
+  it("maps hash shortcuts for sign-up, forgot-password, and email verification", () => {
+    assert.equal(parseAuthUrl("", "#signup").state.initialMode, "signup");
+    assert.equal(parseAuthUrl("", "#forgot-password").state.initialMode, "forgot");
+    assert.equal(parseAuthUrl("", "#verified").state.initialMode, "verified");
   });
 });

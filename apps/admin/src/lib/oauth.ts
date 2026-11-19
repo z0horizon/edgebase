@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { type AuthUrlState, parseAuthUrl } from "@/lib/auth-url";
 
 export const PROVIDERS = [
   { id: "google", label: "Google" },
@@ -8,7 +9,12 @@ export const PROVIDERS = [
 ] as const;
 export type Provider = (typeof PROVIDERS)[number]["id"];
 
-type SignInOptions = { appName: string; providers: string[]; emailPassword: boolean };
+type SignInOptions = {
+  appName: string;
+  providers: string[];
+  emailPassword: boolean;
+  turnstileRequired: boolean;
+};
 
 const STORAGE_KEY = "edgebase:sign-in-options";
 
@@ -28,7 +34,16 @@ function readStored(): SignInOptions | null {
       "emailPassword" in v &&
       typeof v.emailPassword === "boolean"
     ) {
-      return { appName: v.appName, providers: v.providers, emailPassword: v.emailPassword };
+      const turnstileRequired =
+        "turnstileRequired" in v && typeof v.turnstileRequired === "boolean"
+          ? v.turnstileRequired
+          : false;
+      return {
+        appName: v.appName,
+        providers: v.providers,
+        emailPassword: v.emailPassword,
+        turnstileRequired,
+      };
     }
   } catch {
     // Storage blocked or a bad value: start without it.
@@ -47,6 +62,7 @@ function loadSignInOptions(): Promise<SignInOptions> {
         appName: r.appName || "EdgeBase",
         providers: r.providers ?? [],
         emailPassword: r.emailPassword !== false,
+        turnstileRequired: r.turnstileRequired === true,
       };
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(last));
@@ -65,15 +81,23 @@ function loadSignInOptions(): Promise<SignInOptions> {
 
 /**
  * What the server says about itself: the product name (APP_NAME), the providers it has credentials
- * for and whether email and password is on. Until it answers, the last answer this browser saw, or
- * else no name, no providers and null; when the request fails, the password form stays reachable.
+ * for, whether email and password is on, and whether Turnstile verification is enabled.
  */
 export function useSignInOptions() {
   const [options, setOptions] = useState<{
     appName: string;
     providers: string[];
     emailPassword: boolean | null;
-  }>(() => last ?? { appName: "", providers: [], emailPassword: null });
+    turnstileRequired: boolean;
+  }>(
+    () =>
+      last ?? {
+        appName: "",
+        providers: [],
+        emailPassword: null,
+        turnstileRequired: false,
+      },
+  );
   useEffect(() => {
     let live = true;
     loadSignInOptions()
@@ -85,6 +109,7 @@ export function useSignInOptions() {
             appName: prev.appName || "EdgeBase",
             providers: prev.providers,
             emailPassword: prev.emailPassword ?? true,
+            turnstileRequired: prev.turnstileRequired,
           })),
       );
     return () => {
@@ -96,6 +121,7 @@ export function useSignInOptions() {
     appName: options.appName,
     providers: PROVIDERS.filter((p) => on.has(p.id)),
     emailPassword: options.emailPassword,
+    turnstileRequired: options.turnstileRequired,
   };
 }
 
@@ -103,7 +129,7 @@ export function useSignInOptions() {
 export function useAppName() {
   const { appName } = useSignInOptions();
   useEffect(() => {
-    if (appName) document.title = `${appName} Console`;
+    if (appName) document.title = `${appName} Control Plane`;
   }, [appName]);
   return appName;
 }
@@ -112,18 +138,6 @@ export function useAppName() {
 export function useProviders() {
   return useSignInOptions().providers;
 }
-
-const KNOWN_ERRORS = new Set([
-  "account_not_linked",
-  "access_denied",
-  "unable_to_link_account",
-  "unable_to_get_user_info",
-  "email_not_found",
-  "email_doesn't_match",
-  "account_already_linked_to_different_user",
-  "state_mismatch",
-  "please_restart_the_process",
-]);
 
 /** Leaves for the provider; it comes back to this page, with ?error=<code> on failure. */
 export async function startOAuth(
@@ -139,20 +153,31 @@ export async function startOAuth(
   location.assign(url);
 }
 
-// Read once at load and removed from the URL, so it is shown once even when React renders twice.
-// The URL is anyone's to craft, so only known codes are shown verbatim.
-let pendingError = (() => {
-  const code = new URLSearchParams(location.search).get("error");
-  if (!code) return "";
-  history.replaceState(null, "", location.pathname + location.hash);
-  return KNOWN_ERRORS.has(code)
-    ? `Sign-in failed (${code.replaceAll("_", " ")}).`
-    : "Sign-in failed.";
+// Read once at load and scrub query secrets/errors from URL history.
+let initialUrlState: AuthUrlState | null = (() => {
+  const parsed = parseAuthUrl(location.search, location.hash);
+  if (parsed.cleanedHash !== null) {
+    history.replaceState(null, "", location.pathname + parsed.cleanedHash);
+  }
+  return parsed.state;
 })();
+
+let pendingOAuthError = initialUrlState?.oauthError ?? "";
+
+/** Consumes the initial parsed auth redirect state (reset token, verification/reset errors, initial mode). */
+export function takeAuthUrlState(): AuthUrlState {
+  if (initialUrlState) {
+    const snapshot = initialUrlState;
+    initialUrlState = null;
+    pendingOAuthError = "";
+    return snapshot;
+  }
+  return parseAuthUrl(location.search, location.hash).state;
+}
 
 /** The ?error a failed OAuth round trip left, as a message; empty after the first call. */
 export function takeOAuthError(): string {
-  const error = pendingError;
-  pendingError = "";
+  const error = pendingOAuthError;
+  pendingOAuthError = "";
   return error;
 }

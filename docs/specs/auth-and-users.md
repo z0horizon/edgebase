@@ -134,13 +134,15 @@ user routes answer `503`.
     keeps that provider.
     Banning deletes the user's sessions and `trusted_device` rows, so the next request answers `401`. The first admin comes
     from `pnpm admin:create` or bootstrap (see deployment.md). The `/admin` page (`apps/admin/`)
-    signs admins in with a Passkey, Google, GitHub or Apple, or with email, password and TOTP (or backup code,
-    with optional 30-day device trust), walks an
-    admin with a password session and no TOTP/passkey through registering a passkey or setting up TOTP (QR code,
-    confirming code, backup codes), links/unlinks providers and manages passkeys, active sessions and trusted devices
-    on its Account view, inspects/revokes user sessions on Users, and sends pushes and edits templates with the
-    admin session (see api.md, Authentication). It is served with a CSP that allows only its own
-    scripts, and renders user data as text.
+    provides an Auth Portal (`#signin`, `#signup`, `#forgot-password`, `#reset-password`, `#verified`)
+    with Passkey, Google, GitHub or Apple, and email + password + TOTP (or backup code, with optional 30-day
+    device trust), account registration with email verification resend (and `X-Captcha-Response` input when
+    `turnstileRequired` is true), password reset requests and token redemption, a signed-in non-admin view
+    with password update, a 2FA setup flow for admin password sessions lacking TOTP/passkey, linking/unlinking
+    providers and managing passkeys, active sessions, trusted devices, password changes, and live
+    Light/Dark/System + primary accent color preferences on Account, inspecting/revoking user sessions on
+    Users, and sending pushes and editing templates with the admin session (see api.md, Authentication).
+    It is served with a CSP that allows only its own scripts, and renders user data as text.
 12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;
     social and passkey sign-ins are not challenged. `POST /api/auth/two-factor/enable { password }` returns the
     TOTP URI (issuer: `APP_NAME`, default `EdgeBase`) and backup codes; 2FA is on once a code is confirmed

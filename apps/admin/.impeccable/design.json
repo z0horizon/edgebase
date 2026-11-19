@@ -1,648 +1,110 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-18T11:02:00Z",
-  "title": "Design System: EdgeBase Admin Console",
+  "generatedAt": "2026-11-19T16:28:00Z",
+  "title": "Design System: EdgeBase Control Plane",
   "extensions": {
     "colorMeta": {
-      "cobalt-primary": {
+      "ocean-primary": {
         "role": "primary",
-        "displayName": "Cobalt Primary",
-        "description": "Primary commit buttons, checked checkboxes, progress bars, text carets, and light-mode focus rings.",
+        "displayName": "Ocean Primary",
+        "description": "Default primary button fill, checked checkboxes, progress indicators, and focus rings (overridable via AccentSwatchPicker).",
         "tonalRamp": [
-          "oklch(18% 0.055 264)",
-          "oklch(28% 0.11 264)",
-          "oklch(39% 0.165 264)",
-          "oklch(49% 0.195 264)",
-          "oklch(61% 0.175 264)",
-          "oklch(74% 0.125 264)",
-          "oklch(87% 0.06 264)",
-          "oklch(95% 0.02 264)"
+          "#082f49",
+          "#0c4a6e",
+          "#075985",
+          "#0369a1",
+          "#0284c7",
+          "#38bdf8",
+          "#bae6fd",
+          "#e6f0f6"
         ]
       },
-      "cobalt-primary-dark": {
+      "ocean-primary-dark": {
         "role": "primary",
-        "displayName": "Cobalt Primary (Dark)",
-        "description": "Dark-mode primary commit action fill, checked control fill, and progress bar indicator.",
+        "displayName": "Ocean Primary (Dark)",
+        "description": "Dark-mode primary button fill paired with #141518 foreground ink for WCAG AA contrast.",
         "tonalRamp": [
-          "oklch(18% 0.055 264)",
-          "oklch(29% 0.115 264)",
-          "oklch(41% 0.17 264)",
-          "oklch(53% 0.198 264)",
-          "oklch(64% 0.175 264)",
-          "oklch(76% 0.12 264)",
-          "oklch(88% 0.058 264)",
-          "oklch(95% 0.02 264)"
+          "#082f49",
+          "#0c4a6e",
+          "#075985",
+          "#0369a1",
+          "#0ea5e9",
+          "#38bdf8",
+          "#bae6fd",
+          "#e6f0f6"
         ]
       },
-      "cobalt-ink": {
-        "role": "primary",
-        "displayName": "Cobalt Ink",
-        "description": "Light-mode inline text links, active sidebar icons, and focused border-notched floating labels.",
-        "tonalRamp": [
-          "oklch(17% 0.052 264)",
-          "oklch(26% 0.105 264)",
-          "oklch(36% 0.155 264)",
-          "oklch(45% 0.182 264)",
-          "oklch(58% 0.168 264)",
-          "oklch(72% 0.12 264)",
-          "oklch(86% 0.058 264)",
-          "oklch(95% 0.02 264)"
-        ]
-      },
-      "cobalt-ink-dark": {
-        "role": "primary",
-        "displayName": "Cobalt Ink (Dark)",
-        "description": "Dark-mode inline text links, active sidebar icons, and focused border-notched floating labels.",
-        "tonalRamp": [
-          "oklch(18% 0.05 264)",
-          "oklch(30% 0.105 264)",
-          "oklch(42% 0.155 264)",
-          "oklch(55% 0.175 264)",
-          "oklch(68% 0.15 264)",
-          "oklch(76% 0.125 264)",
-          "oklch(87% 0.065 264)",
-          "oklch(95% 0.022 264)"
-        ]
-      },
-      "cobalt-wash": {
-        "role": "primary",
-        "displayName": "Cobalt Wash",
-        "description": "Light-mode soft cobalt tint for Admin badges, active locale tabs, selected rows, and text selection.",
-        "tonalRamp": [
-          "oklch(18% 0.055 264)",
-          "oklch(29% 0.11 264)",
-          "oklch(41% 0.165 264)",
-          "oklch(53% 0.185 264)",
-          "oklch(66% 0.155 264)",
-          "oklch(79% 0.1 264)",
-          "oklch(90% 0.045 264)",
-          "oklch(96% 0.016 264)"
-        ]
-      },
-      "cobalt-wash-dark": {
-        "role": "primary",
-        "displayName": "Cobalt Wash (Dark)",
-        "description": "Dark-mode deep cobalt wash behind Admin badges, active locale tabs, and selected table rows.",
-        "tonalRamp": [
-          "oklch(18% 0.045 264)",
-          "oklch(25% 0.068 264)",
-          "oklch(35% 0.11 264)",
-          "oklch(47% 0.155 264)",
-          "oklch(60% 0.15 264)",
-          "oklch(73% 0.11 264)",
-          "oklch(86% 0.055 264)",
-          "oklch(95% 0.02 264)"
-        ]
-      },
-      "cobalt-wash-ink": {
-        "role": "primary",
-        "displayName": "Cobalt Wash Ink",
-        "description": "High-contrast cobalt foreground paired with Cobalt Wash in light mode.",
-        "tonalRamp": [
-          "oklch(16% 0.05 264)",
-          "oklch(25% 0.105 264)",
-          "oklch(35% 0.155 264)",
-          "oklch(43% 0.178 264)",
-          "oklch(56% 0.165 264)",
-          "oklch(70% 0.118 264)",
-          "oklch(85% 0.056 264)",
-          "oklch(95% 0.018 264)"
-        ]
-      },
-      "cobalt-wash-ink-dark": {
-        "role": "primary",
-        "displayName": "Cobalt Wash Ink (Dark)",
-        "description": "High-contrast pale cobalt foreground paired with Cobalt Wash in dark mode.",
-        "tonalRamp": [
-          "oklch(18% 0.05 264)",
-          "oklch(30% 0.1 264)",
-          "oklch(43% 0.15 264)",
-          "oklch(56% 0.17 264)",
-          "oklch(69% 0.145 264)",
-          "oklch(81% 0.095 264)",
-          "oklch(90% 0.048 264)",
-          "oklch(96% 0.018 264)"
-        ]
-      },
-      "focus-ring-dark": {
-        "role": "primary",
-        "displayName": "Focus Ring (Dark)",
-        "description": "Luminous cobalt outline for dark-mode focus-visible rings on controls and sidebar navigation.",
-        "tonalRamp": [
-          "oklch(18% 0.055 264)",
-          "oklch(30% 0.115 264)",
-          "oklch(43% 0.17 264)",
-          "oklch(55% 0.19 264)",
-          "oklch(65% 0.175 264)",
-          "oklch(77% 0.125 264)",
-          "oklch(88% 0.062 264)",
-          "oklch(95% 0.022 264)"
-        ]
-      },
-      "canvas-paper": {
+      "canvas-stone": {
         "role": "neutral",
-        "displayName": "Canvas Paper",
-        "description": "Light-mode root workspace canvas and recessed segmented-control track.",
+        "displayName": "Archival Stone",
+        "description": "Warm stone workspace canvas behind white specification sheets in Light mode.",
         "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#1d2028",
-          "#2d323e",
-          "#555d6d",
-          "#cfd5df",
-          "#eff1f5",
-          "#f8f9fb"
+          "#191a1c",
+          "#3a3a37",
+          "#5e5d58",
+          "#8f8d85",
+          "#c6c3b9",
+          "#dcdad3",
+          "#eae8e1",
+          "#f3f2ee"
         ]
       },
-      "canvas-obsidian": {
+      "canvas-graphite": {
         "role": "neutral",
-        "displayName": "Canvas Obsidian",
-        "description": "Dark-mode root workspace and authentication viewport canvas.",
+        "displayName": "Matte Graphite",
+        "description": "Deep neutral dark workspace canvas paired with #141518 rail and #181a1d card sheets.",
         "tonalRamp": [
-          "#08090b",
-          "#0b0c0e",
-          "#111317",
-          "#1a1d24",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#eceef2"
-        ]
-      },
-      "surface-sheet": {
-        "role": "neutral",
-        "displayName": "Surface Sheet",
-        "description": "Light-mode card, table ledger, input, popover, authentication sheet, and primary button foreground.",
-        "tonalRamp": [
-          "#0b0c0e",
-          "#15181f",
-          "#22262f",
-          "#555d6d",
-          "#969daa",
-          "#e2e5eb",
-          "#f2f4f7",
-          "#ffffff"
-        ]
-      },
-      "surface-ledger-dark": {
-        "role": "neutral",
-        "displayName": "Surface Ledger (Dark)",
-        "description": "Dark-mode primary surface for tables, bordered section ledgers, inputs, and authentication sheets.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#161920",
-          "#22262f",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#eceef2"
-        ]
-      },
-      "surface-popover-dark": {
-        "role": "neutral",
-        "displayName": "Surface Popover (Dark)",
-        "description": "Dark-mode elevated surface for DropdownMenu and Select overlays.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#15181e",
-          "#1d2028",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#eceef2"
-        ]
-      },
-      "rail-surface": {
-        "role": "neutral",
-        "displayName": "Rail Surface",
-        "description": "Light-mode sticky 224px left navigation rail background.",
-        "tonalRamp": [
-          "#08090b",
-          "#161920",
-          "#22262f",
-          "#555d6d",
-          "#969daa",
-          "#dfe3ea",
-          "#e4e8ef",
-          "#f1f3f6"
-        ]
-      },
-      "rail-obsidian": {
-        "role": "neutral",
-        "displayName": "Rail Obsidian (Dark)",
-        "description": "Dark-mode sticky 224px left navigation rail background, stepped darker than the workspace canvas.",
-        "tonalRamp": [
-          "#08090b",
-          "#0b0c0e",
-          "#111317",
-          "#161920",
-          "#1d2028",
-          "#2d323e",
-          "#969daa",
-          "#eceef2"
-        ]
-      },
-      "rail-active": {
-        "role": "neutral",
-        "displayName": "Rail Active",
-        "description": "Light-mode selected navigation link fill and open account-trigger highlight.",
-        "tonalRamp": [
-          "#08090b",
-          "#161920",
-          "#22262f",
-          "#555d6d",
-          "#969daa",
-          "#cfd5df",
-          "#e4e8ef",
-          "#f8f9fb"
-        ]
-      },
-      "rail-active-dark": {
-        "role": "neutral",
-        "displayName": "Rail Active (Dark)",
-        "description": "Dark-mode selected navigation link fill and open account-trigger highlight.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#161920",
-          "#1d2028",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#eceef2"
-        ]
-      },
-      "surface-muted": {
-        "role": "neutral",
-        "displayName": "Surface Muted",
-        "description": "Light-mode table header wash, ledger section header wash, and subtle row hover base.",
-        "tonalRamp": [
-          "#0b0c0e",
-          "#15181f",
-          "#22262f",
-          "#555d6d",
-          "#969daa",
-          "#dfe3ea",
-          "#f2f4f7",
-          "#ffffff"
-        ]
-      },
-      "surface-muted-dark": {
-        "role": "neutral",
-        "displayName": "Surface Muted (Dark)",
-        "description": "Dark-mode table header wash, ledger section header wash, and subtle row hover base.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#15181f",
-          "#1a1d24",
-          "#22262f",
-          "#555d6d",
-          "#969daa",
-          "#eceef2"
-        ]
-      },
-      "surface-secondary": {
-        "role": "neutral",
-        "displayName": "Surface Secondary",
-        "description": "Light-mode neutral badge fill, menu item focus state, secondary button fill, and progress track.",
-        "tonalRamp": [
-          "#0b0c0e",
-          "#1a1d24",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#dfe3ea",
-          "#eff1f5",
-          "#f8f9fb"
-        ]
-      },
-      "surface-secondary-dark": {
-        "role": "neutral",
-        "displayName": "Surface Secondary (Dark)",
-        "description": "Dark-mode neutral badge fill, menu item focus state, secondary button fill, and progress track.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#1a1d24",
-          "#22262f",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#e2e5ec"
-        ]
-      },
-      "ink-carbon": {
-        "role": "neutral",
-        "displayName": "Ink Carbon",
-        "description": "Light-mode primary text for headings, emails, active navigation labels, and primary ledger values.",
-        "tonalRamp": [
-          "#111318",
-          "#1c2029",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#cfd5df",
-          "#e2e5eb",
-          "#f8f9fb"
-        ]
-      },
-      "ink-chalk": {
-        "role": "neutral",
-        "displayName": "Ink Chalk (Dark)",
-        "description": "Dark-mode crisp off-white primary foreground text across headings, tables, and controls.",
-        "tonalRamp": [
-          "#0b0c0e",
-          "#15181f",
-          "#22262f",
-          "#555d6d",
-          "#969daa",
-          "#cfd5df",
-          "#e2e5ec",
-          "#eceef2"
-        ]
-      },
-      "ink-slate": {
-        "role": "neutral",
-        "displayName": "Ink Slate",
-        "description": "Light-mode muted foreground for table column headers, secondary metadata, placeholders, and inactive icons.",
-        "tonalRamp": [
-          "#111318",
-          "#1c2029",
-          "#2d323e",
-          "#555d6d",
-          "#7a8394",
-          "#969daa",
-          "#cfd5df",
-          "#f2f4f7"
-        ]
-      },
-      "ink-slate-dark": {
-        "role": "neutral",
-        "displayName": "Ink Slate (Dark)",
-        "description": "Dark-mode muted foreground for table column headers, secondary metadata, placeholders, and inactive icons.",
-        "tonalRamp": [
-          "#0b0c0e",
-          "#1a1d24",
-          "#2d323e",
-          "#555d6d",
-          "#7a8394",
-          "#969daa",
-          "#cfd5df",
-          "#eceef2"
-        ]
-      },
-      "border-hairline": {
-        "role": "neutral",
-        "displayName": "Border Hairline",
-        "description": "Light-mode 1px structural border around table ledgers, dialogs, popovers, and row dividers.",
-        "tonalRamp": [
-          "#111318",
-          "#22262f",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#cfd5df",
-          "#e2e5eb",
-          "#f8f9fb"
-        ]
-      },
-      "border-hairline-dark": {
-        "role": "neutral",
-        "displayName": "Border Hairline (Dark)",
-        "description": "Dark-mode 1px structural border around table ledgers, dialogs, popovers, and row dividers.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#1d2028",
-          "#22262f",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#e2e5eb"
-        ]
-      },
-      "border-rail": {
-        "role": "neutral",
-        "displayName": "Border Rail",
-        "description": "Light-mode 1px divider separating the sidebar rail, wordmark header, nav groups, and account slot.",
-        "tonalRamp": [
-          "#111318",
-          "#1d2028",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#cfd5df",
-          "#dfe3ea",
-          "#f1f3f6"
-        ]
-      },
-      "border-rail-dark": {
-        "role": "neutral",
-        "displayName": "Border Rail (Dark)",
-        "description": "Dark-mode 1px divider separating the sidebar rail, wordmark header, nav groups, and account slot.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#161920",
-          "#1d2028",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#dfe3ea"
-        ]
-      },
-      "border-control": {
-        "role": "neutral",
-        "displayName": "Border Control",
-        "description": "Light-mode higher-contrast 1px resting stroke on text inputs, selects, checkboxes, and outline buttons.",
-        "tonalRamp": [
-          "#111318",
-          "#22262f",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#cfd5df",
-          "#e2e5eb",
-          "#ffffff"
-        ]
-      },
-      "border-control-dark": {
-        "role": "neutral",
-        "displayName": "Border Control (Dark)",
-        "description": "Dark-mode higher-contrast 1px resting stroke on text inputs, selects, checkboxes, and outline buttons.",
-        "tonalRamp": [
-          "#08090b",
-          "#111317",
-          "#1a1d24",
-          "#22262f",
-          "#2d323e",
-          "#555d6d",
-          "#969daa",
-          "#eceef2"
-        ]
-      },
-      "emerald-status": {
-        "role": "neutral",
-        "displayName": "Emerald Status",
-        "description": "Light-mode semantic confirmation for Active accounts, Current sessions, Linked providers, and delivered pushes.",
-        "tonalRamp": [
-          "oklch(18% 0.04 160)",
-          "oklch(29% 0.075 160)",
-          "oklch(40% 0.105 160)",
-          "oklch(51% 0.125 160)",
-          "oklch(64% 0.14 160)",
-          "oklch(77% 0.15 160)",
-          "oklch(88% 0.075 160)",
-          "oklch(95% 0.028 160)"
-        ]
-      },
-      "emerald-status-dark": {
-        "role": "neutral",
-        "displayName": "Emerald Status (Dark)",
-        "description": "Dark-mode semantic confirmation for Active accounts, Current sessions, Linked providers, and delivered pushes.",
-        "tonalRamp": [
-          "oklch(18% 0.04 160)",
-          "oklch(29% 0.075 160)",
-          "oklch(40% 0.105 160)",
-          "oklch(51% 0.125 160)",
-          "oklch(64% 0.14 160)",
-          "oklch(77% 0.15 160)",
-          "oklch(88% 0.075 160)",
-          "oklch(95% 0.028 160)"
-        ]
-      },
-      "amber-status": {
-        "role": "neutral",
-        "displayName": "Amber Status",
-        "description": "Light-mode semantic caution for ASN/country origin shifts, Unverified emails, Scheduled pushes, and Marketing tags.",
-        "tonalRamp": [
-          "oklch(19% 0.042 68)",
-          "oklch(31% 0.085 68)",
-          "oklch(43% 0.12 68)",
-          "oklch(55% 0.145 68)",
-          "oklch(69% 0.16 75)",
-          "oklch(83% 0.16 82)",
-          "oklch(90% 0.085 84)",
-          "oklch(96% 0.032 85)"
-        ]
-      },
-      "amber-status-dark": {
-        "role": "neutral",
-        "displayName": "Amber Status (Dark)",
-        "description": "Dark-mode semantic caution for ASN/country origin shifts, Unverified emails, Scheduled pushes, and Marketing tags.",
-        "tonalRamp": [
-          "oklch(19% 0.042 68)",
-          "oklch(31% 0.085 68)",
-          "oklch(43% 0.12 68)",
-          "oklch(55% 0.145 68)",
-          "oklch(69% 0.16 75)",
-          "oklch(83% 0.16 82)",
-          "oklch(90% 0.085 84)",
-          "oklch(96% 0.032 85)"
+          "#111214",
+          "#141518",
+          "#181a1d",
+          "#202227",
+          "#2b2e35",
+          "#3a3e48",
+          "#9c9e9a",
+          "#f0efea"
         ]
       },
       "crimson-danger": {
-        "role": "neutral",
-        "displayName": "Crimson Danger",
-        "description": "Light-mode destructive status for Banned accounts, failed deliveries, inline alerts, and solid destructive buttons.",
+        "role": "semantic",
+        "displayName": "Signal Crimson",
+        "description": "Destructive revocations (Revoke all), row removal triggers (Remove / Unlink), Banned status pills, and inline error banners.",
         "tonalRamp": [
-          "oklch(18% 0.055 25)",
-          "oklch(29% 0.105 25)",
-          "oklch(40% 0.155 25)",
-          "oklch(52% 0.19 25)",
-          "oklch(64% 0.18 25)",
-          "oklch(76% 0.125 25)",
-          "oklch(87% 0.065 25)",
-          "oklch(95% 0.024 25)"
-        ]
-      },
-      "crimson-danger-dark": {
-        "role": "neutral",
-        "displayName": "Crimson Danger (Dark)",
-        "description": "Dark-mode destructive status text and badge accent for Banned accounts, failed deliveries, and Log out.",
-        "tonalRamp": [
-          "oklch(18% 0.055 25)",
-          "oklch(29% 0.105 25)",
-          "oklch(40% 0.155 25)",
-          "oklch(52% 0.19 25)",
-          "oklch(68% 0.175 25)",
-          "oklch(78% 0.12 25)",
-          "oklch(88% 0.062 25)",
-          "oklch(95% 0.024 25)"
+          "#450a0a",
+          "#7f1d1d",
+          "#b02323",
+          "#c92a2a",
+          "#ef4444",
+          "#f06565",
+          "#fca5a5",
+          "#fee2e2"
         ]
       }
     },
     "typographyMeta": {
-      "display": {
-        "displayName": "Display",
-        "purpose": "Centered 24px regular-weight headings on Universal Login and second-factor enrollment sheets."
-      },
-      "headline": {
-        "displayName": "Headline",
-        "purpose": "18px semibold top-level console page headers (PageHeader)."
-      },
-      "title": {
-        "displayName": "Title",
-        "purpose": "14px semibold modal titles, sidebar wordmark, and 13px bordered ledger section headers."
-      },
-      "body": {
-        "displayName": "Body",
-        "purpose": "13px default operational prose, table cells, buttons, inputs, and navigation links."
-      },
-      "label": {
-        "displayName": "Label",
-        "purpose": "11px medium sentence-case table column headers, semantic status badges, and posture labels."
-      },
-      "mono": {
-        "displayName": "Monospace Telemetry",
-        "purpose": "11px-12px tabular-nums technical strings: IDs, ASN/IP origins, TOTP codes, and template placeholders."
-      }
+      "display": { "displayName": "Heading 22", "purpose": "Auth card titles and console PageHeader titles." },
+      "wordmark": { "displayName": "Brand Wordmark", "purpose": "App name next to geometric 2x2 BrandMark." },
+      "nav": { "displayName": "Sidebar Top Link", "purpose": "Top-level navigation links and group buttons." },
+      "body": { "displayName": "Body 13", "purpose": "Default prose, form labels, controls, and ledger rows." },
+      "label": { "displayName": "Table & Chip Label", "purpose": "Column headers, badges, metric titles, and step tabs." },
+      "micro": { "displayName": "Telemetry Micro", "purpose": "Mono capacity caps (CAP 20/50/500), percentages, and hex swatches." }
     },
     "shadows": [
       {
         "name": "auth-sheet-light",
-        "value": "0 12px 40px -10px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.04)",
-        "purpose": "Lifts the centered 400px Universal Login sheet off the light diagonal-split canvas."
+        "value": "0 10px 32px -12px rgba(25,26,28,0.09), 0 1px 3px rgba(25,26,28,0.04)",
+        "purpose": "Subtle lift under the standalone 440px auth sheet in Light mode."
       },
       {
         "name": "auth-sheet-dark",
-        "value": "0 20px 50px -12px rgba(0, 0, 0, 0.65)",
-        "purpose": "Grounds the dark authentication card over #0b0c0e obsidian canvas alongside a 1px hairline."
-      },
-      {
-        "name": "popover-menu",
-        "value": "0 8px 24px -6px rgba(0, 0, 0, 0.18)",
-        "purpose": "Separates floating DropdownMenuContent and SelectContent overlays from dense table rows."
-      },
-      {
-        "name": "modal-dialog",
-        "value": "0 16px 40px -10px rgba(0, 0, 0, 0.28)",
-        "purpose": "Elevates DialogContent and AlertDialogContent above the 55% black viewport backdrop."
-      },
-      {
-        "name": "notification-specimen",
-        "value": "0 2px 8px -2px rgba(0, 0, 0, 0.08)",
-        "purpose": "Isolates the simulated device push card inside the Send payload inspector well."
+        "value": "0 22px 52px -16px rgba(0,0,0,0.65)",
+        "purpose": "Ambient grounding beneath dark-mode centered auth sheets."
       }
     ],
     "motion": [
       {
-        "name": "micro-surface",
-        "value": "100ms cubic-bezier(0.4, 0, 0.2, 1)",
-        "purpose": "Sidebar navigation items, account menu trigger, checkboxes, and table row hover highlights."
-      },
-      {
         "name": "control-transition",
-        "value": "150ms cubic-bezier(0, 0, 0.2, 1)",
-        "purpose": "Buttons, text inputs, border-notched floating label travel, and dialog/menu fade transitions."
-      },
-      {
-        "name": "metric-bar",
-        "value": "200ms cubic-bezier(0.4, 0, 0.2, 1)",
-        "purpose": "Open-rate progress bar width interpolation in Sent pushes."
+        "value": "150ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Crisp color and border state transitions for buttons, sidebar links, and swatch pickers."
       }
     ],
     "breakpoints": [
@@ -653,124 +115,53 @@
   },
   "components": [
     {
-      "name": "Primary Button",
+      "name": "Primary Button (Ocean Default)",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Single primary commit trigger per view (32px height, 6px radius, scarce Cobalt Primary fill).",
-      "html": "<button type=\"button\" class=\"ds-btn-primary\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\"/><path d=\"m21.854 2.147-10.94 10.939\"/></svg><span>Send push</span></button>",
-      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 6px 12px 6px 10px; border-radius: 6px; border: 1px solid transparent; background: var(--primary, #2554d9); color: var(--primary-foreground, #ffffff); font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; outline: none; transition: background-color 150ms cubic-bezier(0, 0, 0.2, 1), border-color 150ms cubic-bezier(0, 0, 0.2, 1), box-shadow 150ms cubic-bezier(0, 0, 0.2, 1); } .ds-btn-primary svg { width: 14px; height: 14px; flex-shrink: 0; } .ds-btn-primary:hover { background: #214bc2; } .ds-btn-primary:focus-visible { border-color: var(--ring, #2554d9); box-shadow: 0 0 0 2px rgba(37, 84, 217, 0.35); } .ds-btn-primary:active { background: #1d42ad; }"
+      "description": "Primary form submission or view CTA driven by --primary.",
+      "html": "<button class=\"ds-btn-primary\">Sign in</button>",
+      "css": ".ds-btn-primary { display:inline-flex; align-items:center; justify-content:center; height:36px; padding:0 16px; border-radius:4px; border:1px solid transparent; background:var(--primary,#0369a1); color:var(--primary-foreground,#ffffff); font-size:13px; font-weight:500; transition:opacity 150ms; } .ds-btn-primary:hover { opacity:0.9; }"
     },
     {
-      "name": "Outline Button",
+      "name": "Destructive Outline Button",
       "kind": "button",
-      "refersTo": "button-outline",
-      "description": "Default secondary action for session revocation, refresh, and section-header controls.",
-      "html": "<button type=\"button\" class=\"ds-btn-outline\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 6h18\"/><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"/><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"/></svg><span>Revoke</span></button>",
-      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 6px; border: 1px solid var(--input, #cfd5df); background: var(--card, #ffffff); color: var(--foreground, #111318); font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; outline: none; transition: background-color 150ms cubic-bezier(0, 0, 0.2, 1), border-color 150ms cubic-bezier(0, 0, 0.2, 1), box-shadow 150ms cubic-bezier(0, 0, 0.2, 1); } .ds-btn-outline svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--muted-foreground, #555d6d); } .ds-btn-outline:hover { background: var(--secondary, #eff1f5); border-color: var(--border, #e2e5eb); } .ds-btn-outline:focus-visible { border-color: var(--ring, #2554d9); box-shadow: 0 0 0 2px rgba(37, 84, 217, 0.35); }"
+      "refersTo": "button-destructive-outline",
+      "description": "Row-level Remove, Unlink, and Revoke triggers with accessible crimson tint.",
+      "html": "<button class=\"ds-btn-danger-outline\">Remove</button>",
+      "css": ".ds-btn-danger-outline { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px; border-radius:4px; border:1px solid rgba(201,42,42,0.45); background:rgba(201,42,42,0.06); color:#c92a2a; font-size:12px; font-weight:500; } .ds-btn-danger-outline:hover { background:rgba(201,42,42,0.12); border-color:rgba(201,42,42,0.7); }"
     },
     {
-      "name": "Destructive Button",
-      "kind": "button",
-      "refersTo": "button-destructive",
-      "description": "High-consequence confirmation trigger for account bans and permanent template deletion.",
-      "html": "<button type=\"button\" class=\"ds-btn-destructive\">Ban account</button>",
-      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 6px 12px; border-radius: 6px; border: 1px solid transparent; background: #c92a2a; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; outline: none; transition: background-color 150ms cubic-bezier(0, 0, 0.2, 1), box-shadow 150ms cubic-bezier(0, 0, 0.2, 1); } .ds-btn-destructive:hover { background: #b02323; } .ds-btn-destructive:focus-visible { box-shadow: 0 0 0 2px rgba(201, 42, 42, 0.35); }"
-    },
-    {
-      "name": "Border-Notched Floating Input",
-      "kind": "input",
-      "refersTo": "input-floating",
-      "description": "52px Universal Login credential input with a 150ms border-notched floating label.",
-      "html": "<div class=\"ds-float-wrap\"><input id=\"ds-email\" class=\"ds-float-input\" type=\"email\" value=\"ops@edgebase.internal\" placeholder=\" \" /><label for=\"ds-email\" class=\"ds-float-label\">Email address <span aria-hidden=\"true\">*</span></label></div>",
-      "css": ".ds-float-wrap { position: relative; width: 280px; font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; } .ds-float-input { width: 100%; height: 52px; padding: 0 14px; border-radius: 4px; border: 1px solid #c2c8d0; background: var(--card, #ffffff); color: var(--foreground, #111318); font-size: 15px; outline: none; transition: border-color 150ms ease, box-shadow 150ms ease; } .ds-float-input:hover { border-color: #9aa3b2; } .ds-float-input:focus, .ds-float-input:focus-visible { border-color: var(--primary, #2554d9); box-shadow: 0 0 0 1px var(--primary, #2554d9); } .ds-float-label { pointer-events: none; user-select: none; position: absolute; top: 0; left: 10px; transform: translateY(-50%); background: var(--card, #ffffff); padding: 0 4px; font-size: 12px; line-height: 1; color: var(--muted-foreground, #555d6d); transition: top 150ms ease, font-size 150ms ease, color 150ms ease; } .ds-float-input:placeholder-shown + .ds-float-label { top: 50%; font-size: 15px; } .ds-float-input:focus + .ds-float-label, .ds-float-input:focus-visible + .ds-float-label { top: 0; font-size: 12px; color: var(--primary-ink, #1e46b8); }"
-    },
-    {
-      "name": "Status Badge",
-      "kind": "chip",
-      "refersTo": "badge-success",
-      "description": "4px-radius 11px semantic status pills for account verification, roles, ASN shifts, and bans.",
-      "html": "<div class=\"ds-badge-row\"><span tabindex=\"0\" class=\"ds-badge ds-badge-success\"><span class=\"ds-badge-dot\" aria-hidden=\"true\"></span>Active</span><span tabindex=\"0\" class=\"ds-badge ds-badge-primary\">Admin</span><span tabindex=\"0\" class=\"ds-badge ds-badge-warning\">ASN / country changed</span><span tabindex=\"0\" class=\"ds-badge ds-badge-danger\">Banned</span></div>",
-      "css": ".ds-badge-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; } .ds-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; border: 1px solid transparent; font-size: 11px; font-weight: 500; line-height: 1; white-space: nowrap; outline: none; transition: border-color 120ms ease, box-shadow 120ms ease; } .ds-badge:focus-visible { border-color: var(--ring, #2554d9); box-shadow: 0 0 0 2px rgba(37, 84, 217, 0.35); } .ds-badge-dot { width: 6px; height: 6px; border-radius: 9999px; background: #059669; } .ds-badge-success { background: rgba(16, 185, 129, 0.1); border-color: rgba(5, 150, 105, 0.25); color: #065f46; } .ds-badge-success:hover { border-color: rgba(5, 150, 105, 0.45); } .ds-badge-primary { background: var(--accent, #edf2fd); border-color: rgba(37, 84, 217, 0.25); color: var(--accent-foreground, #1b3ea8); } .ds-badge-primary:hover { border-color: rgba(37, 84, 217, 0.45); } .ds-badge-warning { background: rgba(245, 158, 11, 0.1); border-color: rgba(217, 119, 6, 0.3); color: #92400e; } .ds-badge-warning:hover { border-color: rgba(217, 119, 6, 0.5); } .ds-badge-danger { background: rgba(201, 42, 42, 0.1); border-color: rgba(201, 42, 42, 0.3); color: var(--destructive, #c92a2a); } .ds-badge-danger:hover { border-color: rgba(201, 42, 42, 0.5); }"
-    },
-    {
-      "name": "Sidebar Nav + Account Trigger",
+      "name": "Tailscale-Style Collapsible Nav Leaf",
       "kind": "nav",
       "refersTo": "nav-item-active",
-      "description": "224px typographic rail slice with active/inactive section links and the bottom Account popover trigger.",
-      "html": "<aside class=\"ds-rail\" aria-label=\"Console rail preview\"><nav class=\"ds-rail-nav\"><a href=\"#users\" aria-current=\"page\" class=\"ds-nav-link ds-nav-link-active\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/></svg><span>Users</span></a><a href=\"#send\" class=\"ds-nav-link\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\"/><path d=\"m21.854 2.147-10.94 10.939\"/></svg><span>Send push</span></a></nav><div class=\"ds-rail-footer\"><button type=\"button\" class=\"ds-account-btn\"><span class=\"ds-account-email\">ops@edgebase.internal</span><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg></button></div></aside>",
-      "css": ".ds-rail { width: 224px; border-radius: 6px; border: 1px solid var(--sidebar-border, #dfe3ea); background: var(--sidebar, #f1f3f6); color: var(--sidebar-foreground, #111318); font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; overflow: hidden; } .ds-rail-nav { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; } .ds-nav-link { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 6px; font-size: 13px; text-decoration: none; color: var(--muted-foreground, #555d6d); outline: none; transition: background-color 100ms ease, color 100ms ease, box-shadow 100ms ease; } .ds-nav-link svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--muted-foreground, #555d6d); transition: color 100ms ease; } .ds-nav-link:hover { background: rgba(228, 232, 239, 0.65); color: var(--sidebar-foreground, #111318); } .ds-nav-link:hover svg { color: var(--sidebar-foreground, #111318); } .ds-nav-link-active, .ds-nav-link-active:hover { background: var(--sidebar-accent, #e4e8ef); color: var(--sidebar-accent-foreground, #111318); font-weight: 500; } .ds-nav-link-active svg, .ds-nav-link-active:hover svg { color: var(--primary-ink, #1e46b8); } .ds-nav-link:focus-visible, .ds-account-btn:focus-visible { box-shadow: 0 0 0 2px var(--sidebar-ring, #2554d9); } .ds-rail-footer { border-top: 1px solid var(--sidebar-border, #dfe3ea); padding: 8px; } .ds-account-btn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 36px; padding: 0 10px; border: none; border-radius: 6px; background: transparent; color: var(--sidebar-foreground, #111318); font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; outline: none; transition: background-color 100ms ease, box-shadow 100ms ease; } .ds-account-btn:hover { background: var(--sidebar-accent, #e4e8ef); } .ds-account-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-account-btn svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--muted-foreground, #555d6d); }"
-    },
-    {
-      "name": "Ledger Table Row",
-      "kind": "custom",
-      "refersTo": "table-ledger-row",
-      "description": "1px-bordered operational table ledger with sentence-case header wash, copyable mono ID chip, and tabular timestamp.",
-      "html": "<div class=\"ds-ledger\"><table class=\"ds-table\"><thead><tr><th>Account</th><th>User ID</th><th>Status</th><th class=\"ds-num\">Joined</th></tr></thead><tbody><tr class=\"ds-row\"><td class=\"ds-email\">ops@edgebase.internal</td><td><button type=\"button\" class=\"ds-id-chip\"><span>usr_01j8k2…</span><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/></svg></button></td><td><span class=\"ds-row-badge\"><span class=\"ds-row-dot\" aria-hidden=\"true\"></span>Active</span></td><td class=\"ds-num ds-date\">2026-11-18</td></tr></tbody></table></div>",
-      "css": ".ds-ledger { width: 100%; border-radius: 6px; border: 1px solid var(--border, #e2e5eb); background: var(--card, #ffffff); overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; } .ds-table { width: 100%; border-collapse: collapse; font-size: 13px; color: var(--foreground, #111318); } .ds-table thead { background: rgba(242, 244, 247, 0.7); border-bottom: 1px solid var(--border, #e2e5eb); } .ds-table th { height: 32px; padding: 0 12px; text-align: left; font-size: 11px; font-weight: 500; letter-spacing: 0.01em; color: var(--muted-foreground, #555d6d); white-space: nowrap; } .ds-table td { padding: 10px 12px; vertical-align: middle; white-space: nowrap; } .ds-row { transition: background-color 100ms ease; } .ds-row:hover { background: rgba(242, 244, 247, 0.55); } .ds-email { font-weight: 500; } .ds-id-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border, #e2e5eb); background: rgba(242, 244, 247, 0.5); color: var(--muted-foreground, #555d6d); font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; cursor: pointer; outline: none; transition: border-color 120ms ease, color 120ms ease, box-shadow 120ms ease; } .ds-id-chip svg { width: 10px; height: 10px; } .ds-id-chip:hover { border-color: var(--input, #cfd5df); color: var(--foreground, #111318); } .ds-id-chip:focus-visible { border-color: var(--ring, #2554d9); box-shadow: 0 0 0 2px rgba(37, 84, 217, 0.3); } .ds-row-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(5, 150, 105, 0.25); background: rgba(16, 185, 129, 0.1); color: #065f46; font-size: 11px; font-weight: 500; line-height: 1; } .ds-row-dot { width: 6px; height: 6px; border-radius: 9999px; background: #059669; } .ds-num { text-align: right; font-variant-numeric: tabular-nums; } .ds-date { font-size: 12px; color: var(--muted-foreground, #555d6d); }"
+      "description": "Active route leaf nested under a 1px vertical guide hairline.",
+      "html": "<div class=\"ds-nav-tree\"><a class=\"ds-nav-leaf active\" href=\"#pushes\">Sent pushes</a></div>",
+      "css": ".ds-nav-tree { margin-left:19px; padding-left:12px; border-left:1px solid #dcdad3; } .ds-nav-leaf { display:flex; align-items:center; height:32px; padding:0 10px; border-radius:4px; font-size:13px; color:#5e5d58; text-decoration:none; } .ds-nav-leaf.active { background:#e6f0f6; color:#075985; font-weight:500; }"
     }
   ],
   "narrative": {
-    "northStar": "The Architectural Security Ledger",
-    "overview": "EdgeBase Admin Console speaks in the quiet, high-density dialect of enterprise infrastructure and identity tooling—aligned with Cloudflare Dashboard, WorkOS, Stripe Dashboard, and Auth0 Universal Login. The system reconciles two distinct operational moments within one coherent visual language: an unhurried, high-trust authentication sheet for credential and second-factor verification, and a crisp, zero-chrome operational workspace where D1 accounts, WebAuthn passkeys, ASN/ISP session origins, and FCM delivery batches read like entries in an engineering ledger.\n\nEvery surface is engineered for sustained legibility across bright daytime offices and dark late-night incident windows under a strict zero-CDN Content Security Policy (`script-src 'self'`). Hierarchy comes from stepped carbon-slate neutrals, continuous `1px` hairlines, compact `13px` body rhythm, and tabular monospace telemetry rather than ornamental containers. The system explicitly rejects decorative AI-era tropes: no glowing icon tiles above headings, no invented brand marks, no purple or electric-blue gradients, no fake live-status indicator dots in navigation chrome, no segmented three-icon theme boxes, and no nested card-in-card clutter.",
+    "northStar": "The Technical Spec Sheet",
+    "overview": "EdgeBase pairs calm Dieter Rams / Braun product catalog clarity with Tailscale-style tonal consistency and structured tree hierarchy, anchored by Ocean Blue default chroma and live primary color customization.",
     "keyCharacteristics": [
-      "Dual-pace cadence pairing spacious `400px` Universal Login sheets (`52px` border-notched floating inputs) with dense `13px` operational tables and key-value ledgers.",
-      "Carbon-slate architectural neutrals across full-parity Light (`#f8f9fb` canvas, `#ffffff` sheets) and Dark (`#0b0c0e` canvas, `#111317` sheets) themes.",
-      "Single cobalt-indigo interactive voice (`#2554d9` light / `#2f5ee5` dark) backed by strictly semantic emerald, amber, and crimson telemetry tokens.",
-      "Clamped `2px`–`8px` geometry (`6px` console default, `4px`–`5px` authentication sheet) with `1px` structural hairlines instead of ambient card shadows.",
-      "Zero-CDN system neo-grotesque and monospace stacks tuned with OpenType disambiguation (`cv02`, `cv03`, `cv04`, `cv11`) and `tabular-nums` alignment."
+      "Unified all-light (#FFFFFF on #F3F2EE) and all-dark (#141518 on #111214) rail polarity.",
+      "Default Ocean Blue (#0369A1 / #0EA5E9) primary accent with live 8-preset + custom hex selector.",
+      "Tailscale-inspired collapsible Push notifications tree with clean geometric icons and zero BellRing clutter.",
+      "Centered 440px Auth Portal with balanced 3-column OAuth buttons and direct WebAuthn passkey prompts."
     ],
     "rules": [
-      {
-        "name": "The Scarce Cobalt Rule",
-        "body": "Cobalt Primary (`#2554d9` light / `#2f5ee5` dark) appears on at most one primary commit action per view alongside checked form states, active progress fills, and focus rings; secondary toolbar and row actions always step back to `outline` or `ghost` neutrals.",
-        "section": "colors"
-      },
-      {
-        "name": "The Semantic-Only Chroma Rule",
-        "body": "Emerald (`#0f7b55` / `#34d399`), amber (`#b45309` / `#fbbf24`), and crimson (`#c92a2a` / `#f06565`) encode live account, security, or delivery state exclusively—never decorative tags, avatars, or illustration accents.",
-        "section": "colors"
-      },
-      {
-        "name": "The Stepped-Luminance Dark Rule",
-        "body": "Dark mode establishes hierarchy by stepping surface luminance—from `#08090b` rail to `#0b0c0e` canvas, `#111317` ledger, and `#15181e` popover—paired with `1px` `#22262f` hairlines rather than glowing borders or heavy drop shadows.",
-        "section": "colors"
-      },
-      {
-        "name": "The Tabular Telemetry Rule",
-        "body": "Every numeric count, timestamp, batch metric, character limit (`12/64`), and TOTP verification input enforces `font-variant-numeric: tabular-nums` (`0.25em` tracking on 6-digit TOTP fields) so vertical columns and live counters never shift width.",
-        "section": "typography"
-      },
-      {
-        "name": "The Sentence-Case Chrome Rule",
-        "body": "All page titles, table headers, badges, buttons, and section labels use natural sentence case; uppercase tracking is forbidden across console chrome except for the single `12px` (`0.06em` tracked) `\"OR\"` divider inside authentication sheets.",
-        "section": "typography"
-      },
-      {
-        "name": "The Continuous-Ledger Rule",
-        "body": "Related records—accounts, active sessions, passkeys, OAuth providers, trusted devices, and templates—always inhabit a single `1px`-bordered `bg-card` container subdivided by full-width `1px` `divide-y` hairlines, never individual floating cards per item or nested bordered boxes inside cards.",
-        "section": "layout"
-      },
-      {
-        "name": "The Flat-Workspace Rule",
-        "body": "In-flow tables, section containers, metric strips, navigation items, and buttons carry zero `box-shadow` in resting, hover, or active states; shadows belong exclusively to portaled overlays, authentication sheets, and the isolated notification preview card.",
-        "section": "elevation"
-      }
+      { "name": "The Unified Tonal Parity Rule", "body": "Sidebar and workspace maintain consistent light or dark polarity without dark-on-light contrast splits.", "section": "colors" },
+      { "name": "The Live AA Accent Rule", "body": "User-selected accent colors compute WCAG AA (>= 4.6:1) foreground ink dynamically.", "section": "colors" },
+      { "name": "The Destructive Separation Rule", "body": "All removal, revocation, and unlink actions use semantic Crimson variants.", "section": "colors" }
     ],
     "dos": [
-      "**Do** keep Cobalt Primary (`#2554d9` light / `#2f5ee5` dark) scarce—at most one primary action button per screen—while rendering secondary row, header, and dialog actions in `outline` or `ghost` variants.",
-      "**Do** group related operational items (users, sessions, passkeys, OAuth links, trusted devices, templates) inside a single `6px`-radius `1px`-bordered `bg-card` ledger subdivided by `1px` hairlines.",
-      "**Do** apply `font-variant-numeric: tabular-nums` and the monospace stack (`SF Mono`, `JetBrains Mono`) to all IDs, ASN/IP origin strings, timestamps, counters, and TOTP codes.",
-      "**Do** reserve the `52px` border-notched `FloatingInput` (`4px` radius, `15px` text) for standalone Universal Login sheets and use compact `32px` (`28px` toolbar) `Input` controls (`6px` radius, `13px` text) inside the console.",
-      "**Do** house theme switching (`System`, `Light`, `Dark`) inside the unified Account `DropdownMenu` radio group rather than persistent multi-button toggles in the header or sidebar.",
-      "**Do** maintain full light/dark parity using stepped architectural luminance (`#f8f9fb` / `#ffffff` light; `#08090b` / `#0b0c0e` / `#111317` / `#15181e` dark) and `1px` hairlines."
+      "Do keep light mode all-light (#FFFFFF rail + #F3F2EE ground) and dark mode all-dark (#141518 rail + #111214 ground).",
+      "Do route theme and accent changes through setThemePreference and setAccentPreference.",
+      "Do mark removal and revocation buttons with crimson destructive variants."
     ],
     "donts": [
-      "**Don't** place decorative glowing icon tiles above headings, invent brand logo marks, or add fake live-status indicator pills to the sidebar or page headers.",
-      "**Don't** introduce purple, neon, or electric-blue gradients, glassmorphism blurs, or ambient drop shadows on in-flow tables, posture strips, or cards.",
-      "**Don't** exceed the `8px` (`0.5rem`) corner-radius ceiling or render pill-shaped (`9999px`) buttons, inputs, or navigation items.",
-      "**Don't** nest bordered cards inside other bordered cards; separate subsections with full-bleed `1px` hairlines and `35%` muted header bars instead.",
-      "**Don't** set console headings, section titles, or table column headers in tracked-out `UPPERCASE` kickers or eyebrows.",
-      "**Don't** load external webfont CDNs, remote icon scripts, or third-party assets that violate the Worker's self-contained `script-src 'self'` CSP."
+      "Don't add decorative marketing side panels beside centered authentication sheets.",
+      "Don't wrap template keys, locales, user IDs, or {{variables}} in bordered pill boxes.",
+      "Don't use BellRing glyphs or uppercase eyebrows above headings."
     ]
   }
 }

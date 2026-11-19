@@ -1,13 +1,20 @@
 import { useSyncExternalStore } from "react";
+import {
+  type AccentPreference,
+  DEFAULT_ACCENT,
+  parseAccentPreference,
+  resolveAccentTokens,
+} from "./accent";
 
 export type ThemePreference = "system" | "light" | "dark";
 
-const STORAGE_KEY = "edgebase:theme";
+const THEME_STORAGE_KEY = "edgebase:theme";
+const ACCENT_STORAGE_KEY = "edgebase:accent";
 const listeners = new Set<() => void>();
 
-function readStoredPreference(): ThemePreference {
+function readStoredTheme(): ThemePreference {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(THEME_STORAGE_KEY);
     if (raw === "light" || raw === "dark" || raw === "system") return raw;
   } catch {
     // Storage may be blocked in strict privacy contexts; default to system.
@@ -15,7 +22,16 @@ function readStoredPreference(): ThemePreference {
   return "system";
 }
 
+function readStoredAccent(): AccentPreference {
+  try {
+    return parseAccentPreference(localStorage.getItem(ACCENT_STORAGE_KEY));
+  } catch {
+    return DEFAULT_ACCENT;
+  }
+}
+
 let currentPreference: ThemePreference = "system";
+let currentAccent: AccentPreference = DEFAULT_ACCENT;
 let initialized = false;
 
 function resolveDark(pref: ThemePreference): boolean {
@@ -24,22 +40,34 @@ function resolveDark(pref: ThemePreference): boolean {
   return typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
-function applyDocumentTheme(pref: ThemePreference) {
+function applyDocumentAppearance(pref: ThemePreference, accentPref: AccentPreference) {
   if (typeof document === "undefined") return;
   const isDark = resolveDark(pref);
-  document.documentElement.classList.toggle("dark", isDark);
-  document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+  const root = document.documentElement;
+  root.classList.toggle("dark", isDark);
+  root.style.colorScheme = isDark ? "dark" : "light";
+
+  const tokens = resolveAccentTokens(accentPref, isDark);
+  root.style.setProperty("--primary", tokens.primary);
+  root.style.setProperty("--primary-foreground", tokens.primaryForeground);
+  root.style.setProperty("--primary-ink", tokens.primaryInk);
+  root.style.setProperty("--accent", tokens.accent);
+  root.style.setProperty("--accent-foreground", tokens.accentForeground);
+  root.style.setProperty("--ring", tokens.ring);
+  root.style.setProperty("--sidebar-primary", tokens.sidebarPrimary);
+  root.style.setProperty("--sidebar-ring", tokens.ring);
 }
 
 export function initTheme() {
   if (initialized || typeof window === "undefined") return;
   initialized = true;
-  currentPreference = readStoredPreference();
-  applyDocumentTheme(currentPreference);
+  currentPreference = readStoredTheme();
+  currentAccent = readStoredAccent();
+  applyDocumentAppearance(currentPreference, currentAccent);
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   media.addEventListener("change", () => {
     if (currentPreference === "system") {
-      applyDocumentTheme("system");
+      applyDocumentAppearance("system", currentAccent);
       for (const listener of listeners) listener();
     }
   });
@@ -48,12 +76,24 @@ export function initTheme() {
 export function setThemePreference(next: ThemePreference) {
   currentPreference = next;
   try {
-    if (next === "system") localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, next);
+    if (next === "system") localStorage.removeItem(THEME_STORAGE_KEY);
+    else localStorage.setItem(THEME_STORAGE_KEY, next);
   } catch {
     // Ignore storage write errors and still apply in-memory.
   }
-  applyDocumentTheme(next);
+  applyDocumentAppearance(currentPreference, currentAccent);
+  for (const listener of listeners) listener();
+}
+
+export function setAccentPreference(next: AccentPreference) {
+  currentAccent = next;
+  try {
+    if (next === DEFAULT_ACCENT) localStorage.removeItem(ACCENT_STORAGE_KEY);
+    else localStorage.setItem(ACCENT_STORAGE_KEY, next);
+  } catch {
+    // Ignore storage write errors and still apply in-memory.
+  }
+  applyDocumentAppearance(currentPreference, currentAccent);
   for (const listener of listeners) listener();
 }
 
@@ -65,7 +105,10 @@ function subscribe(listener: () => void) {
 export function useTheme(): {
   preference: ThemePreference;
   resolved: "light" | "dark";
+  accent: AccentPreference;
+  accentSwatch: string;
   setPreference: (next: ThemePreference) => void;
+  setAccent: (next: AccentPreference) => void;
 } {
   initTheme();
   const preference = useSyncExternalStore(
@@ -73,9 +116,18 @@ export function useTheme(): {
     () => currentPreference,
     () => "system" as ThemePreference,
   );
+  const accent = useSyncExternalStore(
+    subscribe,
+    () => currentAccent,
+    () => DEFAULT_ACCENT,
+  );
+  const isDark = resolveDark(preference);
   return {
     preference,
-    resolved: resolveDark(preference) ? "dark" : "light",
+    resolved: isDark ? "dark" : "light",
+    accent,
+    accentSwatch: resolveAccentTokens(accent, isDark).swatchHex,
     setPreference: setThemePreference,
+    setAccent: setAccentPreference,
   };
 }

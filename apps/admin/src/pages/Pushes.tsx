@@ -1,5 +1,5 @@
 import { STATS_KEPT_DAYS, STATS_LISTED } from "@edgebase/core/limits";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Send } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader, PushUnconfiguredBanner } from "@/components/PageHeader";
@@ -42,7 +42,13 @@ export function PushesPage() {
   const totalSent = pushes?.reduce((acc, p) => acc + p.sent, 0) ?? 0;
   const totalFailed = pushes?.reduce((acc, p) => acc + p.failed, 0) ?? 0;
   const totalOpened = pushes?.reduce((acc, p) => acc + p.opened, 0) ?? 0;
-  const totalUsers = pushes?.reduce((acc, p) => acc + p.users, 0) ?? 0;
+  const openDenominator =
+    pushes?.reduce((acc, p) => acc + (p.users > 0 ? p.users : p.sent), 0) ?? 0;
+  const openRatePct =
+    openDenominator > 0 ? Math.round(Math.min(totalOpened / openDenominator, 1) * 100) : 0;
+  const deliveryDenominator = totalSent + totalFailed;
+  const deliveryRatePct =
+    deliveryDenominator > 0 ? Math.round((totalSent / deliveryDenominator) * 100) : 0;
 
   return (
     <>
@@ -52,6 +58,14 @@ export function PushesPage() {
       >
         <Button variant="outline" size="sm" onClick={load}>
           <RefreshCw /> Refresh
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            location.hash = "#send";
+          }}
+        >
+          <Send /> New push
         </Button>
       </PageHeader>
 
@@ -64,39 +78,76 @@ export function PushesPage() {
       )}
 
       {pushes && pushes.length > 0 && (
-        <div className="mb-4 grid grid-cols-2 overflow-hidden rounded-md border bg-card sm:grid-cols-4">
-          <div className="flex items-baseline justify-between gap-2 border-r border-b px-3.5 py-2.5 sm:border-b-0">
-            <span className="text-xs text-muted-foreground">Batches</span>
-            <span className="text-sm font-semibold tabular-nums text-foreground">
+        <section
+          aria-label="Dispatch summary"
+          className="mb-4 grid grid-cols-2 divide-y overflow-hidden rounded-md border bg-card sm:grid-cols-4 sm:divide-x sm:divide-y-0"
+        >
+          <div className="grid gap-1.5 px-4 py-3">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Batches</span>
+              <span className="font-mono text-[10px]">CAP {STATS_LISTED}</span>
+            </div>
+            <span className="text-base font-semibold tabular-nums text-foreground">
               {pushes.length}
             </span>
+            <div className="h-[3px] overflow-hidden rounded-xs bg-muted" role="presentation">
+              <div
+                className="h-full bg-primary"
+                style={{
+                  width: `${Math.min(100, Math.round((pushes.length / STATS_LISTED) * 100))}%`,
+                }}
+              />
+            </div>
           </div>
-          <div className="flex items-baseline justify-between gap-2 border-b px-3.5 py-2.5 sm:border-r sm:border-b-0">
-            <span className="text-xs text-muted-foreground">Delivered</span>
-            <span className="text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+
+          <div className="grid gap-1.5 border-l px-4 py-3 sm:border-l-0">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Delivered</span>
+              <span className="font-mono text-[10px] tabular-nums">{deliveryRatePct}%</span>
+            </div>
+            <span className="text-base font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
               {totalSent.toLocaleString()}
             </span>
+            <div className="h-[3px] overflow-hidden rounded-xs bg-muted" role="presentation">
+              <div
+                className="h-full bg-emerald-600 dark:bg-emerald-400"
+                style={{ width: `${deliveryRatePct}%` }}
+              />
+            </div>
           </div>
-          <div className="flex items-baseline justify-between gap-2 border-r px-3.5 py-2.5">
-            <span className="text-xs text-muted-foreground">Failed</span>
+
+          <div className="grid gap-1 px-4 py-3">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Failed</span>
+              <span className="font-mono text-[10px] tabular-nums">
+                {deliveryDenominator > 0
+                  ? `${Math.round((totalFailed / deliveryDenominator) * 100)}%`
+                  : "0%"}
+              </span>
+            </div>
             <span
-              className={`text-sm font-semibold tabular-nums ${totalFailed ? "text-destructive" : "text-foreground"}`}
+              className={`text-base font-semibold tabular-nums ${totalFailed ? "text-destructive" : "text-foreground"}`}
             >
               {totalFailed.toLocaleString()}
             </span>
-          </div>
-          <div className="flex items-baseline justify-between gap-2 px-3.5 py-2.5">
-            <span className="text-xs text-muted-foreground">Opened</span>
-            <span className="text-sm font-semibold tabular-nums text-foreground">
-              {totalOpened.toLocaleString()}
-              {totalUsers > 0 && (
-                <span className="ml-1 text-xs font-normal text-muted-foreground">
-                  ({Math.round(Math.min(totalOpened / totalUsers, 1) * 100)}%)
-                </span>
-              )}
+            <span className="text-[11px] text-muted-foreground">
+              Across {totalSent + totalFailed} token attempts
             </span>
           </div>
-        </div>
+
+          <div className="grid gap-1.5 border-l px-4 py-3 sm:border-l-0">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Opened</span>
+              <span className="font-mono text-[10px] tabular-nums">{openRatePct}%</span>
+            </div>
+            <span className="text-base font-semibold tabular-nums text-foreground">
+              {totalOpened.toLocaleString()}
+            </span>
+            <div className="h-[3px] overflow-hidden rounded-xs bg-muted" role="presentation">
+              <div className="h-full bg-primary" style={{ width: `${openRatePct}%` }} />
+            </div>
+          </div>
+        </section>
       )}
 
       <div className="overflow-hidden rounded-md border bg-card">

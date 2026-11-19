@@ -69,7 +69,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | GET | `/admin/` | admin (in the page) | admin web page, static assets |
 | POST | `/v1/opens` | user | report that the user opened a push |
 | POST | `/v1/topics/{topic}/subscribe`, `/unsubscribe` | user | add or remove a device token on a topic (web) |
-| GET | `/v1/auth/providers` | none | `{ appName, providers: ["google" \| "github" \| "apple"], emailPassword: boolean }`: the product name (`APP_NAME`), providers whose credentials are set, and whether email and password sign-in is on (`EMAIL_PASSWORD`) |
+| GET | `/v1/auth/providers` | none | `{ appName, providers: ["google" \| "github" \| "apple"], emailPassword: boolean, turnstileRequired: boolean }`: the product name (`APP_NAME`), providers whose credentials are set, whether email and password sign-in is on (`EMAIL_PASSWORD`), and whether sign-up / verification-resend / password-reset Turnstile checks are active (`TURNSTILE_SECRET_KEY`) |
 | GET | `/v1/auth/app-callback` | user (cookie) | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
 | POST | `/v1/auth/app-exchange` | none | redeem a hand-off token with its verifier for a bearer token |
 

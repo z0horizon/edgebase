@@ -1,4 +1,4 @@
-import { Laptop, Trash2 } from "lucide-react";
+import { ArrowRight, Laptop, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,9 +40,18 @@ function TelemetryRow({
   onAction?: (() => void) | undefined;
 }) {
   const shifted = networkShifted(item);
+  const originNet = describeNetwork({
+    city: item.createdCity,
+    country: item.createdCountry,
+    asOrganization: item.createdAsOrganization,
+    asn: item.createdAsn,
+    ipAddress: item.createdIp,
+  });
+  const currentNet = describeNetwork(item);
+
   return (
     <div className="flex flex-col justify-between gap-3 px-4 py-3 sm:flex-row sm:items-center">
-      <div className="grid min-w-0 gap-1">
+      <div className="grid min-w-0 gap-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           {icon}
           <span
@@ -54,23 +63,22 @@ function TelemetryRow({
           {badges}
           {shifted && <Badge variant="warning">ASN / country changed</Badge>}
         </div>
-        <p className="font-mono text-[11px] text-muted-foreground">{describeNetwork(item)}</p>
-        {shifted && (
-          <p className="font-mono text-[11px] text-muted-foreground">
-            {originLabel}:{" "}
-            {describeNetwork({
-              city: item.createdCity,
-              country: item.createdCountry,
-              asOrganization: item.createdAsOrganization,
-              asn: item.createdAsn,
-              ipAddress: item.createdIp,
-            })}
-          </p>
+
+        {shifted ? (
+          <div className="flex flex-wrap items-center gap-1.5 rounded-sm border bg-muted/45 px-2.5 py-1.5 font-mono text-[11px] text-foreground">
+            <span className="text-muted-foreground">{originLabel}:</span>
+            <span>{originNet}</span>
+            <ArrowRight className="size-3 shrink-0 text-amber-600 dark:text-amber-400" />
+            <span className="font-medium">{currentNet}</span>
+          </div>
+        ) : (
+          <p className="font-mono text-[11px] text-muted-foreground">{currentNet}</p>
         )}
+
         <p className="text-[11px] tabular-nums text-muted-foreground">{timeline}</p>
       </div>
       {onAction && (
-        <Button variant="outline" size="sm" disabled={busy} onClick={onAction}>
+        <Button variant="destructive-outline" size="sm" disabled={busy} onClick={onAction}>
           <Trash2 /> {actionLabel}
         </Button>
       )}

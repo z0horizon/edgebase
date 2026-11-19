@@ -174,6 +174,7 @@ app.get("/v1/auth/providers", (c) =>
     appName: appName(c.env),
     providers: Object.keys(configuredProviders(c.env)),
     emailPassword: emailPasswordEnabled(c.env),
+    turnstileRequired: Boolean(c.env.TURNSTILE_SECRET_KEY?.trim()),
   }),
 );
 app.get("/v1/auth/app-callback", appCallback);

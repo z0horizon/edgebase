@@ -4,6 +4,7 @@ import {
   Copy,
   Laptop,
   MoreHorizontal,
+  RefreshCw,
   Search,
   Send,
   ShieldCheck,
@@ -160,6 +161,13 @@ export function UsersPage({ me }: { me: User }) {
   const pageAllSelected =
     Boolean(users && users.length > 0) && users?.every((u) => u.id in selected);
 
+  const pageTotal = users?.length ?? 0;
+  const verifiedOnPage = users?.filter((u) => u.emailVerified && !u.banned).length ?? 0;
+  const twoFactorOnPage = users?.filter((u) => u.twoFactorEnabled).length ?? 0;
+  const verifiedPct = pageTotal > 0 ? Math.round((verifiedOnPage / pageTotal) * 100) : 0;
+  const twoFactorPct = pageTotal > 0 ? Math.round((twoFactorOnPage / pageTotal) * 100) : 0;
+  const recipientPct = Math.min(100, Math.round((selectedCount / MAX_RECIPIENTS) * 100));
+
   const togglePage = (checked: boolean) => {
     if (!users) return;
     const next = { ...selected };
@@ -186,10 +194,93 @@ export function UsersPage({ me }: { me: User }) {
       <PageHeader
         title="Users"
         description="Registered accounts, role grants, verification state, and active edge sessions."
-      />
+      >
+        <Button variant="outline" size="sm" onClick={load}>
+          <RefreshCw /> Refresh
+        </Button>
+        {selectedCount > 0 && (
+          <Button
+            size="sm"
+            onClick={() => {
+              sessionStorage.setItem(SEND_RECIPIENTS_KEY, JSON.stringify(selected));
+              location.hash = "#send";
+            }}
+          >
+            <Send /> Send push ({selectedCount})
+          </Button>
+        )}
+      </PageHeader>
+
+      {users !== null && (
+        <section
+          aria-label="Directory summary"
+          className="mb-4 grid grid-cols-2 divide-y overflow-hidden rounded-md border bg-card sm:grid-cols-4 sm:divide-x sm:divide-y-0"
+        >
+          <div className="grid gap-1 px-4 py-3">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>{query ? "Matching accounts" : "Total accounts"}</span>
+              <span className="font-mono text-[10px]">D1</span>
+            </div>
+            <span className="text-base font-semibold tabular-nums text-foreground">
+              {total.toLocaleString()}
+            </span>
+            <span className="text-[11px] text-muted-foreground">
+              Page {Math.floor(offset / PAGE) + 1} · {pageTotal} shown
+            </span>
+          </div>
+
+          <div className="grid gap-1.5 border-l px-4 py-3 sm:border-l-0">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Active (page)</span>
+              <span className="font-mono text-[10px] tabular-nums">{verifiedPct}%</span>
+            </div>
+            <span className="text-base font-semibold tabular-nums text-foreground">
+              {verifiedOnPage} / {pageTotal}
+            </span>
+            <div className="h-[3px] overflow-hidden rounded-xs bg-muted" role="presentation">
+              <div
+                className="h-full bg-emerald-600 transition-[width] duration-200 dark:bg-emerald-400"
+                style={{ width: `${verifiedPct}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-1.5 px-4 py-3">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>2FA enrolled (page)</span>
+              <span className="font-mono text-[10px] tabular-nums">{twoFactorPct}%</span>
+            </div>
+            <span className="text-base font-semibold tabular-nums text-foreground">
+              {twoFactorOnPage} / {pageTotal}
+            </span>
+            <div className="h-[3px] overflow-hidden rounded-xs bg-muted" role="presentation">
+              <div
+                className="h-full bg-primary transition-[width] duration-200"
+                style={{ width: `${twoFactorPct}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-1.5 border-l px-4 py-3 sm:border-l-0">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Selected recipients</span>
+              <span className="font-mono text-[10px] tabular-nums">CAP {MAX_RECIPIENTS}</span>
+            </div>
+            <span className="text-base font-semibold tabular-nums text-foreground">
+              {selectedCount}
+            </span>
+            <div className="h-[3px] overflow-hidden rounded-xs bg-muted" role="presentation">
+              <div
+                className="h-full bg-primary transition-[width] duration-200"
+                style={{ width: `${recipientPct}%` }}
+              />
+            </div>
+          </div>
+        </section>
+      )}
 
       <div className="overflow-hidden rounded-md border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3.5 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/25 px-3.5 py-2.5">
           <search className="w-full sm:w-auto">
             <form onSubmit={search} className="relative flex items-center gap-1.5 sm:w-72">
               <Search className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
@@ -217,23 +308,9 @@ export function UsersPage({ me }: { me: User }) {
 
           <div className="flex flex-wrap items-center gap-2">
             {selectedCount > 0 && (
-              <>
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {selectedCount} selected
-                </span>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    sessionStorage.setItem(SEND_RECIPIENTS_KEY, JSON.stringify(selected));
-                    location.hash = "#send";
-                  }}
-                >
-                  <Send /> Send push ({selectedCount})
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setSelected({})}>
-                  Clear
-                </Button>
-              </>
+              <Button variant="ghost" size="xs" onClick={() => setSelected({})}>
+                Clear selection ({selectedCount})
+              </Button>
             )}
             {users !== null && (
               <span className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -310,12 +387,12 @@ export function UsersPage({ me }: { me: User }) {
                   </TableCell>
                   <TableCell className="max-w-[175px] sm:max-w-none">
                     <div className="grid min-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0">
+                      <div className="flex min-w-0 items-center gap-1.5">
                         <span className="truncate font-medium text-foreground">{user.email}</span>
                         {user.id === me.id && (
-                          <Badge variant="outline" className="hidden sm:inline-flex">
-                            You
-                          </Badge>
+                          <span className="hidden text-[11px] text-muted-foreground sm:inline">
+                            (you)
+                          </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
@@ -323,7 +400,7 @@ export function UsersPage({ me }: { me: User }) {
                         <span className="sm:hidden">
                           {showDistinctName ? "· " : ""}
                           {isAdmin ? "Admin" : "User"}
-                          {user.id === me.id ? " (You)" : ""}
+                          {user.id === me.id ? " (you)" : ""}
                         </span>
                       </div>
                     </div>
@@ -337,7 +414,7 @@ export function UsersPage({ me }: { me: User }) {
                           .writeText(user.id)
                           .then(() => toast.success("User ID copied"))
                       }
-                      className="inline-flex items-center gap-1 rounded-sm border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground transition-colors hover:border-input hover:text-foreground"
+                      className="inline-flex items-center gap-1 rounded-sm px-1 py-0.5 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
                       <span>{user.id.slice(0, 10)}…</span>
                       <Copy className="size-2.5" />
@@ -350,7 +427,7 @@ export function UsersPage({ me }: { me: User }) {
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
                     {user.twoFactorEnabled ? (
-                      <Badge variant="outline">TOTP</Badge>
+                      <span className="font-mono text-xs text-foreground">TOTP</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}

@@ -742,7 +742,8 @@ export function SendPage() {
           <div className="bg-muted/25 p-3.5">
             <div className="rounded-md border bg-card p-3 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)]">
               <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span className="font-medium text-foreground">{appName}</span>
+                <span aria-hidden="true" className="size-2 rounded-[2px] bg-primary" />
+                <span className="font-medium text-foreground">{appName || "EdgeBase"}</span>
                 <span className="ml-auto font-mono text-[10px]">now</span>
               </div>
               <p

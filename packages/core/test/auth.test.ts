@@ -535,12 +535,18 @@ describe("social providers", () => {
   });
 
   it("GET /v1/auth/providers lists only providers with credentials", async () => {
-    const providers = async (bindings: Env) =>
-      (await (await call("/v1/auth/providers", {}, bindings)).json<{ providers: string[] }>())
-        .providers;
-    expect(await providers(env)).toContain("github");
+    const read = async (bindings: Env) =>
+      await (await call("/v1/auth/providers", {}, bindings)).json<{
+        providers: string[];
+        turnstileRequired: boolean;
+      }>();
+    expect((await read(env)).providers).toContain("github");
+    expect((await read(env)).turnstileRequired).toBe(false);
     expect(
-      await providers({ ...env, GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" }),
+      (await read({ ...env, TURNSTILE_SECRET_KEY: "turnstile-secret" } as Env)).turnstileRequired,
+    ).toBe(true);
+    expect(
+      (await read({ ...env, GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" })).providers,
     ).not.toContain("github");
   });
 
