@@ -14,6 +14,10 @@
   `POST /api/auth/sign-up/email`, `/api/auth/request-password-reset` and
   `/api/auth/send-verification-email`. Missing answers `400`, rejected answers `403`. Mobile apps
   get the token by rendering the Turnstile widget in a WebView, since Turnstile has no native SDK.
+- **`EMAIL_PASSWORD=off`**: `POST /api/auth/sign-in/email`, `/sign-up/email`,
+  `/request-password-reset`, `/reset-password`, `/change-password`, `/send-verification-email`
+  and `GET /api/auth/reset-password/*` answer `404 not_found`; `GET /v1/auth/providers` says
+  `emailPassword: false`.
 
 ## Errors and status codes
 
@@ -29,7 +33,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | 409 | `idempotency_in_progress`, `limit_reached` | key still running; template cap reached |
 | 413 | `payload_too_large` | request body exceeds 64 KB |
 | 422 | `idempotency_mismatch` | `Idempotency-Key` reused with another body |
-| 429 | `rate_limited` | auth rate limit hit |
+| 429 | `rate_limited` | auth rate limit, or a signed-in non-admin user's 120 calls (60 writing calls) a minute; `Retry-After: 60` |
 | 500 | `internal` | unexpected error |
 | 502 | `upstream_error` | Google's Instance ID API refused a topic change |
 | 503 | `not_configured` | a required secret is missing |
@@ -65,7 +69,7 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | GET | `/admin/` | admin (in the page) | admin web page, static assets |
 | POST | `/v1/opens` | user | report that the user opened a push |
 | POST | `/v1/topics/{topic}/subscribe`, `/unsubscribe` | user | add or remove a device token on a topic (web) |
-| GET | `/v1/auth/providers` | none | `{ providers: ["google" \| "github" \| "apple"] }`, those whose credentials are set |
+| GET | `/v1/auth/providers` | none | `{ appName, providers: ["google" \| "github" \| "apple"], emailPassword: boolean }`: the product name (`APP_NAME`), providers whose credentials are set, and whether email and password sign-in is on (`EMAIL_PASSWORD`) |
 | GET | `/v1/auth/app-callback` | user (cookie) | `302` to `<APP_SCHEME>://auth?token=<one-time token>` for native browser OAuth |
 | POST | `/v1/auth/app-exchange` | none | redeem a hand-off token with its verifier for a bearer token |
 

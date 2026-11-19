@@ -37,6 +37,7 @@ import {
   type User,
 } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { useSignInOptions } from "@/lib/oauth";
 import { fillPreview, SEND_RECIPIENTS_KEY } from "@/lib/state";
 
 const NONE = "none";
@@ -55,6 +56,7 @@ function parseVars(text: string): Record<string, string> {
 }
 
 export function SendPage() {
+  const { appName } = useSignInOptions();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [target, setTarget] = useState<"users" | "topic">("users");
   // Maps userId -> display label (email when picked from list, or the raw ID when pasted).
@@ -740,7 +742,7 @@ export function SendPage() {
           <div className="bg-muted/25 p-3.5">
             <div className="rounded-md border bg-card p-3 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.08)]">
               <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span className="font-medium text-foreground">EdgeBase</span>
+                <span className="font-medium text-foreground">{appName}</span>
                 <span className="ml-auto font-mono text-[10px]">now</span>
               </div>
               <p

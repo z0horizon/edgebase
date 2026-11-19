@@ -30,7 +30,11 @@
   "ratelimits": [
     { "name": "AUTH_RL", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
     // Per user, apart from AUTH_RL, so topic changes never spend an IP's sign-in attempts.
-    { "name": "TOPIC_RL", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } }
+    { "name": "TOPIC_RL", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } },
+    // Per user on the signed-in /v1 routes, so one account calling in a loop cannot run up
+    // Worker requests or D1 writes: every call, and separately every call that writes.
+    { "name": "USER_RL", "namespace_id": "1003", "simple": { "limit": 120, "period": 60 } },
+    { "name": "USER_WRITE_RL", "namespace_id": "1004", "simple": { "limit": 60, "period": 60 } }
   ],
   "queues": {
     "producers": [
@@ -55,10 +59,14 @@
   // Every minute: dispatch due scheduled pushes. Hourly: retention cleanup in small budgets.
   "triggers": { "crons": ["* * * * *", "17 * * * *"] },
   "vars": {
+    // The product name in mail subjects, authenticator and passkey labels and the admin page.
+    "APP_NAME": "EdgeBase",
     "BASE_URL": "http://localhost:8787",
     "TRUSTED_ORIGINS": "edgebase://,https://appleid.apple.com",
     "APP_SCHEME": "edgebase",
     "INBOX_TTL_DAYS": "30",
+    // "off" turns email and password sign-in, sign-up, password reset and verification mail off.
+    "EMAIL_PASSWORD": "on",
     "MAIL_FROM": "no-reply@example.com"
   }
 }

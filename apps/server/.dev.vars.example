@@ -14,3 +14,5 @@ FCM_SERVICE_ACCOUNT=
 # Optional: Cloudflare Turnstile secret; when set, sign-up and email-sending routes need a token.
 TURNSTILE_SECRET_KEY=
 PUSH_API_KEY=
+# Optional: off closes email and password sign-in (default on, from wrangler.jsonc).
+EMAIL_PASSWORD=

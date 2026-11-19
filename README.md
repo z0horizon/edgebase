@@ -33,7 +33,8 @@ pnpm admin:dev          # Worker and admin page: http://localhost:5173/admin/
 2. `pnpm bootstrap` asks for a project name (lowercase, dashes, e.g. `my-app`) and the deploy
    values, creates the D1 databases and queues under that name, migrates them and uploads the
    secrets. Everything it learns goes to `apps/server/.env.production`, which is gitignored, so the
-   code never needs renaming and no ID or secret is committed.
+   code never needs renaming and no ID or secret is committed. The name people see (mail, the
+   admin page, authenticator apps) is `APP_NAME`, which defaults to the project name.
 3. `pnpm run deploy`.
 4. Build your features in `apps/server` and leave `packages/core` to EdgeBase, so updates merge
    cleanly (see [docs/extending.md](docs/extending.md)).

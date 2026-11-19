@@ -56,16 +56,34 @@ describe("renderConfig", () => {
 
   it("takes vars from the env, locks send_email to MAIL_FROM, and keeps everything else from the template", () => {
     assert.deepEqual(out.vars, {
+      APP_NAME: "EdgeBase",
       BASE_URL: valid.BASE_URL,
       TRUSTED_ORIGINS: valid.TRUSTED_ORIGINS,
       APP_SCHEME: valid.APP_SCHEME,
       INBOX_TTL_DAYS: valid.INBOX_TTL_DAYS,
       MAIL_FROM: valid.MAIL_FROM,
+      EMAIL_PASSWORD: "on",
     });
     assert.deepEqual(out.send_email, [
       { name: "MAIL", allowed_sender_addresses: [valid.MAIL_FROM] },
     ]);
     assert.equal(template.upload_source_maps, true);
+    assert.equal(
+      renderConfig(template, { ...valid, EMAIL_PASSWORD: "off" }).vars.EMAIL_PASSWORD,
+      "off",
+    );
+    assert.equal(renderConfig(template, { ...valid, APP_NAME: "My App" }).vars.APP_NAME, "My App");
+  });
+
+  it("serves only on CUSTOM_DOMAIN when set, and leaves workers.dev alone otherwise", () => {
+    for (const key of ["routes", "workers_dev", "preview_urls"]) assert.equal(key in out, false);
+    const custom = renderConfig(template, { ...valid, CUSTOM_DOMAIN: "api.myapp.example" });
+    assert.deepEqual(custom.routes, [{ pattern: "api.myapp.example", custom_domain: true }]);
+    assert.equal(custom.workers_dev, false);
+    assert.equal(custom.preview_urls, false);
+  });
+
+  it("keeps everything else from the template", () => {
     for (const key of [
       "triggers",
       "ratelimits",
@@ -140,6 +158,15 @@ describe("env file", () => {
 describe("validate", () => {
   it("accepts a complete production env", () => {
     assert.deepEqual(validate(valid), []);
+    assert.deepEqual(validate({ ...valid, EMAIL_PASSWORD: "off", APP_NAME: "My App" }), []);
+  });
+
+  it("requires BASE_URL to be the custom domain", () => {
+    const env = { ...valid, CUSTOM_DOMAIN: "api.myapp.example" };
+    assert.deepEqual(validate(env), []);
+    const problems = validate({ ...env, BASE_URL: "https://myapp.me.workers.dev" });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /^BASE_URL must be https:\/\/api\.myapp\.example/);
   });
 
   const cases = [
@@ -154,6 +181,12 @@ describe("validate", () => {
     ["INBOX_TTL_DAYS", "1.5"],
     ["MAIL_FROM", ""],
     ["APP_SCHEME", ""],
+    ["EMAIL_PASSWORD", "false"],
+    ["CUSTOM_DOMAIN", "https://api.myapp.example"],
+    ["CUSTOM_DOMAIN", "myapp.me.workers.dev"],
+    ["CUSTOM_DOMAIN", "API.myapp.example"],
+    ["APP_NAME", "x".repeat(41)],
+    ["APP_NAME", "My\nApp"],
   ];
   for (const [key, value] of cases) {
     it(`rejects ${key}=${JSON.stringify(value)}`, () => {

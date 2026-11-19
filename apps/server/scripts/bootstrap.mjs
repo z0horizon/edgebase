@@ -115,6 +115,8 @@ for (const key of [
   }
 }
 if (missing.length > 0) fail(`Fix ${ENV_FILE}:\n- ${missing.join("\n- ")}`);
+// Shown in mail subjects, authenticator apps and the admin page; edit it in .env.production any time.
+env.APP_NAME ||= env.PROJECT_NAME.slice(0, 40);
 rl?.close();
 save();
 console.log(`✔ ${ENV_FILE} saved (mode 600)`);

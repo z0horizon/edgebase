@@ -26,7 +26,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { api, type Me, type User } from "@/lib/api";
-import { takeOAuthError } from "@/lib/oauth";
+import { takeOAuthError, useAppName } from "@/lib/oauth";
 import { clearSessionDrafts, viewKeyFromHash } from "@/lib/state";
 import { type ThemePreference, useTheme } from "@/lib/theme";
 import { SignIn } from "./pages/SignIn";
@@ -165,6 +165,7 @@ function AccountMenu({
 export function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>(viewFromHash);
+  const appName = useAppName();
 
   // The server decides who must set up a second factor; the page only follows its answer.
   const loadSession = useCallback(async () => {
@@ -250,7 +251,7 @@ export function App() {
               href="#users"
               className="text-sm font-semibold tracking-tight text-sidebar-foreground focus-visible:outline-none"
             >
-              EdgeBase
+              {appName}
             </a>
             <AccountMenu
               me={me}

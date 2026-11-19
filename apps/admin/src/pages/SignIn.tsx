@@ -5,7 +5,7 @@ import { FormError } from "@/components/FormError";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { api, authenticateWithPasskey, errorMessage } from "@/lib/api";
-import { type Provider, startOAuth, takeOAuthError, useProviders } from "@/lib/oauth";
+import { type Provider, startOAuth, takeOAuthError, useSignInOptions } from "@/lib/oauth";
 import { supportsPasskeys } from "@/lib/webauthn";
 
 function ProviderIcon({ provider }: { provider: Provider }) {
@@ -59,7 +59,7 @@ export function SignIn({
   const [error, setError] = useState(takeOAuthError);
   const shown = error || (notAdmin ? "This account does not have admin privileges." : "");
   const [busy, setBusy] = useState(false);
-  const providers = useProviders();
+  const { appName, providers, emailPassword } = useSignInOptions();
   const canPasskey = supportsPasskeys();
 
   const signInWith = async (provider: Provider) => {
@@ -124,115 +124,131 @@ export function SignIn({
   };
 
   const hasAlternatives = step === "password" && (canPasskey || providers.length > 0);
+  // The form holds the password step and the two-factor step; with EMAIL_PASSWORD=off only the latter.
+  // Shown while the server has not answered, so default deployments do not jump; hidden once it says off.
+  const showForm = step === "code" || emailPassword !== false;
+  const noMethod = step === "password" && emailPassword === false && !hasAlternatives;
 
   return (
     <AuthShell
       title={step === "password" ? "Welcome" : "Verify your identity"}
       subtitle={
         step === "password"
-          ? "Log in to EdgeBase to continue to Admin Console."
+          ? `Log in${appName ? ` to ${appName}` : ""} to continue to Admin Console.`
           : useBackup
             ? "Enter one of your single-use recovery backup codes."
             : "Enter the 6-digit code from your authenticator app."
       }
     >
-      <form className="grid gap-4" onSubmit={submit}>
-        {step === "password" ? (
-          <>
-            <FloatingInput
-              id="email"
-              name="email"
-              type="email"
-              label="Email address"
-              requiredMark
-              autoComplete="username"
-              required
-              autoFocus
-            />
-            <FloatingInput
-              id="password"
-              name="password"
-              type={showPassword ? "text" : "password"}
-              label="Password"
-              requiredMark
-              autoComplete="current-password"
-              required
-              endAdornment={
-                <button
-                  type="button"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  className="grid size-8 place-items-center rounded-[4px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                >
-                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                </button>
-              }
-            />
-          </>
-        ) : (
-          <>
-            {useBackup ? (
+      {showForm && (
+        <form className="grid gap-4" onSubmit={submit}>
+          {step === "password" ? (
+            <>
               <FloatingInput
-                key="backup"
-                id="code"
-                name="code"
-                label="Recovery backup code"
+                id="email"
+                name="email"
+                type="email"
+                label="Email address"
                 requiredMark
-                autoComplete="off"
-                maxLength={32}
-                className="font-mono tracking-widest"
+                autoComplete="username"
                 required
                 autoFocus
               />
-            ) : (
               <FloatingInput
-                key="totp"
-                id="code"
-                name="code"
-                label="6-digit code"
+                id="password"
+                name="password"
+                type={showPassword ? "text" : "password"}
+                label="Password"
                 requiredMark
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9 ]{6,7}"
-                maxLength={7}
-                className="font-mono tracking-[0.25em] tabular-nums"
+                autoComplete="current-password"
                 required
-                autoFocus
+                endAdornment={
+                  <button
+                    type="button"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="grid size-8 place-items-center rounded-[4px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  >
+                    {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                }
               />
-            )}
-            <div className="flex items-center gap-2.5 pt-0.5">
-              <Checkbox
-                id="trust-device"
-                checked={trustDevice}
-                onCheckedChange={(v) => setTrustDevice(v === true)}
-              />
-              <Label htmlFor="trust-device" className="text-[13px] font-normal text-foreground">
-                Remember this device for 30 days
-              </Label>
-            </div>
-          </>
-        )}
+            </>
+          ) : (
+            <>
+              {useBackup ? (
+                <FloatingInput
+                  key="backup"
+                  id="code"
+                  name="code"
+                  label="Recovery backup code"
+                  requiredMark
+                  autoComplete="off"
+                  maxLength={32}
+                  className="font-mono tracking-widest"
+                  required
+                  autoFocus
+                />
+              ) : (
+                <FloatingInput
+                  key="totp"
+                  id="code"
+                  name="code"
+                  label="6-digit code"
+                  requiredMark
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9 ]{6,7}"
+                  maxLength={7}
+                  className="font-mono tracking-[0.25em] tabular-nums"
+                  required
+                  autoFocus
+                />
+              )}
+              <div className="flex items-center gap-2.5 pt-0.5">
+                <Checkbox
+                  id="trust-device"
+                  checked={trustDevice}
+                  onCheckedChange={(v) => setTrustDevice(v === true)}
+                />
+                <Label htmlFor="trust-device" className="text-[13px] font-normal text-foreground">
+                  Remember this device for 30 days
+                </Label>
+              </div>
+            </>
+          )}
 
-        <FormError message={shown} />
+          <FormError message={shown} />
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="mt-1 inline-flex h-[50px] w-full items-center justify-center rounded-[4px] bg-primary px-4 text-[15px] font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
-        >
-          Continue
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={busy}
+            className="mt-1 inline-flex h-[50px] w-full items-center justify-center rounded-[4px] bg-primary px-4 text-[15px] font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+          >
+            Continue
+          </button>
+        </form>
+      )}
+
+      {!showForm && <FormError message={shown} />}
+      {noMethod && (
+        <p className="text-[14px] text-muted-foreground">
+          No sign-in method is set up. Configure Google, Apple or GitHub, or set EMAIL_PASSWORD=on,
+          then reload this page.
+        </p>
+      )}
 
       {hasAlternatives && (
         <>
-          <div className="my-6 flex items-center gap-4">
-            <span className="h-px flex-1 bg-border" />
-            <span className="text-[12px] font-medium tracking-[0.06em] text-muted-foreground">
-              OR
-            </span>
-            <span className="h-px flex-1 bg-border" />
-          </div>
+          {showForm && (
+            <div className="my-6 flex items-center gap-4">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-[12px] font-medium tracking-[0.06em] text-muted-foreground">
+                OR
+              </span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+          )}
 
           <div className="grid gap-2.5">
             {canPasskey && (

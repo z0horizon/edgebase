@@ -318,6 +318,73 @@ it.each([
   20_000,
 );
 
+it("APP_NAME labels the TOTP issuer and the passkey relying party", async () => {
+  const named = { ...env, APP_NAME: "My App" };
+  const { token } = await signUpVerified("app-name-labels@example.com");
+  const headers = { "cf-connecting-ip": freshIp() };
+  const enable = await call(
+    "/api/auth/two-factor/enable",
+    authed(token, json({ password: PASSWORD }, { headers })),
+    named,
+  );
+  expect(enable.status).toBe(200);
+  const { totpURI } = await enable.json<{ totpURI: string }>();
+  expect(new URL(totpURI).searchParams.get("issuer")).toBe("My App");
+  const options = await call(
+    "/api/auth/passkey/generate-register-options",
+    authed(token, { headers }),
+    named,
+  );
+  expect(options.status).toBe(200);
+  expect((await options.json<{ rp: { name: string } }>()).rp.name).toBe("My App");
+});
+
+describe("per-user limits on signed-in routes", () => {
+  /** Calls until one answers 429, at most twice the limit plus one (the window may reset once). */
+  async function callsUntilLimited(limit: number, attempt: () => Promise<Response>) {
+    for (let i = 1; i <= 2 * limit + 1; i++) {
+      const res = await attempt();
+      if (res.status === 429) return { res, calls: i };
+    }
+    return undefined;
+  }
+
+  it("writes past USER_WRITE_RL answer 429, while reads and other users go on", async () => {
+    const { token } = await signUpVerified("rl-writer@example.com");
+    const other = await signUpVerified("rl-other@example.com");
+    const hit = await callsUntilLimited(60, () =>
+      call("/v1/inbox/read-all", authed(token, { method: "POST" })),
+    );
+    expect(hit?.res.status).toBe(429);
+    expect(hit?.calls).toBeGreaterThan(60);
+    expect(hit?.res.headers.get("retry-after")).toBe("60");
+    expect(await hit?.res.json()).toEqual({
+      error: { code: "rate_limited", message: "Too many requests, try again in a minute" },
+    });
+    expect((await call("/v1/me", authed(token))).status).toBe(200);
+    expect((await call("/v1/inbox/read-all", authed(other.token, { method: "POST" }))).status).toBe(
+      204,
+    );
+  });
+
+  it("admins are not limited, so the admin page never reads a 429 as signed out", async () => {
+    const { userId, token } = await signUpVerified("rl-admin@example.com");
+    await env.DB.prepare("UPDATE user SET role = 'admin' WHERE id = ?").bind(userId).run();
+    for (let i = 0; i < 65; i++) {
+      expect((await call("/v1/inbox/read-all", authed(token, { method: "POST" }))).status).toBe(
+        204,
+      );
+    }
+  }, 30_000);
+
+  it("any call past USER_RL answers 429", async () => {
+    const { token } = await signUpVerified("rl-reader@example.com");
+    const hit = await callsUntilLimited(120, () => call("/v1/me", authed(token)));
+    expect(hit?.res.status).toBe(429);
+    expect(hit?.calls).toBeGreaterThan(120);
+  }, 30_000);
+});
+
 describe("social providers", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -475,6 +542,40 @@ describe("social providers", () => {
     expect(
       await providers({ ...env, GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" }),
     ).not.toContain("github");
+  });
+
+  it("EMAIL_PASSWORD=off closes every password and account-mail route and says so", async () => {
+    const off = { ...env, EMAIL_PASSWORD: "off" };
+    const { token } = await signUpVerified("pw-off@example.com");
+    const headers = { "cf-connecting-ip": freshIp() };
+    const posts: [string, unknown][] = [
+      ["/api/auth/sign-in/email", { email: "pw-off@example.com", password: PASSWORD }],
+      ["/api/auth/sign-up/email", { email: "pw-new@example.com", password: PASSWORD, name: "n" }],
+      ["/api/auth/request-password-reset", { email: "pw-off@example.com" }],
+      ["/api/auth/reset-password", { token: "t", newPassword: PASSWORD }],
+      ["/api/auth/change-password", { currentPassword: PASSWORD, newPassword: `${PASSWORD}x` }],
+      ["/api/auth/send-verification-email", { email: "pw-off@example.com" }],
+    ];
+    for (const [path, body] of posts) {
+      const res = await call(path, authed(token, json(body, { headers })), off);
+      expect(res.status, path).toBe(404);
+      expect(await res.json(), path).toEqual({
+        error: { code: "not_found", message: "Route not found" },
+      });
+    }
+    expect((await call("/api/auth/reset-password/t?callbackURL=/", {}, off)).status).toBe(404);
+    const flag = async (bindings: Env) =>
+      (await (await call("/v1/auth/providers", {}, bindings)).json<{ emailPassword: boolean }>())
+        .emailPassword;
+    expect(await flag(off)).toBe(false);
+    expect(await flag(env)).toBe(true);
+    const name = async (bindings: Env) =>
+      (await (await call("/v1/auth/providers", {}, bindings)).json<{ appName: string }>()).appName;
+    expect(await name(env)).toBe("EdgeBase");
+    expect(await name({ ...env, APP_NAME: " My App " })).toBe("My App");
+    expect(await name({ ...env, APP_NAME: "" })).toBe("EdgeBase");
+    // The session from before still works: off closes sign-in routes, not existing sessions.
+    expect((await call("/v1/me", authed(token), off)).status).toBe(200);
   });
 
   it("a provider without credentials is turned off instead of breaking sign-in", async () => {
@@ -1647,7 +1748,7 @@ describe("2FA audit timestamps, trusted devices, and new-network alerts", () => 
     expect(completed.status).toBe(200);
     const sgToken = completed.headers.get("set-auth-token") ?? "";
     expect(sentMail).toHaveLength(1);
-    expect(sentMail[0]?.subject).toMatch(/sign-in/i);
+    expect(sentMail[0]?.subject).toMatch(/^EdgeBase: .*sign-in/i);
     expect(sentMail[0]?.text).toContain("Amazon.com");
     expect(sentMail[0]?.text).toContain("SG");
 

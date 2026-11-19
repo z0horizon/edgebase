@@ -4,6 +4,7 @@ import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { admin, bearer, captcha, oneTimeToken, organization, twoFactor } from "better-auth/plugins";
 import * as v from "valibot";
+import { appName } from "../config";
 import { deleteUserInbox } from "../inbox/queries";
 import { sendMail } from "../mail";
 import { deleteUserOpens } from "../push/stats";
@@ -96,6 +97,10 @@ export function configuredProviders(env: Env) {
     }),
   };
 }
+
+/** Email and password sign-in is on unless EMAIL_PASSWORD is "off" (e.g. a Google-only app). */
+export const emailPasswordEnabled = (env: Env) =>
+  env.EMAIL_PASSWORD?.trim().toLowerCase() !== "off";
 
 /** TRUSTED_ORIGINS as a list: app schemes (`myapp://`) and web origins. */
 export const trustedOrigins = (env: Env) => csv(env.TRUSTED_ORIGINS);
@@ -192,7 +197,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
     },
     emailAndPassword: {
-      enabled: true,
+      enabled: emailPasswordEnabled(env),
       requireEmailVerification: true,
       sendResetPassword: async ({ user, url }) =>
         mail(user.email, "Reset your password", `Reset your password: ${url}`),
@@ -382,11 +387,11 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
       oneTimeToken({ disableClientRequest: true, storeToken: "hashed" }),
       // Roles: "user" (default) and "admin"; the first admin is set in D1 (see docs/deployment.md).
       admin(),
-      // TOTP and backup codes for email + password sign-in; the authenticator app shows the API host.
-      twoFactor({ issuer: new URL(env.BASE_URL).hostname }),
+      // TOTP and backup codes for email + password sign-in; the authenticator app shows APP_NAME.
+      twoFactor({ issuer: appName(env) }),
       // Hardware/platform WebAuthn credentials with mandatory biometric/PIN user verification.
       passkey({
-        rpName: "EdgeBase",
+        rpName: appName(env),
         rpID: new URL(env.BASE_URL).hostname,
         origin: passkeyOrigins(env),
         authenticatorSelection: {

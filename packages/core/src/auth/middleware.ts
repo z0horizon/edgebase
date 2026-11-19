@@ -41,10 +41,37 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/** Every limit counts over 60 s, so Retry-After tells a client when it can be sure to get through. */
+function rateLimited(message: string): Response {
+  const res = jsonError(429, "rate_limited", message);
+  res.headers.set("retry-after", "60");
+  return res;
+}
+
 export const authRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
   const key = normalizeRateLimitIp(c.req.header("cf-connecting-ip"));
   if (!(await c.env.AUTH_RL.limit({ key })).success) {
-    return jsonError(429, "rate_limited", "Too many attempts, try again in a minute");
+    return rateLimited("Too many attempts, try again in a minute");
+  }
+  await next();
+};
+
+/**
+ * Use after requireUser on signed-in routes: every call counts against USER_RL, and calls that can
+ * write (anything but GET/HEAD/OPTIONS) also against USER_WRITE_RL, keyed by user id. The limits sit
+ * far above what an app does (it marks inbox items read one call at a time while scrolling), and
+ * bound what one account can cost: a write loop on PUT /v1/devices stays near 360 row writes a
+ * minute. Admins are not limited: the admin page reads a failed /v1/me as signed out.
+ */
+export const userRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const user = c.get("user");
+  if (user.role === "admin") return next();
+  const writes = !SAFE_METHODS.has(c.req.method);
+  if (
+    !(await c.env.USER_RL.limit({ key: user.id })).success ||
+    (writes && !(await c.env.USER_WRITE_RL.limit({ key: user.id })).success)
+  ) {
+    return rateLimited("Too many requests, try again in a minute");
   }
   await next();
 };
@@ -52,7 +79,7 @@ export const authRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
 /** Use after requireUser: keyed by user, so it never shares a budget with sign-in per IP. */
 export const topicRateLimit: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!(await c.env.TOPIC_RL.limit({ key: c.get("user").id })).success) {
-    return jsonError(429, "rate_limited", "Too many topic changes, try again in a minute");
+    return rateLimited("Too many topic changes, try again in a minute");
   }
   await next();
 };

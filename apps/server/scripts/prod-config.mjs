@@ -11,11 +11,13 @@ export const ENV_FILE = ".env.production";
 export const PROD_CONFIG = "wrangler.production.jsonc";
 
 export const VAR_KEYS = [
+  "APP_NAME",
   "BASE_URL",
   "TRUSTED_ORIGINS",
   "APP_SCHEME",
   "INBOX_TTL_DAYS",
   "MAIL_FROM",
+  "EMAIL_PASSWORD",
 ];
 export const SECRET_KEYS = [
   "BETTER_AUTH_SECRET",
@@ -102,6 +104,7 @@ export function serializeEnvFile(env) {
     .join("");
 }
 
+const HOSTNAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 const LOCAL_ORIGIN = /\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|,|$)/;
 
 /** Problems with a production env, one message per bad key; empty when it is ready to deploy. */
@@ -128,6 +131,27 @@ export function validate(env) {
   );
   check("MAIL_FROM", (v) => /^[^@\s]+@[^@\s]+$/.test(v), "must be an email address");
   check("INBOX_TTL_DAYS", (v) => /^[1-9]\d*$/.test(v), "must be a whole number of days");
+  check(
+    "APP_NAME",
+    (v) => /^[^\p{Cc}<>]{0,40}$/u.test(v),
+    "must be at most 40 characters, without < > or control characters",
+  );
+  check("EMAIL_PASSWORD", (v) => /^(on|off)?$/.test(v), "must be on, off or empty (on)");
+  const domain = env.CUSTOM_DOMAIN ?? "";
+  const domainOk = HOSTNAME.test(domain) && !domain.endsWith(".workers.dev");
+  check(
+    "CUSTOM_DOMAIN",
+    (v) => v === "" || domainOk,
+    "must be a hostname on a zone in your Cloudflare account, such as api.example.com, or empty",
+  );
+  // The custom domain becomes the only public address, so BASE_URL has to be that address.
+  if (domainOk && URL.canParse(env.BASE_URL ?? "")) {
+    check(
+      "BASE_URL",
+      (v) => new URL(v).hostname === env.CUSTOM_DOMAIN,
+      `must be https://${env.CUSTOM_DOMAIN} when CUSTOM_DOMAIN is set`,
+    );
+  }
   for (const key of GENERATED_SECRETS) check(key, (v) => v !== "", "must be set");
   return problems;
 }
@@ -163,6 +187,13 @@ export function renderConfig(template, env) {
   const out = structuredClone(template);
   out.name = name;
   if (env.CLOUDFLARE_ACCOUNT_ID) out.account_id = env.CLOUDFLARE_ACCOUNT_ID;
+  // With a custom domain the zone's WAF and rate limiting rules guard every request, so the
+  // addresses that bypass the zone (workers.dev, preview URLs) are closed.
+  if (env.CUSTOM_DOMAIN) {
+    out.routes = [{ pattern: env.CUSTOM_DOMAIN, custom_domain: true }];
+    out.workers_dev = false;
+    out.preview_urls = false;
+  }
   for (const [i, d] of out.d1_databases.entries()) {
     d.database_name = dbs[i].name;
     d.database_id = env[dbs[i].idKey];
@@ -175,7 +206,8 @@ export function renderConfig(template, env) {
   for (const m of out.send_email ?? []) {
     if (m.name === "MAIL") m.allowed_sender_addresses = [env.MAIL_FROM];
   }
-  out.vars = Object.fromEntries(VAR_KEYS.map((key) => [key, env[key]]));
+  // An optional var left empty (APP_NAME, EMAIL_PASSWORD) keeps the template's default; required ones are validated.
+  out.vars = Object.fromEntries(VAR_KEYS.map((key) => [key, env[key] || template.vars[key]]));
   return out;
 }
 

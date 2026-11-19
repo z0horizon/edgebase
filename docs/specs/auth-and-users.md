@@ -38,6 +38,12 @@ user routes answer `503`.
 1. Email sign-up sends a verification email; signing in before verifying answers `403`
    (`requireEmailVerification`). Password reset mails a link. Mail is sent with `ctx.waitUntil`
    so the response does not wait for delivery (`packages/core/src/auth/auth.ts`, `packages/core/src/mail.ts`).
+   `EMAIL_PASSWORD=off` turns email and password off for apps that sign in only with providers or
+   passkeys: `/api/auth/sign-in/email`, `/sign-up/email`, `/request-password-reset`,
+   `/reset-password[/*]`, `/change-password` and `/send-verification-email` answer `404`, so no
+   password is set and no account mail is sent; existing sessions keep working. Default `on`.
+   `APP_NAME` (default `EdgeBase`) names the product to people: mail subjects start with
+   `<APP_NAME>: `, and it is the TOTP issuer and the passkey relying-party name.
 2. Google, Apple and GitHub are social providers, each turned on only when both its client ID
    and secret are set (`configuredProviders`); an unset provider answers `404` like an unknown one.
    `GOOGLE_CLIENT_ID` accepts a comma-separated list (web client ID first, followed by optional
@@ -80,6 +86,12 @@ user routes answer `503`.
    invite-member and app-exchange requests are limited to 10 per minute per `cf-connecting-ip`
    (normalized to `/64` on IPv6) through the `AUTH_RL` binding; over the limit answers `429 rate_limited`
    (`packages/core/src/auth/middleware.ts`). Better Auth's own limiter is disabled.
+   Signed-in `/v1` routes (`/v1/me`, sessions, trusted devices, devices, inbox, opens, topics; not
+   `/v1/admin/*`) allow a non-admin user 120 calls a minute (`USER_RL`), of which at most 60 may
+   write (`USER_WRITE_RL`: any method but GET/HEAD/OPTIONS); over either answers `429 rate_limited`.
+   Admins are not limited, since the admin page reads a failed `/v1/me` as signed out. Every
+   `429 rate_limited` carries `Retry-After: 60`. The bindings count per Cloudflare location, so they
+   bound cost rather than enforce an exact quota.
 6. `POST /api/auth/delete-user` and admin `remove-user` delete the user; `session`, `account`,
    `device`, `trusted_device`, `passkey`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
    hook removes the user's `inbox_item` and `inbox_state` rows from `INBOX_DB`, which has no
@@ -131,7 +143,7 @@ user routes answer `503`.
     scripts, and renders user data as text.
 12. Two-factor (`twoFactor` plugin) covers email + password sign-in with TOTP and backup codes;
     social and passkey sign-ins are not challenged. `POST /api/auth/two-factor/enable { password }` returns the
-    TOTP URI (issuer: the `BASE_URL` host) and backup codes; 2FA is on once a code is confirmed
+    TOTP URI (issuer: `APP_NAME`, default `EdgeBase`) and backup codes; 2FA is on once a code is confirmed
     with `verify-totp` (which stamps `user.twoFactorEnabledAt`). A sign-in of a user with 2FA
     answers `{ twoFactorRedirect: true }` with no session and a 10-minute `two_factor` cookie unless
     the caller presents a valid unrevoked D1 `trusted_device` token (cookie `[__Secure-]edgebase_td`

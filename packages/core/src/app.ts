@@ -6,6 +6,7 @@ import {
   adminNeedsTwoFactor,
   configuredProviders,
   createAuth,
+  emailPasswordEnabled,
   type Session,
   type SessionUser,
   webTrustedOrigins,
@@ -17,6 +18,7 @@ import {
   requireAuthConfig,
   requireUser,
   topicRateLimit,
+  userRateLimit,
 } from "./auth/middleware";
 import {
   adminSessionRoutes,
@@ -24,6 +26,7 @@ import {
   trustedDeviceRoutes,
 } from "./auth/security-routes";
 import { SET_TRUST_DEVICE_HEADER, TRUST_DEVICE_HEADER } from "./auth/trusted-devices";
+import { appName } from "./config";
 import { jsonError } from "./http";
 import { inboxRoutes } from "./inbox/routes";
 import { deviceRoutes } from "./push/devices";
@@ -33,6 +36,17 @@ import { templateRoutes } from "./push/templates";
 import { topicRoutes } from "./push/topics";
 
 const MAX_BODY_BYTES = 64 * 1024;
+
+/** Better Auth routes that need a password or send account mail; EMAIL_PASSWORD=off closes them. */
+const EMAIL_PASSWORD_ROUTES = [
+  "/api/auth/sign-in/email",
+  "/api/auth/sign-up/email",
+  "/api/auth/request-password-reset",
+  "/api/auth/reset-password",
+  "/api/auth/reset-password/*",
+  "/api/auth/change-password",
+  "/api/auth/send-verification-email",
+];
 
 export type AppEnv = {
   Bindings: Env;
@@ -66,6 +80,12 @@ app.get("/health", (c) => c.json({ ok: true }));
 
 app.use("/api/auth/*", requireAuthConfig);
 app.use("/v1/auth/*", requireAuthConfig);
+// Better Auth checks its `enabled` flag only on sign-in and sign-up; reset and verification would
+// still send mail, and a reset would give a social account a password. Off means all of them 404.
+app.on(["GET", "POST"], EMAIL_PASSWORD_ROUTES, async (c, next) => {
+  if (!emailPasswordEnabled(c.env)) return jsonError(404, "not_found", "Route not found");
+  await next();
+});
 app.on(
   "POST",
   [
@@ -128,6 +148,8 @@ for (const path of [
   "/v1/topics/*",
 ]) {
   app.use(path, requireAuthConfig, requireUser);
+  // Admin routes are 2FA-gated and the admin page pages through users; they are not limited per user.
+  if (path !== "/v1/admin/*") app.use(path, userRateLimit);
 }
 app.use("/v1/admin/*", requireAdminConsole);
 // Each topic change is one Instance ID request against the project's quota.
@@ -145,9 +167,14 @@ app.get("/v1/me", (c) => {
     adminNeedsTwoFactor: adminNeedsTwoFactor({ user, session: c.get("session") }),
   });
 });
-// Sign-in pages show only the providers whose credentials are set.
+// The admin page names the product and shows only the providers whose credentials are set, and
+// the password form only when it is on.
 app.get("/v1/auth/providers", (c) =>
-  c.json({ providers: Object.keys(configuredProviders(c.env)) }),
+  c.json({
+    appName: appName(c.env),
+    providers: Object.keys(configuredProviders(c.env)),
+    emailPassword: emailPasswordEnabled(c.env),
+  }),
 );
 app.get("/v1/auth/app-callback", appCallback);
 app.post("/v1/auth/app-exchange", appExchange);

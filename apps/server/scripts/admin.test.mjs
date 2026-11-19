@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { describe, it } from "node:test";
-import { adminStatements, executeSql } from "./admin.mjs";
+import {
+  adminAction,
+  adminStatements,
+  executeSql,
+  findAdminCandidate,
+  passwordIsOff,
+  promoteStatements,
+} from "./admin.mjs";
 
 const base = {
   email: "o'neil@example.com",
@@ -50,6 +57,96 @@ describe("adminStatements", () => {
     assert.match(updated, /passwordChangedAt = '2026-01-02T00:00:00\.000Z'/);
     assert.match(updated, /DELETE FROM session WHERE userId = 'u1'/);
     assert.match(updated, /DELETE FROM trusted_device WHERE user_id = 'u1'/);
+  });
+});
+
+describe("promoteStatements", () => {
+  const now = Date.UTC(2026, 0, 2);
+
+  it("makes an existing user an admin, unbans them and revokes their sessions, keeping sign-in methods", () => {
+    const statements = promoteStatements({ userId: "o'u1", now });
+    assert.deepEqual(statements, [
+      "UPDATE user SET role = 'admin', banned = 0, updatedAt = '2026-01-02T00:00:00.000Z' WHERE id = 'o''u1'",
+      "DELETE FROM session WHERE userId = 'o''u1'",
+      "DELETE FROM trusted_device WHERE user_id = 'o''u1'",
+      "DELETE FROM verification WHERE identifier GLOB 'trust-device-*' AND value = 'o''u1'",
+    ]);
+    assert.doesNotMatch(statements.join(";"), /account|passkey/);
+  });
+
+  it("drops TOTP only when asked, and never passkeys, which may be how they sign in", () => {
+    const reset = promoteStatements({ userId: "u1", now, resetTwoFactor: true }).join(";");
+    assert.match(
+      reset,
+      /twoFactorEnabled = 0, twoFactorEnabledAt = NULL WHERE id = 'u1'.*DELETE FROM twoFactor WHERE userId = 'u1'/,
+    );
+    assert.doesNotMatch(reset, /passkey/);
+    assert.doesNotMatch(promoteStatements({ userId: "u1", now }).join(";"), /twoFactor/);
+  });
+});
+
+describe("adminAction", () => {
+  const social = { id: "u1", role: "user", passwordless: 1 };
+  const passwordOnly = { id: "u2", role: "user", passwordless: 0 };
+
+  it("leaves an existing user alone on a bootstrap rerun, whatever the mode", () => {
+    for (const passwordOff of [true, false]) {
+      assert.equal(adminAction({ found: social, passwordOff, keepExisting: true }), "keep");
+    }
+  });
+
+  it("with passwords on, creates or resets a password admin", () => {
+    assert.equal(
+      adminAction({ found: undefined, passwordOff: false, keepExisting: false }),
+      "password",
+    );
+    assert.equal(
+      adminAction({ found: passwordOnly, passwordOff: false, keepExisting: false }),
+      "password",
+    );
+    assert.equal(
+      adminAction({ found: undefined, passwordOff: false, keepExisting: true }),
+      "password",
+    );
+  });
+
+  it("with passwords off, promotes only a user who can sign in without one", () => {
+    assert.equal(adminAction({ found: social, passwordOff: true, keepExisting: false }), "promote");
+    assert.equal(
+      adminAction({ found: passwordOnly, passwordOff: true, keepExisting: false }),
+      "wait",
+    );
+    assert.equal(adminAction({ found: undefined, passwordOff: true, keepExisting: false }), "wait");
+    assert.equal(adminAction({ found: undefined, passwordOff: true, keepExisting: true }), "wait");
+  });
+});
+
+describe("passwordIsOff", () => {
+  it("deployed: .env.production wins, else the wrangler.jsonc var", () => {
+    const remote = (value, templateVar) =>
+      passwordIsOff({ remote: true, env: { EMAIL_PASSWORD: value }, devVars: {}, templateVar });
+    assert.equal(remote("off", "on"), true);
+    assert.equal(remote("", "off"), true);
+    assert.equal(remote("", "on"), false);
+    assert.equal(remote("OFF", "on"), true);
+  });
+
+  it("locally: a key in .dev.vars wins even when empty, else the wrangler.jsonc var", () => {
+    const local = (devVars, templateVar) =>
+      passwordIsOff({ remote: false, env: {}, devVars, templateVar });
+    assert.equal(local({ EMAIL_PASSWORD: "off" }, "on"), true);
+    assert.equal(local({ EMAIL_PASSWORD: "" }, "off"), false);
+    assert.equal(local({}, "off"), true);
+    assert.equal(local({}, "on"), false);
+  });
+});
+
+describe("findAdminCandidate", () => {
+  it("counts a provider account or a passkey, never the password, as a way in", () => {
+    const query = findAdminCandidate("o'neil@example.com");
+    assert.match(query, /providerId <> 'credential'/);
+    assert.match(query, /FROM passkey WHERE userId = user\.id/);
+    assert.match(query, /WHERE email = 'o''neil@example\.com'$/);
   });
 });
 

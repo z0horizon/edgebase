@@ -82,6 +82,10 @@ server setting.
 - Mark read with `POST /v1/inbox/read-all` (1 write) rather than many `read` calls.
 - Register the device token on start; the server writes only when it changed or is 7 days old.
 - Report opens only if you use the open stats.
+- Back off on `429 rate_limited` for the seconds in `Retry-After`: a user gets 120 calls and 60
+  writing calls a minute on the signed-in `/v1` routes (admins are not limited). An app following
+  these rules stays far below that; the limit caps what one abusive account can cost (about 360
+  D1 row writes a minute at worst, roughly $0.52 a day).
 
 ## 1M daily users
 
