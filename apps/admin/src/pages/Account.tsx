@@ -60,45 +60,53 @@ export function AccountPage({
   const { preference, setPreference } = useTheme();
   const canPasskey = supportsPasskeys();
 
-  const loadSecurity = useCallback(async () => {
-    const [accountsRes, passkeysRes, sessionsRes, tdRes] = await Promise.allSettled([
-      api<{ id: string; providerId: string }[]>("/api/auth/list-accounts"),
-      api<PasskeyRecord[]>("/api/auth/passkey/list-user-passkeys"),
-      api<{ sessions: SessionRecord[] }>("/v1/sessions"),
-      api<{ devices: TrustedDevice[] }>("/v1/trusted-devices"),
-    ]);
-    if (accountsRes.status === "fulfilled") {
-      setHasPassword(accountsRes.value.some((a) => a.providerId === "credential"));
+  // One loader per list, so an action reloads only what it changed instead of all four.
+  const loadAccounts = useCallback(async () => {
+    try {
+      const accounts = await api<{ id: string; providerId: string }[]>("/api/auth/list-accounts");
+      setHasPassword(accounts.some((a) => a.providerId === "credential"));
       setLinked(
         new Map(
-          accountsRes.value
-            .filter((a) => a.providerId !== "credential")
-            .map((a) => [a.providerId, a.id]),
+          accounts.filter((a) => a.providerId !== "credential").map((a) => [a.providerId, a.id]),
         ),
       );
-    } else {
-      toast.error(errorMessage(accountsRes.reason));
-    }
-    if (passkeysRes.status === "fulfilled") {
-      setPasskeysFailed(false);
-      setPasskeys(passkeysRes.value);
-    } else {
-      setPasskeysFailed(true);
-      toast.error(errorMessage(passkeysRes.reason));
-    }
-    if (sessionsRes.status === "fulfilled") {
-      setSessions(sessionsRes.value.sessions);
-    } else {
-      setSessions((prev) => prev ?? []);
-      toast.error(errorMessage(sessionsRes.reason));
-    }
-    if (tdRes.status === "fulfilled") {
-      setTrustedDevices(tdRes.value.devices);
-    } else {
-      setTrustedDevices((prev) => prev ?? []);
-      toast.error(errorMessage(tdRes.reason));
+    } catch (e) {
+      toast.error(errorMessage(e));
     }
   }, []);
+
+  const loadPasskeys = useCallback(async () => {
+    try {
+      setPasskeys(await api<PasskeyRecord[]>("/api/auth/passkey/list-user-passkeys"));
+      setPasskeysFailed(false);
+    } catch (e) {
+      setPasskeysFailed(true);
+      toast.error(errorMessage(e));
+    }
+  }, []);
+
+  const loadSessions = useCallback(async () => {
+    try {
+      setSessions((await api<{ sessions: SessionRecord[] }>("/v1/sessions")).sessions);
+    } catch (e) {
+      setSessions((prev) => prev ?? []);
+      toast.error(errorMessage(e));
+    }
+  }, []);
+
+  const loadDevices = useCallback(async () => {
+    try {
+      setTrustedDevices((await api<{ devices: TrustedDevice[] }>("/v1/trusted-devices")).devices);
+    } catch (e) {
+      setTrustedDevices((prev) => prev ?? []);
+      toast.error(errorMessage(e));
+    }
+  }, []);
+
+  const loadSecurity = useCallback(
+    () => Promise.all([loadAccounts(), loadPasskeys(), loadSessions(), loadDevices()]),
+    [loadAccounts, loadPasskeys, loadSessions, loadDevices],
+  );
 
   useEffect(() => {
     loadSecurity();
@@ -122,7 +130,7 @@ export function AccountPage({
         body: { accountId },
       });
       toast.success(`${label} unlinked`);
-      await loadSecurity();
+      await loadAccounts();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -135,7 +143,7 @@ export function AccountPage({
     try {
       await api(`/v1/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
       toast.success("Session revoked");
-      await loadSecurity();
+      await loadSessions();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -148,7 +156,7 @@ export function AccountPage({
     try {
       await api("/v1/sessions/revoke-others", { method: "POST" });
       toast.success("Signed out of all other sessions");
-      await loadSecurity();
+      await loadSessions();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -161,7 +169,7 @@ export function AccountPage({
     try {
       await api(`/v1/trusted-devices/${encodeURIComponent(id)}`, { method: "DELETE" });
       toast.success("Trusted device removed");
-      await loadSecurity();
+      await loadDevices();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -174,7 +182,7 @@ export function AccountPage({
     try {
       await api("/v1/trusted-devices", { method: "DELETE" });
       toast.success("All trusted devices removed");
-      await loadSecurity();
+      await loadDevices();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -187,7 +195,7 @@ export function AccountPage({
     try {
       await registerPasskey();
       toast.success("Passkey added");
-      await loadSecurity();
+      await Promise.all([loadPasskeys(), loadSessions()]);
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -206,7 +214,7 @@ export function AccountPage({
       });
       setRenaming(null);
       toast.success("Passkey renamed");
-      await loadSecurity();
+      await loadPasskeys();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -222,7 +230,7 @@ export function AccountPage({
         body: { id },
       });
       toast.success("Passkey removed");
-      await loadSecurity();
+      await loadPasskeys();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -257,7 +265,7 @@ export function AccountPage({
       });
       setChangingPw(false);
       toast.success("Password updated");
-      await Promise.all([loadSecurity(), onRefresh?.()]);
+      await Promise.all([loadSessions(), loadDevices(), onRefresh?.()]);
     } catch (e) {
       setPwError(errorMessage(e));
     } finally {

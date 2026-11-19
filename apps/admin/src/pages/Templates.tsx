@@ -33,7 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, api, errorMessage, type Template } from "@/lib/api";
+import { ApiError, api, errorMessage, type Template, templatesRequest } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 
 const ANY = "any";
@@ -63,9 +63,9 @@ export function TemplatesPage() {
   const [editing, setEditing] = useState<Editing>(null);
   const [deleting, setDeleting] = useState<Template | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh = false) => {
     try {
-      setTemplates((await api<{ templates: Template[] }>("/v1/templates")).templates);
+      setTemplates(await (fresh ? templatesRequest.refresh() : templatesRequest.get()));
       setPushUnconfigured(false);
     } catch (e) {
       setTemplates([]);
@@ -85,7 +85,7 @@ export function TemplatesPage() {
     try {
       await api(`/v1/templates/${encodeURIComponent(template.name)}`, { method: "DELETE" });
       toast.success(`Deleted ${template.name}`);
-      await load();
+      await load(true);
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -262,7 +262,7 @@ export function TemplatesPage() {
         editing={editing}
         names={templates?.map((t) => t.name) ?? []}
         onClose={() => setEditing(null)}
-        onSaved={load}
+        onSaved={() => load(true)}
       />
 
       <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>

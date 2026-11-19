@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { type AuthUrlState, parseAuthUrl } from "@/lib/auth-url";
+import { sharedRequest } from "@/lib/shared-request";
 
 export const PROVIDERS = [
   { id: "google", label: "Google" },
@@ -54,30 +55,23 @@ function readStored(): SignInOptions | null {
 let last: SignInOptions | null = readStored();
 
 // One request per page load, shared by every component that asks; a failure is not cached.
-let pending: Promise<SignInOptions> | null = null;
-function loadSignInOptions(): Promise<SignInOptions> {
-  pending ??= api<Partial<SignInOptions>>("/v1/auth/providers").then(
-    (r) => {
-      last = {
-        appName: r.appName || "EdgeBase",
-        providers: r.providers ?? [],
-        emailPassword: r.emailPassword !== false,
-        turnstileRequired: r.turnstileRequired === true,
-      };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(last));
-      } catch {
-        // Not remembered; the next load waits for the server again.
-      }
-      return last;
-    },
-    (error: unknown) => {
-      pending = null;
-      throw error;
-    },
-  );
-  return pending;
-}
+const signInOptionsRequest = sharedRequest(() =>
+  api<Partial<SignInOptions>>("/v1/auth/providers").then((r) => {
+    last = {
+      appName: r.appName || "EdgeBase",
+      providers: r.providers ?? [],
+      emailPassword: r.emailPassword !== false,
+      turnstileRequired: r.turnstileRequired === true,
+    };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(last));
+    } catch {
+      // Not remembered; the next load waits for the server again.
+    }
+    return last;
+  }),
+);
+const loadSignInOptions = signInOptionsRequest.get;
 
 /**
  * What the server says about itself: the product name (APP_NAME), the providers it has credentials

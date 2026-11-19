@@ -1,3 +1,4 @@
+import { sharedRequest } from "./shared-request";
 import {
   type CreationOptionsJSON,
   type RequestOptionsJSON,
@@ -126,6 +127,11 @@ export type Template = Text & {
   translations?: Record<string, Text>;
   updatedAt: number;
 };
+
+/** `GET /v1/templates`, shared by the Templates and Send pages; Templates refreshes it on change. */
+export const templatesRequest = sharedRequest(() =>
+  api<{ templates: Template[] }>("/v1/templates").then((r) => r.templates),
+);
 
 export type PushStats = {
   id: number;

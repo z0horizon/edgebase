@@ -184,14 +184,17 @@ app.post(
 );
 // The admin page names the product and shows only the providers whose credentials are set, and
 // the password form only when it is on.
-app.get("/v1/auth/providers", (c) =>
-  c.json({
+app.get("/v1/auth/providers", (c) => {
+  // The same for every caller and changed only by a deploy: browsers reuse it for 10 seconds, so
+  // reloads in a row ask once while a configuration change shows almost at once.
+  c.header("cache-control", "public, max-age=10");
+  return c.json({
     appName: appName(c.env),
     providers: Object.keys(configuredProviders(c.env)),
     emailPassword: emailPasswordEnabled(c.env),
     turnstileRequired: Boolean(c.env.TURNSTILE_SECRET_KEY?.trim()),
-  }),
-);
+  });
+});
 app.get("/v1/auth/app-callback", appCallback);
 app.post("/v1/auth/app-exchange", appExchange);
 app.route("/v1/sessions", sessionSecurityRoutes);

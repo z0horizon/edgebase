@@ -34,6 +34,7 @@ import {
   listUsers,
   type Template,
   type Text,
+  templatesRequest,
   type User,
 } from "@/lib/api";
 import { formatDate } from "@/lib/format";
@@ -90,9 +91,10 @@ export function SendPage() {
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
-    api<{ templates: Template[] }>("/v1/templates")
-      .then((r) => {
-        setTemplates(r.templates);
+    templatesRequest
+      .get()
+      .then((list) => {
+        setTemplates(list);
         setPushUnconfigured(false);
       })
       .catch((e) => {

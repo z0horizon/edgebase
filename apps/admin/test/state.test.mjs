@@ -231,3 +231,45 @@ describe("parseAuthUrl", () => {
     assert.equal(parseAuthUrl("", "#verified").state.initialMode, "verified");
   });
 });
+
+describe("sharedRequest", async () => {
+  const { sharedRequest } = await import("../src/lib/shared-request.ts");
+
+  it("asks once for every caller until refresh, and does not keep a failure", async () => {
+    let calls = 0;
+    let fail = true;
+    const shared = sharedRequest(async () => {
+      calls++;
+      if (fail) throw new Error("down");
+      return calls;
+    });
+    await assert.rejects(shared.get(), /down/);
+    fail = false;
+    const [a, b] = await Promise.all([shared.get(), shared.get()]);
+    assert.equal(a, 2);
+    assert.equal(b, 2);
+    assert.equal(await shared.get(), 2);
+    assert.equal(await shared.refresh(), 3);
+    assert.equal(await shared.get(), 3);
+    assert.equal(calls, 3);
+  });
+
+  it("an old failure does not drop a newer refresh", async () => {
+    let calls = 0;
+    let rejectFirst = () => {};
+    const shared = sharedRequest(
+      () =>
+        new Promise((resolve, reject) => {
+          calls++;
+          if (calls === 1) rejectFirst = () => reject(new Error("late"));
+          else resolve(calls);
+        }),
+    );
+    const first = shared.get();
+    assert.equal(await shared.refresh(), 2);
+    rejectFirst();
+    await assert.rejects(first, /late/);
+    assert.equal(await shared.get(), 2);
+    assert.equal(calls, 2);
+  });
+});

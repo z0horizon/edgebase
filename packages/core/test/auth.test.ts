@@ -625,6 +625,9 @@ describe("social providers", () => {
     const name = async (bindings: Env) =>
       (await (await call("/v1/auth/providers", {}, bindings)).json<{ appName: string }>()).appName;
     expect(await name(env)).toBe("EdgeBase");
+    expect((await call("/v1/auth/providers")).headers.get("cache-control")).toBe(
+      "public, max-age=10",
+    );
     expect(await name({ ...env, APP_NAME: " My App " })).toBe("My App");
     expect(await name({ ...env, APP_NAME: "" })).toBe("EdgeBase");
     // The session from before still works: off closes sign-in routes, not existing sessions.
