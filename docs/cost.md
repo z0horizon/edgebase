@@ -128,6 +128,91 @@ Mitigations, in order of effect:
    last active: saves the activity touches (~$30–45).
 6. Shard `INBOX_DB` by a hash of `user_id` (roadmap).
 
+## Keeping your own code cheap
+
+What EdgeBase already does for its own routes, applied to the code you add in `apps/server`.
+Prices and rules are Cloudflare's documentation as read on 2026-11-20.
+
+**Requests (Workers, $0.30 per million beyond the included 10M)**
+
+- Every request that reaches the Worker is billed, including ones it answers `401`, `404` or
+  `429`. Send several calls at once with `POST /v1/batch`, and give a screen that is opened often
+  one route that returns all it shows.
+- Files in `apps/server/public` (static assets) are free and unlimited, unless a path is listed in
+  `run_worker_first`. Put data that only changes with a deploy there (a feature-flag file, a
+  minimum app version) instead of behind a route.
+- Let clients reuse answers: a `Cache-Control: max-age` on a GET that is the same for everyone (as
+  `GET /v1/auth/providers` does) saves the request entirely, since the browser or app does not ask.
+  Workers Cache (`"cache": { "enabled": true }`) is different: a hit skips your code and its
+  CPU and D1 reads, but is still billed as a request, and turning it on also bills static asset
+  requests that are free today. It also skips any request with `Authorization`, which is every
+  signed-in call from a mobile app.
+- Put your own signed-in routes behind `userRateLimit`, and public ones behind a WAF rule on a
+  custom domain (see [deployment.md](deployment.md)): a request a zone rule blocks never reaches
+  the Worker.
+
+**CPU (30M ms included, then $0.02 per million ms)**
+
+- CPU time, not waiting, is billed: time spent waiting on D1, `fetch` or a queue costs nothing.
+  Avoid heavy work per request (large JSON reshaping, crypto in loops, image work); move it to a
+  queue consumer or precompute it.
+- `limits.cpu_ms` in `wrangler.jsonc` stops an invocation that runs longer than you expect, as a
+  guard against a bug or crafted input that loops.
+
+**D1 (rows read $0.001 per million, rows written $1 per million, storage $0.75 per GB-month)**
+
+- Rows read are the rows a query scans, not the ones it returns: a filter on a column without an
+  index scans the table. Index the columns you filter and sort on, and check `meta.rows_read` on
+  new queries; reads are cheap, but a scan on a large table adds up and slows every request.
+- Every index costs one more write per row changed, and deletes are writes. Keep only the indexes
+  your queries use; an integer primary key avoids the extra index a TEXT key brings.
+- Do not write what has not changed: compare first, or write with a `WHERE` that skips equal rows
+  (as device registration does), and throttle "last seen" style updates.
+- Send the statements of one request as one `db.batch([...])`: one round trip, and the writes
+  succeed or fail together.
+- Ad hoc queries from the dashboard or `wrangler d1 execute` are billed like any other.
+- Give every growing table a TTL or a cap (see [extending.md](extending.md)); storage beyond 5 GB
+  costs, and a database stops at 10 GB.
+
+**Queues ($0.40 per million operations)**
+
+- A message costs about three operations (write, read, delete) per 64 KB, retries add a read each,
+  and batching does not reduce the count. Send ids rather than large payloads, and fix a failing
+  consumer instead of letting it retry.
+
+**Other storage, when you add it**
+
+- KV costs $5 per million writes, five times a D1 row: use it for data read far more often than
+  it changes (configuration, lookups), never for counters or per-request writes.
+- R2 has no egress fee; uploads are $4.50 per million and reads $0.36 per million. Serve public
+  files from an R2 custom domain, not through the Worker, so a view is not a Worker request.
+- Durable Objects bill wall-clock time while an object is active and cannot hibernate; use the
+  WebSocket hibernation API and let idle objects sleep. Reserve them for state that needs one
+  writer, not as a general database.
+
+**Logs and analytics**
+
+- `observability.head_sampling_rate` defaults to 1 (every request); EdgeBase sets 0.1 for logs and
+  0.05 for traces. Keep it low, and log one structured line per event rather than many.
+- For your own counters and product metrics, Workers Analytics Engine (10M data points a month
+  included, not billed yet) costs less than a D1 row per event.
+
+**Watch the bill**
+
+- Set budget alerts and, if you want a hard stop, a spend limit (dashboard, Billing). The limit
+  covers Workers and Durable Objects only and stops the API when reached.
+- The D1 dashboard shows rows read and written per database, and `{"event":"cleanup"}` logs show
+  database sizes every hour: check both after you ship a new route.
+
+Sources: [Workers](https://developers.cloudflare.com/workers/platform/pricing/),
+[Workers Cache](https://developers.cloudflare.com/workers/cache/),
+[D1](https://developers.cloudflare.com/d1/platform/pricing/),
+[Queues](https://developers.cloudflare.com/queues/platform/pricing/),
+[KV](https://developers.cloudflare.com/kv/platform/pricing/),
+[R2](https://developers.cloudflare.com/r2/pricing/),
+[Analytics Engine](https://developers.cloudflare.com/analytics/analytics-engine/pricing/),
+[Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/).
+
 ## Compared with your own servers and Supabase
 
 Rough estimates in USD a month, to show where each option's cost comes from as an app grows. They
