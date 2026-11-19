@@ -7,7 +7,12 @@ import type { PushQueueMessage } from "./push/types";
 
 export { type AppEnv, app } from "./app";
 export type { SessionUser } from "./auth/auth";
-export { requireApiKey, requireAuthConfig, requireUser } from "./auth/middleware";
+export {
+  requireApiKey,
+  requireAuthConfig,
+  requireUser,
+  userRateLimit,
+} from "./auth/middleware";
 export { jsonError, parseBody } from "./http";
 
 /** The Worker's handlers; routes added to `app` before the first request are served too. */

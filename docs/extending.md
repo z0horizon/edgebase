@@ -26,16 +26,19 @@ export const orders = new Hono<AppEnv>().get("/", (c) => c.json({ userId: c.get(
 
 ```ts
 // apps/server/src/index.ts
-import { app, requireAuthConfig, requireUser, worker } from "@edgebase/core";
+import { app, requireAuthConfig, requireUser, userRateLimit, worker } from "@edgebase/core";
 import { orders } from "./orders";
 
-app.use("/v1/orders/*", requireAuthConfig, requireUser); // a signed-in user, as c.get("user")
+app.use("/v1/orders/*", requireAuthConfig, requireUser, userRateLimit); // a signed-in user, as c.get("user")
 app.route("/v1/orders", orders);
 
 export default worker;
 ```
 
 - `requireAuthConfig, requireUser`: a Better Auth session (cookie or bearer); `401` otherwise.
+- `userRateLimit` (after `requireUser`): the same per-user budget as EdgeBase's own routes, 120
+  calls and 60 writing calls a minute shared across all of them, `429 rate_limited` beyond. Your
+  routes have no limit without it, so one account calling in a loop costs you requests and writes.
 - `requireApiKey`: your servers, with `X-API-Key: <PUSH_API_KEY>`, or an admin's session.
 - `parseBody(c, schema)`: a valibot-checked JSON body, or the `400` response to return.
 - `jsonError(status, code, message)`: the one error shape.
