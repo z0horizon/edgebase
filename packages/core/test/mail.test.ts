@@ -26,3 +26,19 @@ it("prefixes every subject with APP_NAME, cleaned of line breaks and capped at 4
     expect(sent[0]?.subject).toBe(subject);
   }
 });
+
+it("EMAIL_SENDING=off sends nothing and does not touch the binding", async () => {
+  const { bindings, sent } = capture("My App");
+  await sendMail({ ...bindings, EMAIL_SENDING: "off", MAIL: undefined } as unknown as Env, {
+    to: "a@b.c",
+    subject: "Hi",
+    text: "t",
+  });
+  await sendMail(
+    { ...bindings, EMAIL_SENDING: " OFF " },
+    { to: "a@b.c", subject: "Hi", text: "t" },
+  );
+  expect(sent).toHaveLength(0);
+  await sendMail({ ...bindings, EMAIL_SENDING: "on" }, { to: "a@b.c", subject: "Hi", text: "t" });
+  expect(sent).toHaveLength(1);
+});

@@ -16,3 +16,5 @@ TURNSTILE_SECRET_KEY=
 PUSH_API_KEY=
 # Optional: off closes email and password sign-in (default on, from wrangler.jsonc).
 EMAIL_PASSWORD=
+# Optional: off sends no mail (default on, from wrangler.jsonc).
+EMAIL_SENDING=

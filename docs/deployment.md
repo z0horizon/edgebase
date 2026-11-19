@@ -60,6 +60,11 @@ mail sender or guess passwords, and Turnstile is not needed. iOS apps that offer
 must also offer Sign in with Apple (App Store review guideline 4.8). Organization invitations
 still send mail.
 
+To send no mail at all, also set `EMAIL_SENDING=off`: the deploy then carries no mail binding, so
+Email Sending needs no set-up and `MAIL_FROM` may stay empty. Security alerts (a sign-in from a new
+network, a new passkey) still reach the in-app inbox; organization invitations are created but not
+mailed, so your app has to show them.
+
 Missing `BETTER_AUTH_SECRET` makes all auth routes answer `503`; missing `PUSH_API_KEY` or
 `FCM_SERVICE_ACCOUNT` does the same for `/v1/push`. Give `PUSH_API_KEY` to your servers.
 

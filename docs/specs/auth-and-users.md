@@ -42,6 +42,9 @@ user routes answer `503`.
    passkeys: `/api/auth/sign-in/email`, `/sign-up/email`, `/request-password-reset`,
    `/reset-password[/*]`, `/change-password` and `/send-verification-email` answer `404`, so no
    password is set and no account mail is sent; existing sessions keep working. Default `on`.
+   `EMAIL_SENDING=off` (deploys only together with `EMAIL_PASSWORD=off`) sends no mail at all
+   (`packages/core/src/mail.ts`) and deploys without the `MAIL` binding: security alerts reach
+   only the inbox, and organization invitations are created but not mailed.
    `APP_NAME` (default `EdgeBase`) names the product to people: mail subjects start with
    `<APP_NAME>: `, and it is the TOTP issuer and the passkey relying-party name.
 2. Google, Apple and GitHub are social providers, each turned on only when both its client ID

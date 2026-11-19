@@ -2,6 +2,9 @@
 export const sessionActivityEnabled = (env: Env) =>
   env.SESSION_ACTIVITY?.trim().toLowerCase() !== "off";
 
+/** Whether the Worker sends mail at all (EMAIL_SENDING); off, deploys carry no mail binding. */
+export const emailSendingEnabled = (env: Env) => env.EMAIL_SENDING?.trim().toLowerCase() !== "off";
+
 /**
  * Days between writes that push an active session's 30-day expiry forward (SESSION_REFRESH_DAYS,
  * 1 to 14, default 1). A session unused for 30 days minus this many days may already have expired.

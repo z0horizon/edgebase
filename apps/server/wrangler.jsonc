@@ -70,6 +70,8 @@
     "INBOX_TTL_DAYS": "30",
     // "off" turns email and password sign-in, sign-up, password reset and verification mail off.
     "EMAIL_PASSWORD": "on",
+    // "off" sends no mail at all; security alerts then reach only the in-app inbox.
+    "EMAIL_SENDING": "on",
     // "off" stops the background write that keeps a session's lastActiveAt and current network fresh.
     "SESSION_ACTIVITY": "on",
     // Days between writes that extend an active session's 30-day expiry (1 to 14).

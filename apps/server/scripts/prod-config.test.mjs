@@ -64,6 +64,7 @@ describe("renderConfig", () => {
       INBOX_TTL_DAYS: valid.INBOX_TTL_DAYS,
       MAIL_FROM: valid.MAIL_FROM,
       EMAIL_PASSWORD: "on",
+      EMAIL_SENDING: "on",
       SESSION_ACTIVITY: "on",
       SESSION_REFRESH_DAYS: "1",
     });
@@ -174,6 +175,18 @@ describe("validate", () => {
     assert.deepEqual(validate({ ...bare, EMAIL_PASSWORD: "off" }), []);
   });
 
+  it("EMAIL_SENDING=off needs no MAIL_FROM but needs passwords off, and drops the mail binding", () => {
+    const off = { ...valid, EMAIL_SENDING: "off", EMAIL_PASSWORD: "off", MAIL_FROM: "" };
+    assert.deepEqual(validate(off), []);
+    const problems = validate({ ...off, EMAIL_PASSWORD: "on" });
+    assert.equal(problems.length, 1, problems.join("; "));
+    assert.match(problems[0], /^EMAIL_SENDING off needs EMAIL_PASSWORD=off/);
+    const rendered = renderConfig(template, off);
+    assert.equal("send_email" in rendered, false);
+    assert.equal(rendered.vars.EMAIL_SENDING, "off");
+    assert.equal(rendered.vars.MAIL_FROM, template.vars.MAIL_FROM);
+  });
+
   it("requires BASE_URL to be the custom domain", () => {
     const env = { ...valid, CUSTOM_DOMAIN: "api.myapp.example" };
     assert.deepEqual(validate(env), []);
@@ -196,6 +209,7 @@ describe("validate", () => {
     ["APP_SCHEME", ""],
     ["EMAIL_PASSWORD", "false"],
     ["SESSION_ACTIVITY", "no"],
+    ["EMAIL_SENDING", "false"],
     ["SESSION_REFRESH_DAYS", "0"],
     ["SESSION_REFRESH_DAYS", "15"],
     ["SESSION_REFRESH_DAYS", "1.5"],

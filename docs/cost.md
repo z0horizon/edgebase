@@ -108,8 +108,8 @@ at ~3 ms CPU, one device per user, 10% of users open the daily push.
 | Queues: 30M users / 50 per message ≈ 600k messages | ~1.8M operations | under $1 |
 
 Total about **$300–320 / month** plus the $5 plan, and `INBOX_DB` must be sharded or trimmed first.
-Not counted: mail beyond the included 3,000 a month ($0.35 per 1,000; none with
-`EMAIL_PASSWORD=off` and no organization invitations), and sign-ins (~10 writes for a session's
+Not counted: mail beyond the included 3,000 a month ($0.35 per 1,000; with `EMAIL_PASSWORD=off`
+only security alerts and organization invitations, and none at all with `EMAIL_SENDING=off`), and sign-ins (~10 writes for a session's
 life, small next to daily use).
 
 Mitigations, in order of effect:

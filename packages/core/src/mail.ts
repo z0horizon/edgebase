@@ -1,10 +1,14 @@
-import { appName } from "./config";
+import { appName, emailSendingEnabled } from "./config";
 
-/** The only place that touches the Email Sending binding; subjects start with APP_NAME. */
+/**
+ * The only place that touches the Email Sending binding; subjects start with APP_NAME. With
+ * EMAIL_SENDING=off nothing is sent: security alerts still reach the in-app inbox.
+ */
 export async function sendMail(
   env: Env,
   msg: { to: string; subject: string; text: string },
 ): Promise<void> {
+  if (!emailSendingEnabled(env)) return;
   try {
     await env.MAIL.send({
       to: msg.to,

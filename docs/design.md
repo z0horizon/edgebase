@@ -35,7 +35,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
 | `USER_RL` | Rate limiting | 120 calls / 60 s per non-admin user on signed-in `/v1` routes (not `/v1/admin/*`) |
 | `USER_WRITE_RL` | Rate limiting | 60 writing calls (not GET/HEAD/OPTIONS) / 60 s per user on the same routes |
 | Static assets (no binding) | Static assets `apps/server/public/` | the `/admin` page, built from `apps/admin/`, served before the Worker runs |
-| `MAIL` | Email Sending | verification and password-reset mail |
+| `MAIL` | Email Sending | verification, password-reset, invitation and security-alert mail; absent with `EMAIL_SENDING=off` |
 
 ## Why it is shaped this way
 

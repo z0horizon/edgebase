@@ -18,6 +18,7 @@ export const VAR_KEYS = [
   "INBOX_TTL_DAYS",
   "MAIL_FROM",
   "EMAIL_PASSWORD",
+  "EMAIL_SENDING",
   "SESSION_ACTIVITY",
   "SESSION_REFRESH_DAYS",
 ];
@@ -131,7 +132,16 @@ export function validate(env) {
     (v) => v.trim() !== "" && !LOCAL_ORIGIN.test(v),
     "must be set and must not trust localhost in production",
   );
-  check("MAIL_FROM", (v) => /^[^@\s]+@[^@\s]+$/.test(v), "must be an email address");
+  check("EMAIL_SENDING", (v) => /^(on|off)?$/.test(v), "must be on, off or empty (on)");
+  const mailOff = env.EMAIL_SENDING === "off";
+  if (!mailOff) {
+    check("MAIL_FROM", (v) => /^[^@\s]+@[^@\s]+$/.test(v), "must be an email address");
+  } else if ((env.EMAIL_PASSWORD ?? "") !== "off") {
+    // Sign-up could never be verified and a password never reset.
+    problems.push(
+      "EMAIL_SENDING off needs EMAIL_PASSWORD=off: email and password sign-in depends on mail",
+    );
+  }
   check("INBOX_TTL_DAYS", (v) => /^[1-9]\d*$/.test(v), "must be a whole number of days");
   check(
     "APP_NAME",
@@ -220,10 +230,15 @@ export function renderConfig(template, env) {
     c.queue = queueName.PUSH_QUEUE;
     c.dead_letter_queue = queueName.PUSH_DLQ;
   }
-  for (const m of out.send_email ?? []) {
-    if (m.name === "MAIL") m.allowed_sender_addresses = [env.MAIL_FROM];
+  if (env.EMAIL_SENDING === "off") {
+    // No binding, so the deploy needs no Email Sending set-up (and no Workers Paid for it).
+    delete out.send_email;
+  } else {
+    for (const m of out.send_email ?? []) {
+      if (m.name === "MAIL") m.allowed_sender_addresses = [env.MAIL_FROM];
+    }
   }
-  // An optional var left empty (APP_NAME, EMAIL_PASSWORD, SESSION_*) keeps the template's default; required ones are validated.
+  // An optional var left empty (APP_NAME, EMAIL_*, SESSION_*) keeps the template's default; required ones are validated.
   out.vars = Object.fromEntries(VAR_KEYS.map((key) => [key, env[key] || template.vars[key]]));
   return out;
 }
