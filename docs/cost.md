@@ -128,6 +128,78 @@ Mitigations, in order of effect:
    last active: saves the activity touches (~$30–45).
 6. Shard `INBOX_DB` by a hash of `user_id` (roadmap).
 
+## Compared with your own servers and Supabase
+
+Rough estimates in USD a month, to show where each option's cost comes from as an app grows. They
+rest on list prices read on 2026-11-20 and on the assumptions below, not on measurements: a
+different app, user pattern or price list moves every number, so redo the arithmetic with your own
+figures before deciding anything on it.
+
+Two workloads, both without mail (`EMAIL_PASSWORD=off`, `EMAIL_SENDING=off`):
+
+- **EdgeBase only**: the assumptions of the 1M example above (10 API calls per user per day).
+- **With your app**: 50 calls per user per day in total at ~3 ms CPU, a fifth of the app's own calls
+  writing two D1 rows, clients sending them through `POST /v1/sync` and `POST /v1/batch` (about 15
+  requests a day), `SESSION_ACTIVITY=off` and `SESSION_REFRESH_DAYS=3`.
+
+The three right-hand columns carry the "with your app" workload elsewhere:
+
+- **Own servers**: virtual servers and a PostgreSQL you rent and operate.
+- **Supabase with its sign-in**: the whole backend on Supabase, users signing in through Supabase
+  Auth, which is billed per monthly active user. Monthly users are assumed to be three times the
+  daily users; an app whose users come back more often pays less than shown.
+- **Supabase as database only**: the Worker stays as it is and uses Supabase's PostgreSQL instead
+  of D1, so there is no per-user fee.
+
+For both Supabase columns the compute size is a guess at what the load needs (Micro, Large, 2XL,
+4XL for the four rows), not a tested figure.
+
+| Daily users | Workers: EdgeBase only | Workers: with your app | Own servers | Supabase with its sign-in | Supabase as database only |
+|---|---|---|---|---|---|
+| 10k | 5 | 5 | 15–55 | 25 | 25 |
+| 100k | ~12 | ~50 | 60–180 | ~775 | ~130 |
+| 300k | ~57 | ~250 | ~425 | ~3,000 | ~450 |
+| 1M | ~310 | ~960 | ~2,000–2,500 | ~10,400 | ~1,000 |
+
+Supabase at this size is usually priced by agreement, so its list-price figures for 300k and 1M
+are an upper bound. It also includes file storage and realtime, which EdgeBase does not have.
+
+How the three columns are built:
+
+- **Own servers**, DigitalOcean list prices. 10k: one 2 GB server with backups ($14), or two
+  small app servers and a 2 GiB managed PostgreSQL ($55). 100k: one 8 GB server with daily backups
+  ($62), or two 4 GB app servers and an 8 GiB managed PostgreSQL ($180). 300k: two 4-vCPU
+  CPU-optimized app servers and a 16 GiB managed PostgreSQL ($425). 1M: four 8-vCPU app servers,
+  a 16-vCPU / 64 GB database server with a replica of the same size, a Redis pair and database
+  backups. Not counted: the load balancer, standby nodes of the managed database, log storage,
+  capacity for the burst after a push to every user, and the people who patch, back up and stay
+  on call, which at 1M users cost more than the servers. Budget providers charge less for the
+  same hardware; the large clouds more.
+- **Supabase with its sign-in** (Pro, $25): $0.00325 per monthly active user beyond 100,000, plus
+  the compute size ($10, $110, $410, $960). Moving there means rewriting sign-in, push and the
+  inbox on its services.
+- **Supabase as database only**: the Worker keeps Better Auth, Queues and crons and reaches
+  Supabase's PostgreSQL through Hyperdrive (included in both Workers plans): the plan and the same
+  compute sizes. Not counted: the Workers requests and CPU of the "with your app" column without
+  its D1 writes (about $220 at 1M users), and the work of porting the queries from D1.
+
+What it comes to:
+
+- Up to about 100k daily users Workers costs the least and needs nobody to run it.
+- D1 row writes ($1 a million) are what grows fastest on Workers. From a few hundred thousand
+  daily users with an app that writes a lot, a PostgreSQL behind Hyperdrive (managed or your own)
+  costs less than D1 while the Worker keeps absorbing bursts.
+- A fleet of your own servers is cheaper only on the hardware line; with redundancy, burst
+  capacity and operations counted it is not, until you already have a team that runs servers.
+- At 1M daily users neither side is simple: `INBOX_DB` passes D1's 10 GB limit and one D1 database
+  applies writes one at a time, so plan the data layer (shards, or PostgreSQL) before that size.
+
+Sources: [Workers](https://developers.cloudflare.com/workers/platform/pricing/),
+[Hyperdrive](https://developers.cloudflare.com/hyperdrive/platform/pricing/),
+[Supabase](https://supabase.com/pricing),
+[DigitalOcean Droplets](https://www.digitalocean.com/pricing/droplets) and
+[managed databases](https://www.digitalocean.com/pricing/managed-databases).
+
 ## Write rules built into the code
 
 - Every row written costs one extra write per index it touches; deletes count as writes.
