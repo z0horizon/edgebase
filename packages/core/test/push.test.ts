@@ -5,6 +5,7 @@ import {
   authed,
   call,
   fakeQueue,
+  inboxRows,
   json,
   makeServiceAccount,
   seedUser,
@@ -25,10 +26,7 @@ function push(body: object, overrides: Partial<Env> = {}, headers: HeadersInit =
   return { res: call("/v1/push", json(body, { headers }), bindings), sent: q.sent };
 }
 const withPushId = (payload: object, id: number) => ({ ...payload, data: { pushId: String(id) } });
-const inboxCount = (userId: string) =>
-  env.INBOX_DB.prepare("SELECT count(*) AS n FROM inbox_item WHERE user_id = ?")
-    .bind(userId)
-    .first("n");
+const inboxCount = async (userId: string) => (await inboxRows("user_id = ?", userId)).length;
 
 describe("POST /v1/push", () => {
   it("wrong X-API-Key answers 401", async () => {
@@ -309,8 +307,8 @@ describe("templates and translations", () => {
     expect(byUser.get(enUs)?.title).toBe("Order 42 is out");
     expect(byUser.get(none)?.title).toBe("Order 42 shipped");
     expect(byUser.get(none)?.data).toMatchObject({ orderId: "42" });
-    const inboxTitle = (u: string) =>
-      env.INBOX_DB.prepare("SELECT title FROM inbox_item WHERE user_id = ?").bind(u).first("title");
+    const inboxTitle = async (u: string) =>
+      (await inboxRows<{ title: string }>("user_id = ?", u))[0]?.title;
     expect(await inboxTitle(es)).toBe("Pedido 42 enviado");
     expect(await inboxTitle(none)).toBe("Order 42 shipped");
   });

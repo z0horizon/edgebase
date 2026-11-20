@@ -2,8 +2,15 @@ import type { Context } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "./app";
 import { adminNeedsTwoFactor } from "./auth/auth";
+import { inboxTtlDays } from "./config";
 import { parseBody } from "./http";
-import { listInboxWithUnread, markAllReadStatement, markReadStatement } from "./inbox/queries";
+import {
+  listInboxWithUnread,
+  markAllRead,
+  markAllReadStatement,
+  markRead,
+  markReadStatements,
+} from "./inbox/queries";
 import { inboxQuery, personalId } from "./inbox/routes";
 import { DeviceSchema, upsertDevice } from "./push/devices";
 import { PushIdSchema, recordOpens } from "./push/stats";
@@ -45,17 +52,17 @@ export async function sync(c: Context<AppEnv>) {
   const userId = c.get("user").id;
   const now = Date.now();
   const read = (body.read ?? []).map(personalId).filter((id) => id !== null);
-  const inboxWrite = body.readAll
-    ? markAllReadStatement(c.env.INBOX_DB, userId, now)
-    : markReadStatement(c.env.INBOX_DB, userId, read, now);
-  const writes = inboxWrite ? [inboxWrite] : [];
+  const ttl = inboxTtlDays(c.env);
+  const writes = body.readAll
+    ? [markAllReadStatement(c.env.INBOX_DB, userId, now)]
+    : markReadStatements(c.env.INBOX_DB, userId, read, now, ttl);
   // DB writes and the inbox run side by side; the inbox's write and read share one batch, write
   // first, so the page already shows what this call marked read.
   const [inbox] = await Promise.all([
     body.inbox === false
-      ? writes.length > 0
-        ? c.env.INBOX_DB.batch(writes).then(() => undefined)
-        : undefined
+      ? body.readAll
+        ? markAllRead(c.env.INBOX_DB, userId, now).then(() => undefined)
+        : markRead(c.env.INBOX_DB, userId, read, now, ttl).then(() => undefined)
       : listInboxWithUnread(
           c.env.INBOX_DB,
           { ...inboxQuery(c), cursor: null, limit: body.inbox?.limit ?? 20 },

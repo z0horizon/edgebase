@@ -2,7 +2,7 @@
 
 1. **No absolute local paths** in any repository file. Use repository-relative paths.
 2. **TypeScript strict**: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`. No `any`.
-3. **Migrations are append-only**: `packages/core/migrations/` for `DB`, `packages/core/migrations-inbox/` for `INBOX_DB`, numbered `NNNN_<name>.sql`. Never edit a migration that may have been applied.
+3. **Migrations are append-only**: `packages/core/migrations/` for `DB`, `packages/core/migrations-inbox/` for `INBOX_DB`, numbered `NNNN_<name>.sql`. Never edit a migration that may have been applied. The one exception is the inbox's week tables (`inbox_item_w<n>`), made by `packages/core/src/inbox/buckets.ts` because one is needed every week.
 4. **Column naming**: Better Auth tables keep its camelCase columns; own tables use snake_case; own timestamps are integer epoch milliseconds.
 5. **Validate at the boundary**: every client or API-caller input goes through a valibot schema; failure answers `400`.
 6. **One error shape**: `{ "error": { "code": string, "message": string } }`.

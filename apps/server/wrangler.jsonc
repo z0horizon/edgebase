@@ -87,7 +87,7 @@
     // "off" stops the background write that keeps a session's lastActiveAt and current network fresh.
     "SESSION_ACTIVITY": "on",
     // Days between writes that extend an active session's 30-day expiry (1 to 14).
-    "SESSION_REFRESH_DAYS": "1",
+    "SESSION_REFRESH_DAYS": "3",
     "MAIL_FROM": "no-reply@example.com"
   }
 }

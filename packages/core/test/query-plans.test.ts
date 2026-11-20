@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 // Loads every module, which registers every statement EdgeBase runs.
 import "../src/index";
 import { registeredQueries } from "../src/db/registry";
+import { ensureBuckets } from "../src/inbox/buckets";
 
 /** Bound parameters a statement takes: the highest `?NNN`, or the count of bare `?`. */
 function paramCount(text: string): number {
@@ -37,6 +38,8 @@ describe("query plans", () => {
   });
 
   it("never scans a whole table unless the statement says why", async () => {
+    // Inbox samples name week 0's table, made here like the cron makes the real ones.
+    await ensureBuckets(env.INBOX_DB, [0]);
     const known = { DB: await tables(env.DB), INBOX_DB: await tables(env.INBOX_DB) };
     const scans: string[] = [];
     const unusedExcuses: string[] = [];

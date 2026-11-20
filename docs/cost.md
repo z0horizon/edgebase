@@ -17,7 +17,7 @@ Daily limits, reset at 00:00 UTC; past them requests fail instead of costing mon
 | Limit per day | Roughly holds |
 |---|---|
 | 100k Worker requests | ~10k daily users at 10 API calls each (cron uses ~1.5k) |
-| 100k D1 rows written | ~40k daily users without inbox items (~2.3 writes each: session, device); ~16k with one personal inbox item each (~6 writes) |
+| 100k D1 rows written | ~50k daily users without inbox items (~2 writes each: session refresh, activity, device); ~25k with one personal inbox item each (~4 writes: expiry drops week tables, no writes) |
 | 5M D1 rows read | ~150k API calls of a few dozen rows |
 | 10k Queue operations | ~3,300 messages (24 h retention): thousands of broadcasts, or small `userIds` pushes keeping each consumer batch under Free's 50-subrequest per-invocation limit |
 | 100k Durable Object requests, 13k GB-s | ~100k `/v1/realtime` socket opens; idle sockets hibernate and cost no duration |
@@ -69,7 +69,7 @@ Without any push, a signed-in user costs:
 | Source | Cost |
 |---|---|
 | Each API call (`GET /v1/inbox`, `unread-count`, …) | 1 Worker request, a few ms CPU, a few dozen rows read (`GET /v1/inbox` runs in one `INBOX_DB` batch) |
-| Session refresh, at most once every `SESSION_REFRESH_DAYS` (default 1) | ~2 writes (row and `session_expires_at` index); with `SESSION_ACTIVITY=on` (default), `lastActiveAt` and the current network update in the background at once on a new country, at most hourly on a new ASN, else every 6 hours (1 unindexed row write); `off` writes none |
+| Session refresh, at most once every `SESSION_REFRESH_DAYS` (default 3) | ~2 writes (row and `session_expires_at` index); with `SESSION_ACTIVITY=on` (default), `lastActiveAt` and the current network update in the background at once on a new country, at most every 6 hours on a new ASN, else daily (1 unindexed row write); `off` writes none |
 | Each sign-in or sign-out | ~5 writes for the `session` row (row, key, token, user and expiry indexes), the same when it is deleted; a remembered 2FA device adds ~5 (`trusted_device`) |
 | Device refresh, at most once every 7 days per device | ~2 writes (row and `device_updated_at` index) |
 | An open `/v1/realtime` socket | 1 Worker and 1 Durable Object request to open; a `ping` a minute is at most 3 Durable Object requests an hour (20 to 1) and does not wake the hub, so no duration; each event (an inbox item, or your `publish`) is at most 16 hub calls in total, not per user, plus one D1 batch per hub checking the receiving sockets' sessions not checked in the last 30 s (rows read grow with those sockets: an event to everyone reads up to one row per open socket, at most twice a minute) |
@@ -110,17 +110,17 @@ at ~3 ms CPU, one device per user, 10% of users open the daily push.
 |---|---|---|
 | Requests | 300M | ~$87 |
 | CPU | ~900M ms | ~$17 |
-| Inbox writes: 30M inserts × 2 + 30M deletes × 2 | 120M | |
-| Session refresh (`SESSION_REFRESH_DAYS=1`): 30M × 2 | 60M | |
-| Session activity touches: ~1–1.5 per user per day (0 with `SESSION_ACTIVITY=off`) | ~30–45M | |
+| Inbox writes: 30M inserts × 2 (expiry drops week tables, no writes) | 60M | |
+| Session refresh (`SESSION_REFRESH_DAYS=3`): 10M × 2 | 20M | |
+| Session activity touches: up to 1 per user per day (0 with `SESSION_ACTIVITY=off`) | ~20–30M | |
 | Device refresh: ~4.3M × 2 | ~9M | |
 | Opens: 3M × 5 | 15M | |
-| **Row writes total** | **~235–250M** | **~$185–200** |
-| Inbox storage: ~30M rows × ~400 B | **~12 GB** | over the 10 GB limit of `INBOX_DB`; with `DB`, ~$7 beyond the included 5 GB |
+| **Row writes total** | **~125–135M** | **~$75–85** |
+| Inbox storage: ~30M rows × ~400 B, up to ~37M while a week waits for its drop | **~12–15 GB** | over the 10 GB limit of `INBOX_DB`; with `DB`, ~$7 beyond the included 5 GB |
 | Workers Logs: 300M requests × 10% sampling | 30M events | ~$6 (priced by GB from Dec 1, 2026) |
 | Queues: 30M users / 50 per message ≈ 600k messages | ~1.8M operations | under $1 |
 
-Total about **$300–320 / month** plus the $5 plan, and `INBOX_DB` must be sharded or trimmed first.
+Total about **$190–210 / month** plus the $5 plan, and `INBOX_DB` must be sharded or trimmed first.
 Not counted: mail beyond the included 3,000 a month ($0.35 per 1,000; with `EMAIL_PASSWORD=off`
 only security alerts and organization invitations, and none at all with `EMAIL_SENDING=off`), and sign-ins (~10 writes for a session's
 life, small next to daily use).
@@ -130,10 +130,11 @@ Mitigations, in order of effect:
 1. Follow the client rules above; halving API calls saves ~$50.
 2. Send with `inbox: true` only when the push should be kept; many pushes do not need history.
 3. Lower `INBOX_TTL_DAYS` to 14–21 (storage only, not writes).
-4. Raise `SESSION_REFRESH_DAYS` (1 to 14): session refresh writes fall by that factor (3 saves
-   ~$40), and a session may then end up to that many days before 30 days of inactivity.
+4. Raise `SESSION_REFRESH_DAYS` further (default 3, up to 14): session refresh writes fall by that
+   factor (7 saves another ~$11), and a session may then end up to that many days before 30
+   days of inactivity.
 5. Set `SESSION_ACTIVITY=off` when you do not show users or admins where and when a session was
-   last active: saves the activity touches (~$30–45).
+   last active: saves the activity touches (~$20–30).
 6. Shard `INBOX_DB` by a hash of `user_id` (roadmap).
 
 ## Keeping your own code cheap
@@ -315,9 +316,13 @@ What the common calls cost, in D1 statements and round trips (from the test suit
 | Call | Statements | Round trips |
 |---|---|---|
 | `GET /v1/me`, any session check | 1 (session joined with user) | 1 |
-| `GET /v1/inbox` | 1 + 3 in one batch | 2 |
-| `POST /v1/sync` with device, read and opens | 1 + 4 in one inbox batch, device and opens beside it | 3–5 |
+| `GET /v1/inbox` | 1 + one per inbox table of the TTL window (the legacy table and 5–6 weeks at 30 days) + broadcasts + the unread count, in one batch: 8–9 | 2 |
+| `POST /v1/sync` with device, read and opens | 1 + 9–10 in one inbox batch (the read write, then the page), device and opens beside it | 3–5 |
 | Sign-in with email and password | 4 | 4 |
+
+Personal items are read one statement per week table, each up to the page size plus one, so a
+page of a user with items every week reads up to that many rows per table instead of in total;
+rows read stay cheap ($0.001 a million), and the statements share one round trip.
 
 ## Write rules built into the code
 
@@ -328,6 +333,7 @@ What the common calls cost, in D1 statements and round trips (from the test suit
 - Every row written costs one extra write per index it touches; deletes count as writes.
 - `inbox_item` uses an integer rowid key (2 writes per insert); a TEXT key would add an
   automatic index (3 writes).
-- Device upserts write only on change or after 7 days; session expiry refreshes at most once every `SESSION_REFRESH_DAYS`, and `lastActiveAt` touches are throttled to 6 hours (1 hour on a new ASN, none on a new country; off with `SESSION_ACTIVITY=off`).
+- Device upserts write only on change or after 7 days; session expiry refreshes at most once every `SESSION_REFRESH_DAYS` (default 3), and `lastActiveAt` touches are throttled to a day (6 hours on a new ASN, none on a new country; off with `SESSION_ACTIVITY=off`).
+- Personal inbox items live in one table per week and expire by `DROP TABLE`, which writes no rows (measured on local D1; deleting rows costs one write each).
 - Broadcasts write one row, never one per user; "read all" is one write.
 - An open is stored once per user and push (`INSERT OR IGNORE`), so repeated reports write nothing.

@@ -1,11 +1,20 @@
+import { inboxTtlDays } from "../config";
+import {
+  BUCKET_MS,
+  bucketOf,
+  dropExpiredBuckets,
+  ensureBuckets,
+  existingBucketTables,
+  LEGACY_TABLE,
+} from "../inbox/buckets";
 import { STATS_KEPT_DAYS } from "../push/limits";
 import {
   CLEANUP_CHUNK as CHUNK,
   CLEANUP,
-  CLEANUP_INBOX_ITEMS_OF_USERS,
   CLEANUP_INBOX_STATE_OF_USERS,
   CLEANUP_OPENS_OF_USERS,
   CLEANUP_UNCOUNT_OPENS_OF_USERS,
+  cleanupInboxItemsOfUsers,
 } from "./queries";
 import { CLAIM_MS } from "./scheduled";
 
@@ -49,7 +58,10 @@ async function deleteInChunks<T = unknown>(
 }
 
 type CleanupReport = {
+  /** Rows deleted from the legacy inbox table, which empties as its items expire. */
   inbox: number;
+  /** Week tables of personal inbox items dropped whole (no row writes). */
+  inboxWeeks: number;
   broadcast: number;
   inboxPush: number;
   session: number;
@@ -77,7 +89,7 @@ export async function runCleanup(
   budgetMs = BUDGET_MS,
 ): Promise<CleanupReport> {
   const deadline = Date.now() + budgetMs;
-  const inboxCutoff = now - Number(env.INBOX_TTL_DAYS) * DAY_MS;
+  const inboxCutoff = now - inboxTtlDays(env) * DAY_MS;
   // Better Auth stores dates as ISO 8601 text, which sorts like the instant it encodes.
   const iso = (ms: number) => new Date(ms).toISOString();
   let timedOut = false;
@@ -94,6 +106,13 @@ export async function runCleanup(
   };
 
   const inbox = await step(env.INBOX_DB, CLEANUP.inbox, [inboxCutoff]);
+  // A week's table goes once its newest possible item is past the TTL, so items are kept up to
+  // a week longer than INBOX_TTL_DAYS (reads still stop at the TTL). This week's and next week's
+  // tables are made ahead, so inserts rarely find theirs missing.
+  const weeks = await dropExpiredBuckets(env.INBOX_DB, inboxCutoff, deadline);
+  if (!weeks.complete) timedOut = true;
+  const inboxWeeks = weeks.dropped;
+  await ensureBuckets(env.INBOX_DB, [bucketOf(now), bucketOf(now + BUCKET_MS)]);
   const broadcast = await step(env.INBOX_DB, CLEANUP.broadcast, [inboxCutoff]);
   // Push ids grow with time like rowids, and a push past the inbox TTL is never retried.
   const inboxPush = await step(env.INBOX_DB, CLEANUP.inboxPush, [inboxCutoff]);
@@ -111,7 +130,9 @@ export async function runCleanup(
       const ids = JSON.stringify(rows.map((r) => r.id));
       await Promise.all([
         env.INBOX_DB.batch([
-          env.INBOX_DB.prepare(CLEANUP_INBOX_ITEMS_OF_USERS).bind(ids),
+          ...[LEGACY_TABLE, ...(await existingBucketTables(env.INBOX_DB))].map((t) =>
+            env.INBOX_DB.prepare(cleanupInboxItemsOfUsers(t)).bind(ids),
+          ),
           env.INBOX_DB.prepare(CLEANUP_INBOX_STATE_OF_USERS).bind(ids),
         ]),
         env.DB.batch([
@@ -150,6 +171,7 @@ export async function runCleanup(
   const all = [...inboxSteps, ...dbSteps];
   const report: CleanupReport = {
     inbox: inbox.deleted,
+    inboxWeeks,
     broadcast: broadcast.deleted,
     inboxPush: inboxPush.deleted,
     session: session.deleted,
@@ -163,7 +185,7 @@ export async function runCleanup(
     pushOpen: pushOpen.deleted,
     pushStats: pushStats.deleted,
     rowsRead: all.reduce((sum, r) => sum + r.rowsRead, 0),
-    complete: all.every((r) => r.complete),
+    complete: all.every((r) => r.complete) && weeks.complete,
     dbBytes: lastSize(dbSteps),
     inboxBytes: lastSize(inboxSteps),
   };

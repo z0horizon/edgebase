@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
+import { inboxTtlDays } from "../config";
 import { decodeCursor, jsonError, parseBody } from "../http";
 import {
   type Cursor,
@@ -29,7 +30,7 @@ export function inboxQuery(c: Context<AppEnv>) {
     userCreatedAt: user.createdAt.getTime(),
     marketingOptIn: user.marketingOptIn === true,
     now: Date.now(),
-    ttlDays: Number(c.env.INBOX_TTL_DAYS),
+    ttlDays: inboxTtlDays(c.env),
   };
 }
 
@@ -59,7 +60,7 @@ export const inboxRoutes = new Hono<AppEnv>()
     const body = await parseBody(c, ReadSchema);
     if (body instanceof Response) return body;
     const ids = body.ids.map(personalId).filter((id) => id !== null);
-    await markRead(c.env.INBOX_DB, c.get("user").id, ids, Date.now());
+    await markRead(c.env.INBOX_DB, c.get("user").id, ids, Date.now(), inboxTtlDays(c.env));
     return c.body(null, 204);
   })
   .post("/read-all", async (c) => {
@@ -68,7 +69,8 @@ export const inboxRoutes = new Hono<AppEnv>()
   })
   .delete("/:id", async (c) => {
     const id = personalId(c.req.param("id"));
-    if (id === null || !(await deleteItem(c.env.INBOX_DB, c.get("user").id, id))) {
+    const ttl = inboxTtlDays(c.env);
+    if (id === null || !(await deleteItem(c.env.INBOX_DB, c.get("user").id, id, Date.now(), ttl))) {
       return jsonError(404, "not_found", "No such inbox item");
     }
     return c.body(null, 204);

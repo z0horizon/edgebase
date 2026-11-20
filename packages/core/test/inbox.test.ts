@@ -8,7 +8,7 @@ import {
   markRead,
   unreadCount,
 } from "../src/inbox/queries";
-import { authed, call, json, signUpVerified } from "./helpers";
+import { authed, call, inboxRows, json, signUpVerified } from "./helpers";
 
 const insertBroadcast = (
   db: D1Database,
@@ -87,14 +87,10 @@ describe("inbox queries", () => {
     const NOW = epoch();
     const [a, b] = [uid(), uid()];
     await insertPersonal(env.INBOX_DB, [a, b], p("x"), NOW - 1000);
-    const ids = (
-      await env.INBOX_DB.prepare(
-        "SELECT id FROM inbox_item WHERE title = 'x' AND user_id IN (?, ?)",
-      )
-        .bind(a, b)
-        .all<{ id: number }>()
-    ).results.map((r) => r.id);
-    await markRead(env.INBOX_DB, a, ids, NOW);
+    const ids = (await inboxRows<{ id: number }>("title = 'x' AND user_id IN (?, ?)", a, b)).map(
+      (r) => r.id,
+    );
+    await markRead(env.INBOX_DB, a, ids, NOW, 30);
     const recent = { userCreatedAt: NOW - 1 };
     expect(await unreadCount(env.INBOX_DB, q(NOW, a, recent))).toBe(0);
     expect(await unreadCount(env.INBOX_DB, q(NOW, b, recent))).toBe(1);

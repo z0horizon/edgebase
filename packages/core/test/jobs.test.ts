@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { runCleanup } from "../src/jobs/cleanup";
 import { CLAIM_MS, deliverStored, enqueueDuePushes } from "../src/jobs/scheduled";
-import { fakeQueue, seedUser, signUpVerified } from "./helpers";
+import { fakeQueue, inboxRows, seedUser, signUpVerified } from "./helpers";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 8);
@@ -346,9 +346,7 @@ describe("enqueueDuePushes", () => {
     const afterClaim = Date.now() + CLAIM_MS + 1000;
     expect(await enqueueDuePushes({ ...env, PUSH_QUEUE: q.queue }, afterClaim)).toBe(1);
     expect(q.sent).toHaveLength(1);
-    expect(
-      await count(env.INBOX_DB, "SELECT count(*) AS n FROM inbox_item WHERE user_id = ?", u),
-    ).toBe(1);
+    expect((await inboxRows("user_id = ?", u)).length).toBe(1);
   });
 });
 

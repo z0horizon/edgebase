@@ -1,6 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { app } from "../src/app";
+import { existingBucketTables, LEGACY_TABLE } from "../src/inbox/buckets";
 
 export const BASE = "https://api.test";
 export const PASSWORD = "pw-correct-horse-1";
@@ -100,4 +101,21 @@ export async function makeServiceAccount(): Promise<{ json: string; publicKey: C
     private_key: `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`,
   });
   return { json, publicKey: pair.publicKey };
+}
+
+/**
+ * Personal inbox rows matching `where`, from the legacy table and every week table (personal
+ * items live in one table per week; see src/inbox/buckets.ts). Leaves out week sentinels.
+ */
+export async function inboxRows<T = Record<string, unknown>>(
+  where: string,
+  ...binds: unknown[]
+): Promise<T[]> {
+  const tables = [LEGACY_TABLE, ...(await existingBucketTables(env.INBOX_DB))];
+  const results = await env.INBOX_DB.batch<T>(
+    tables.map((t) =>
+      env.INBOX_DB.prepare(`SELECT * FROM ${t} WHERE user_id <> '' AND (${where})`).bind(...binds),
+    ),
+  );
+  return results.flatMap((r) => r.results);
 }

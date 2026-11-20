@@ -2,11 +2,14 @@ import { sql } from "../db/registry";
 
 // Statements only the scheduled jobs run, named for the plan test and D1 metrics.
 
-export const CLEANUP_INBOX_ITEMS_OF_USERS = sql(
-  "jobs.cleanup.inboxItemsOfUsers",
-  "INBOX_DB",
-  "DELETE FROM inbox_item WHERE user_id IN (SELECT value FROM json_each(?))",
-);
+/** Deletes some users' inbox items from one inbox table (the legacy one or a week's). */
+export const cleanupInboxItemsOfUsers = (table: string) =>
+  sql(
+    "jobs.cleanup.inboxItemsOfUsers",
+    "INBOX_DB",
+    `DELETE FROM ${table} WHERE user_id IN (SELECT value FROM json_each(?))`,
+  );
+cleanupInboxItemsOfUsers("inbox_item");
 
 export const CLEANUP_INBOX_STATE_OF_USERS = sql(
   "jobs.cleanup.inboxStateOfUsers",

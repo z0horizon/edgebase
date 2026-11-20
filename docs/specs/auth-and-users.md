@@ -71,7 +71,7 @@ user routes answer `503`.
    by its first redemption attempt, right or wrong. Better Auth's own
    `/api/auth/one-time-token/verify` answers `404`, and clients cannot generate one-time tokens.
 4. Sessions last 30 days and are extended at most once every `SESSION_REFRESH_DAYS` (1 to 14,
-   default 1; Better Auth `updateAge`), with a 15-minute
+   default 3; Better Auth `updateAge`), with a 15-minute
    `freshAge` for passwordless sensitive operations (`delete-user`, `unlink-account`, `passkey`
    add/rename/delete), and are capped at 30 active sessions per user (pruning the oldest on
    sign-in). Better Auth's raw-token `/api/auth/list-sessions`, `/api/auth/admin/list-user-sessions`,
@@ -79,8 +79,8 @@ user routes answer `503`.
    are disabled (`404`) in favour of token-free `/v1/sessions` and `/v1/admin/users/{userId}/sessions`.
    There is no cookie cache and no secondary storage. Client IP comes from `cf-connecting-ip` and ASN/ISP/geo
    from Cloudflare `request.cf`. Active `/v1/*` calls refresh `lastActiveAt` and the current
-   network in `ctx.waitUntil` at once when `country` changes, at most hourly when only `asn`
-   changed and otherwise every 6 hours (never with `SESSION_ACTIVITY=off`), never altering `createdIp`/`createdAsn`/`createdCountry` and never revoking a roaming
+   network in `ctx.waitUntil` at once when `country` changes, at most every 6 hours when only `asn`
+   changed and otherwise daily (never with `SESSION_ACTIVITY=off`), never altering `createdIp`/`createdAsn`/`createdCountry` and never revoking a roaming
    mobile session. When an established user completes sign-in from an `(asn, country)` pair not
    present among their other unexpired sessions or trusted devices, a transactional inbox alert and
    email are sent via `ctx.waitUntil` (capped at 3 alerts per hour per user).
@@ -100,7 +100,7 @@ user routes answer `503`.
    bound cost rather than enforce an exact quota.
 6. `POST /api/auth/delete-user` and admin `remove-user` delete the user; `session`, `account`,
    `device`, `trusted_device`, `passkey`, `twoFactor` and `member` rows cascade, and the `databaseHooks.user.delete.after`
-   hook removes the user's `inbox_item` and `inbox_state` rows from `INBOX_DB`, which has no
+   hook removes the user's inbox items (every week table and `inbox_item`) and `inbox_state` rows from `INBOX_DB`, which has no
    foreign keys (`packages/core/src/inbox/queries.ts`), and their `push_open` rows.
 7. Users opt in to marketing pushes with `POST /api/auth/update-user { marketingOptIn: true }`.
 8. Browsers on another origin may call the API with credentials when their origin is an
@@ -111,7 +111,7 @@ user routes answer `503`.
    and `user` / `organization` text columns (`name`, `email`, `image`, `banReason`, `slug`, `logo`, `metadata`)
    enforce bounded lengths on write.
 9. Email sign-ups still unverified after 7 days are deleted by the cleanup cron along with any
-   `inbox_item`, `inbox_state` and `push_open` rows, unless the user
+   inbox items (every week table and `inbox_item`), `inbox_state` and `push_open` rows, unless the user
    also has a social account (see data-retention).
 10. When `TURNSTILE_SECRET_KEY` is set, `sign-up/email`, `request-password-reset` and
     `send-verification-email` need an `x-captcha-response` header holding a Cloudflare Turnstile

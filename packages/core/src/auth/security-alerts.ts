@@ -1,4 +1,4 @@
-import { INBOX_RECENT_SECURITY_ALERTS, insertPersonal } from "../inbox/queries";
+import { insertPersonal, recentSecurityAlerts } from "../inbox/queries";
 import { sendMail } from "../mail";
 import { INBOX_EVENT, publishBestEffort } from "../realtime/publish";
 import type { ClientNetwork } from "./network";
@@ -25,12 +25,10 @@ export function sanitizeUserAgentForAlert(userAgent: string | null): string {
 }
 
 async function hasReachedAlertCap(db: D1Database, userId: string, now: number): Promise<boolean> {
-  // Uses `inbox_item_user_created_at` so sign-in loops cannot bloat `INBOX_DB` or exhaust `MAIL`.
-  const recent = await db
-    .prepare(INBOX_RECENT_SECURITY_ALERTS)
-    .bind(userId, now - ALERT_WINDOW_MS)
-    .first<number>("n");
-  return (recent ?? 0) >= MAX_SECURITY_ALERTS_PER_HOUR;
+  // Uses each week's (user_id, created_at) index so sign-in loops cannot bloat `INBOX_DB` or
+  // exhaust `MAIL`.
+  const recent = await recentSecurityAlerts(db, userId, now - ALERT_WINDOW_MS, now);
+  return recent >= MAX_SECURITY_ALERTS_PER_HOUR;
 }
 
 async function dispatchSecurityAlert(

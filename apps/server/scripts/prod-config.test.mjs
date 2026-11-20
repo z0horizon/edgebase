@@ -66,7 +66,7 @@ describe("renderConfig", () => {
       EMAIL_PASSWORD: "on",
       EMAIL_SENDING: "on",
       SESSION_ACTIVITY: "on",
-      SESSION_REFRESH_DAYS: "1",
+      SESSION_REFRESH_DAYS: "3",
     });
     assert.deepEqual(out.send_email, [
       { name: "MAIL", allowed_sender_addresses: [valid.MAIL_FROM] },
@@ -205,6 +205,7 @@ describe("validate", () => {
     ["TRUSTED_ORIGINS", "http://127.0.0.1:8787"],
     ["INBOX_TTL_DAYS", "0"],
     ["INBOX_TTL_DAYS", "1.5"],
+    ["INBOX_TTL_DAYS", "91"],
     ["MAIL_FROM", ""],
     ["APP_SCHEME", ""],
     ["EMAIL_PASSWORD", "false"],

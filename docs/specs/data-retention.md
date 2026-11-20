@@ -9,7 +9,8 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 
 | Table | Database | Deleted when | Index used |
 |---|---|---|---|
-| `inbox_item` | `INBOX_DB` | `created_at` older than `INBOX_TTL_DAYS` (default 30) | rowid order |
+| `inbox_item_w<n>` (week tables) | `INBOX_DB` | dropped whole once the week's last instant is older than `INBOX_TTL_DAYS` (default 30): items stay up to 7 days past the TTL, hidden from reads, and the drop writes no rows | none (`DROP TABLE`) |
+| `inbox_item` (items from before week tables) | `INBOX_DB` | `created_at` older than `INBOX_TTL_DAYS` | rowid order |
 | `broadcast` | `INBOX_DB` | same as `inbox_item` | rowid order |
 | `inbox_push` | `INBOX_DB` | same as `inbox_item` | rowid order (push ids grow with time) |
 | `session` | `DB` | `expiresAt` < now (ISO text compare); also capped at 30 active rows per user on sign-in | `session_expires_at`, `session_user_id` |
@@ -42,6 +43,9 @@ per table, rows read, whether it finished (`complete`), and both databases' size
 
 ## Capacity
 
-Each written row costs one extra write per index it touches, and deletes count as writes.
-At 1M users receiving one inbox item a day with a 30-day TTL, `inbox_item` holds ~30M rows
-(~12 GB), over D1's 10 GB per database. See [cost.md](../cost.md) for the mitigations.
+Each written row costs one extra write per index it touches, and deletes count as writes (one
+per row); dropping a week table wrote none, both as measured on local D1 (confirm on yours with
+the `d1` log line, `via: "cron:cleanup"`), so personal inbox items cost their insert only. The
+cleanup drops one week per statement and stops at its time budget. At 1M users receiving one
+inbox item a day with a 30-day TTL, the week tables hold ~30M rows (up to ~37M while an expired week waits for its drop)
+(~12–15 GB), over D1's 10 GB per database. See [cost.md](../cost.md) for the mitigations.

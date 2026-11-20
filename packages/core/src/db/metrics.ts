@@ -23,7 +23,9 @@ export function otherName(text: string): string {
   const tableAfter =
     verb === "UPDATE" ? "UPDATE" : verb === "SELECT" || verb === "DELETE" ? "FROM" : "INTO";
   const table = new RegExp(`\\b${tableAfter}\\s+["\`]?(\\w+)`, "i").exec(text)?.[1];
-  return `other:${verb.toLowerCase()}${table ? `.${table}` : ""}`;
+  // Inbox week tables share one name, so metric keys do not grow with every week.
+  const named = table?.replace(/^inbox_item_w\d+$/, "inbox_item_w*");
+  return `other:${verb.toLowerCase()}${named ? `.${named}` : ""}`;
 }
 
 const nameOf = (text: string) => queryName(text) ?? otherName(text);

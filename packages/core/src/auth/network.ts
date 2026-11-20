@@ -1,8 +1,9 @@
 import { SESSION_TOUCH_ACTIVITY } from "./queries";
 
-const ACTIVITY_TOUCH_MS = 6 * 60 * 60_000;
+// A daily write is enough to show when a session was last used; it is a D1 row write each time.
+const ACTIVITY_TOUCH_MS = 24 * 60 * 60_000;
 // Phones hop between Wi-Fi and mobile carriers all day; one write per hop would dominate session writes.
-const ASN_TOUCH_MS = 60 * 60_000;
+const ASN_TOUCH_MS = 6 * 60 * 60_000;
 const MAX_UA_LEN = 512;
 const HEX_GROUP = /^[0-9a-f]{1,4}$/;
 
@@ -116,8 +117,8 @@ export type TrackedSession = {
 
 /**
  * Updates `lastActiveAt` and the current network of an active session in the background: at once
- * when the session moves to another country, at most hourly when only its ASN changed, and
- * otherwise at most every 6 hours.
+ * when the session moves to another country, at most every 6 hours when only its ASN changed,
+ * and otherwise at most daily.
  */
 export function touchSessionActivity(
   db: D1Database,

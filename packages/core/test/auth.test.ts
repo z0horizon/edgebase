@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { socialProviderOf } from "../src/auth/auth";
 import { base64url, sha256 } from "../src/http";
-import { authed, call, freshIp, json, PASSWORD, signUpVerified } from "./helpers";
+import { authed, call, freshIp, inboxRows, json, PASSWORD, signUpVerified } from "./helpers";
 import { createVirtualPasskey } from "./webauthn-helper";
 
 /**
@@ -327,19 +327,19 @@ it("SESSION_REFRESH_DAYS sets how often an active session's expiry is pushed for
     env.DB.prepare("SELECT expiresAt FROM session WHERE userId = ?")
       .bind(userId)
       .first<string>("expiresAt");
-  // A session last extended two days ago has 28 of its 30 days left.
-  const twoDaysOld = new Date(Date.now() + 28 * 86_400_000).toISOString();
+  // A session last extended four days ago has 26 of its 30 days left.
+  const fourDaysOld = new Date(Date.now() + 26 * 86_400_000).toISOString();
   await env.DB.prepare("UPDATE session SET expiresAt = ? WHERE userId = ?")
-    .bind(twoDaysOld, userId)
+    .bind(fourDaysOld, userId)
     .run();
-  for (const days of ["3", "14"]) {
+  for (const days of ["7", "14"]) {
     await call("/v1/me", authed(token), { ...env, SESSION_REFRESH_DAYS: days });
-    expect(await expiry()).toBe(twoDaysOld);
+    expect(await expiry()).toBe(fourDaysOld);
   }
-  // Out of range falls back to the default of one day, which extends it.
+  // Out of range falls back to the default of three days, which extends it.
   await call("/v1/me", authed(token), { ...env, SESSION_REFRESH_DAYS: "90" });
   const extended = await expiry();
-  expect(Date.parse(extended ?? "")).toBeGreaterThan(Date.parse(twoDaysOld) + 86_400_000);
+  expect(Date.parse(extended ?? "")).toBeGreaterThan(Date.parse(fourDaysOld) + 86_400_000);
 });
 
 it("APP_NAME labels the TOTP issuer and the passkey relying party", async () => {
@@ -1252,7 +1252,7 @@ describe("session network telemetry and freshness", () => {
     expect(forge.status).toBe(400);
   });
 
-  it("updates current network and lastActiveAt on country shift, hourly on ASN shift and every 6 hours otherwise, keeping origin immutable", async () => {
+  it("updates current network and lastActiveAt on country shift, every 6 hours on ASN shift and daily otherwise, keeping origin immutable", async () => {
     const email = "roam@x.io";
     await signUpVerified(email);
     const originIp = freshIp();
@@ -1292,7 +1292,7 @@ describe("session network telemetry and freshness", () => {
       call("/v1/me", { ...authed(token, { headers: { "cf-connecting-ip": ipAddress } }), cf });
 
     // SESSION_ACTIVITY=off: even a new country writes nothing.
-    let at = await idleFor(7 * 60);
+    let at = await idleFor(25 * 60);
     await call(
       "/v1/me",
       { ...authed(token, { headers: { "cf-connecting-ip": freshIp() } }), cf: singtel },
@@ -1300,18 +1300,18 @@ describe("session network telemetry and freshness", () => {
     );
     expect(await sessionRow()).toMatchObject({ country: "VN", lastActiveAt: at });
 
-    // Same network: nothing is written inside 6 hours.
-    at = await idleFor(5 * 60);
+    // Same network: nothing is written inside a day.
+    at = await idleFor(23 * 60);
     await me(freshIp(), vnpt);
     expect((await sessionRow())?.["lastActiveAt"]).toBe(at);
 
-    // Wi-Fi -> mobile carrier (new ASN) inside the hour: no write, so hopping does not cost one each time.
-    at = await idleFor(30);
+    // Wi-Fi -> mobile carrier (new ASN) inside 6 hours: no write, so hopping does not cost one each time.
+    at = await idleFor(5 * 60);
     await me(freshIp(), viettel);
     expect(await sessionRow()).toMatchObject({ asn: 45899, lastActiveAt: at });
 
-    // The same hop an hour after the last write updates the current network, keeping created* intact.
-    at = await idleFor(61);
+    // The same hop 6 hours after the last write updates the current network, keeping created* intact.
+    at = await idleFor(6 * 60 + 1);
     const mobileIp = freshIp();
     await me(mobileIp, viettel);
     const roamed = await sessionRow();
@@ -1334,8 +1334,8 @@ describe("session network telemetry and freshness", () => {
     await me(freshIp(), singtel);
     expect(await sessionRow()).toMatchObject({ asn: 7473, country: "SG", createdCountry: "VN" });
 
-    // After 6 hours on the same network, lastActiveAt refreshes.
-    at = await idleFor(6 * 60 + 1);
+    // After a day on the same network, lastActiveAt refreshes.
+    at = await idleFor(24 * 60 + 1);
     await me(freshIp(), singtel);
     expect((await sessionRow())?.["lastActiveAt"]).not.toBe(at);
   });
@@ -2406,11 +2406,7 @@ describe("audit hardening: token isolation, CSRF, body/column/session/alert life
       await env.DB.prepare("SELECT count(*) AS n FROM session WHERE id = 's-cap-1'").first("n"),
     ).toBe(0);
     expect(sentMail).toHaveLength(3);
-    expect(
-      await env.INBOX_DB.prepare("SELECT count(*) AS n FROM inbox_item WHERE user_id = ?")
-        .bind(userId)
-        .first("n"),
-    ).toBe(3);
+    expect((await inboxRows("user_id = ?", userId)).length).toBe(3);
   });
 
   it("rotates trusted_device token on use (preserving 30d expiry) and refuses 2FA bypass on country or OS-family shift", async () => {

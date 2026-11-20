@@ -27,7 +27,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
 | Binding | Kind | Holds |
 |---|---|---|
 | `DB` | D1 `edgebase-db` | Better Auth tables (incl. admin, twoFactor, passkey, organization), `trusted_device`, `device`, `scheduled_push`, `push_stats`, `push_open`, `push_template`, `push_idempotency` |
-| `INBOX_DB` | D1 `edgebase-inbox` | `inbox_item`, `broadcast`, `inbox_state`, `inbox_push` |
+| `INBOX_DB` | D1 `edgebase-inbox` | `inbox_item_w<n>` (personal items, one table per week), `inbox_item` (items from before), `broadcast`, `inbox_state`, `inbox_push` |
 | `PUSH_QUEUE` | Queue `edgebase-push` | push messages (producer and consumer) |
 | `PUSH_DLQ` | Queue `edgebase-push-dlq` | pushes that failed 5 attempts |
 | `REALTIME` | Durable Object `RealtimeHub` | `/v1/realtime` sockets, 16 hubs by user id; no storage |
@@ -45,7 +45,7 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
 - **Sessions in D1, no cache.** Every user request reads its session from D1, so sign-out, ban or
   password change take effect on the next request. KV or a cookie cache would delay revocation by
   up to a minute. Smart Placement runs the Worker near D1 to keep that read short, and `updateAge`
-  of one day (`SESSION_REFRESH_DAYS`) keeps session writes to about one per session per day.
+  of three days (`SESSION_REFRESH_DAYS`) keeps session writes to about one per session every three days.
 - **Two D1 databases.** The inbox is the largest and most-written table. Keeping it out of `DB`
   keeps sign-in fast and gives each database its own 10 GB. The cost is no foreign key from the
   inbox to `user`; account deletion removes inbox rows in a Better Auth hook.
@@ -83,6 +83,12 @@ the app's own routes, and `apps/admin` is the admin page (see [extending.md](ext
   (`validateSchema: false`): an auth instance lives one request, so that check cost about 20
   statements on every request. `test/auth-schema.test.ts` runs the same comparison against the
   migrations instead.
+- **A week of inbox per table.** D1 bills every deleted row as a written row, so expiring a day's
+  inbox items cost as much as writing them. Personal items go into one table per week and the
+  cleanup drops a week whole, which writes nothing: items now cost their insert only. Week tables
+  are made by code because one is needed every week. An id names its week, so marking read and
+  deleting touch one table; a read names each table of the TTL window (one statement each, in one
+  batch), which is why `INBOX_TTL_DAYS` is capped at 90.
 - **Writes are budgeted.** Device upserts skip writes inside 7 days, rowid keys avoid extra
   index writes, and every growing table has a TTL (see [specs/data-retention.md](specs/data-retention.md)).
 

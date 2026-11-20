@@ -35,6 +35,8 @@ What changed for people building on EdgeBase. The format follows
 
 ### Changed
 
+- Personal inbox items are stored in one table per week (`inbox_item_w<n>`, made by code) and expire by dropping a whole week, which writes no D1 rows: expiring items used to cost as many writes as storing them. Item ids keep the `p_<number>` form (larger numbers, which name the week). Items expire up to 7 days after `INBOX_TTL_DAYS` (reads still hide them at the TTL). Items stored before stay in `inbox_item`, are still read, and expire as before. The zero-write drop was measured on local D1; check `rowsWritten` in the `d1` log line of `cron:cleanup` on yours. `INBOX_TTL_DAYS` is now capped at 90 (a read names one table per week of it); deploys refuse more, and a larger runtime value falls back to 30.
+- `SESSION_REFRESH_DAYS` defaults to 3 (was 1), and with `SESSION_ACTIVITY=on` a session's `lastActiveAt` and network are written at most daily (was every 6 hours) and every 6 hours on a new ASN (was hourly); a new country is still written at once. Together with the inbox change, about half the D1 row writes of the 1M-user estimate in `docs/cost.md`. A session's stored network can now lag up to 6 hours behind on a phone hopping between carriers, so sign-in alerts for a "new network" may fire a little more often, and a session's "last active" may lag up to a day.
 - Every signed-in request ran about 20 schema-introspection statements (Better Auth's runtime schema check, repeated because an auth instance lives one request) and two statements for the session and its user; it now runs one, a join. `GET /v1/me` went from 23 statements to 1, and every other signed-in call saves the same. The schema check runs in the test suite instead.
 - `POST /v1/sync` marks items read and reads the inbox in one batch, beside the device and open writes, instead of one after the other.
 - Core's SQL moved into named `queries.ts` modules; a test checks every statement's query plan for full table scans. If you edited core SQL in place, expect merge conflicts there.
@@ -48,6 +50,8 @@ What changed for people building on EdgeBase. The format follows
 
 ### Upgrade
 
+- If your own code reads `inbox_item` directly, new personal items are no longer there: they are in the week tables `inbox_item_w<n>`; go through `listInbox` / `listInboxWithUnread` from `packages/core/src/inbox/queries.ts`, or list the tables with `existingBucketTables`. An `INBOX_TTL_DAYS` above 90 must be lowered before deploying.
+- Sessions are now extended every 3 days by default: a session left unused for 27 to 30 days may already have expired. Set `SESSION_REFRESH_DAYS=1` in `.env.production` to keep the old behaviour.
 - `pnpm run deploy` and `pnpm bootstrap` now refuse a deployment with email and password sign-in on and no `TURNSTILE_SECRET_KEY`: create a Turnstile widget (free), set its secret, and have your apps send `X-Captcha-Response` on sign-up, password reset and resend verification; or set `EMAIL_PASSWORD=off`.
 - Before setting `EMAIL_PASSWORD=off` on a deployment whose admins sign in with a password, have each of them link Google, Apple or GitHub, or add a passkey, under Account & Security while it is still on. Afterwards their password no longer works, and a provider cannot join an existing admin by email.
 - Clients that call signed-in `/v1` routes more than 120 times (or write more than 60 times) a minute per user now get `429 rate_limited`; make them wait for `Retry-After`. The two new rate-limit bindings come from `wrangler.jsonc` on the next deploy.

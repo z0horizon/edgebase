@@ -142,7 +142,11 @@ export function validate(env) {
       "EMAIL_SENDING off needs EMAIL_PASSWORD=off: email and password sign-in depends on mail",
     );
   }
-  check("INBOX_TTL_DAYS", (v) => /^[1-9]\d*$/.test(v), "must be a whole number of days");
+  check(
+    "INBOX_TTL_DAYS",
+    (v) => /^[1-9]\d*$/.test(v) && Number(v) <= 90,
+    "must be a whole number of days from 1 to 90",
+  );
   check(
     "APP_NAME",
     (v) => /^[^\p{Cc}<>]{0,40}$/u.test(v),

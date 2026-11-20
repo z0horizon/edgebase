@@ -37,7 +37,7 @@ FCM and retries per token.
    written to `INBOX_DB`. The response is `202 { id, users: <eligible count> }`, `id` being the
    push's stats row (see Stats); dispatch adds it to the push's `data` as `pushId`, overwriting a
    caller's own `pushId` key.
-4. With `inbox: true`, one `inbox_item` per eligible user (to users) or one `broadcast` row (to a
+4. With `inbox: true`, one personal inbox item (in the week's table) per eligible user (to users) or one `broadcast` row (to a
    topic) is written before enqueueing.
 5. User pushes are queued as messages of at most 50 user ids; a topic push is one message.
 6. `category` sets delivery priority: `transactional` → Android `HIGH`, channel `default`,
