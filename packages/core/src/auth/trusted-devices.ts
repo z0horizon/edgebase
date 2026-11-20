@@ -3,6 +3,25 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { sessionActivityEnabled } from "../config";
 import { base64url, sha256 } from "../http";
 import { type ClientNetwork, type TrackedSession, touchSessionActivity } from "./network";
+import {
+  SESSION_DELETE,
+  SESSION_DELETE_FOR_USER,
+  SESSION_DELETE_OTHERS,
+  SESSION_TRIM,
+  TRUSTED_DEVICE_DELETE_EXPIRED,
+  TRUSTED_DEVICE_DELETE_FOR_USER,
+  TRUSTED_DEVICE_DELETE_OWN,
+  TRUSTED_DEVICE_INSERT,
+  TRUSTED_DEVICE_LIST_ACTIVE,
+  TRUSTED_DEVICE_MATCH,
+  TRUSTED_DEVICE_ROTATE,
+  TRUSTED_DEVICE_TRIM,
+  USER_SET_PASSWORD_CHANGED_AT,
+  USER_SET_TWO_FACTOR_ENABLED_AT,
+  VERIFICATION_DELETE,
+  VERIFICATION_DELETE_TRUST_BRIDGES,
+  VERIFICATION_INSERT,
+} from "./queries";
 import { notifyNewNetworkSignIn } from "./security-alerts";
 
 export const TRUSTED_DEVICE_TTL_MS = 30 * 86_400_000;
@@ -227,10 +246,8 @@ export function revokeAllTrustedDevicesStatements(
 ): D1PreparedStatement[] {
   // Uses `GLOB` (case-sensitive) so SQLite seeks `verification_identifier` instead of scanning.
   return [
-    db.prepare("DELETE FROM trusted_device WHERE user_id = ?").bind(userId),
-    db
-      .prepare("DELETE FROM verification WHERE identifier GLOB 'trust-device-*' AND value = ?")
-      .bind(userId),
+    db.prepare(TRUSTED_DEVICE_DELETE_FOR_USER).bind(userId),
+    db.prepare(VERIFICATION_DELETE_TRUST_BRIDGES).bind(userId),
   ];
 }
 
@@ -251,18 +268,12 @@ export async function wipeCredentialsState(
 ): Promise<void> {
   const statements: D1PreparedStatement[] = [];
   if (opts.passwordChangedAt) {
-    statements.push(
-      db
-        .prepare("UPDATE user SET passwordChangedAt = ? WHERE id = ?")
-        .bind(opts.passwordChangedAt, userId),
-    );
+    statements.push(db.prepare(USER_SET_PASSWORD_CHANGED_AT).bind(opts.passwordChangedAt, userId));
   }
   statements.push(
     opts.keepSessionId
-      ? db
-          .prepare("DELETE FROM session WHERE userId = ? AND id <> ?")
-          .bind(userId, opts.keepSessionId)
-      : db.prepare("DELETE FROM session WHERE userId = ?").bind(userId),
+      ? db.prepare(SESSION_DELETE_OTHERS).bind(userId, opts.keepSessionId)
+      : db.prepare(SESSION_DELETE_FOR_USER).bind(userId),
     ...revokeAllTrustedDevicesStatements(db, userId),
   );
   await db.batch(statements);
@@ -270,17 +281,7 @@ export async function wipeCredentialsState(
 
 /** Bounds active `session` rows per user (`MAX_SESSIONS_PER_USER`), evicting least-recently active. */
 export function pruneUserSessionsStatement(db: D1Database, userId: string): D1PreparedStatement {
-  return db
-    .prepare(
-      `DELETE FROM session
-       WHERE userId = ?1 AND id NOT IN (
-         SELECT id FROM session
-         WHERE userId = ?1
-         ORDER BY COALESCE(lastActiveAt, updatedAt) DESC, createdAt DESC
-         LIMIT ?2
-       )`,
-    )
-    .bind(userId, MAX_SESSIONS_PER_USER);
+  return db.prepare(SESSION_TRIM).bind(userId, MAX_SESSIONS_PER_USER);
 }
 
 export async function mintTrustedDevice(
@@ -298,17 +299,9 @@ export async function mintTrustedDevice(
 
   await db.batch([
     ...extraStatements,
+    db.prepare(TRUSTED_DEVICE_DELETE_EXPIRED).bind(userId, now),
     db
-      .prepare("DELETE FROM trusted_device WHERE user_id = ? AND expires_at <= ?")
-      .bind(userId, now),
-    db
-      .prepare(
-        `INSERT INTO trusted_device (
-           id, token_hash, user_id, user_agent, ip_address, asn, as_organization, country, city,
-           created_ip, created_asn, created_as_organization, created_country, created_city,
-           created_at, last_used_at, expires_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
+      .prepare(TRUSTED_DEVICE_INSERT)
       .bind(
         id,
         tokenHash,
@@ -328,17 +321,7 @@ export async function mintTrustedDevice(
         now,
         expiresAt,
       ),
-    db
-      .prepare(
-        `DELETE FROM trusted_device
-         WHERE user_id = ?1 AND id NOT IN (
-           SELECT id FROM trusted_device
-           WHERE user_id = ?1
-           ORDER BY last_used_at DESC, created_at DESC
-           LIMIT ?2
-         )`,
-      )
-      .bind(userId, MAX_TRUSTED_DEVICES_PER_USER),
+    db.prepare(TRUSTED_DEVICE_TRIM).bind(userId, MAX_TRUSTED_DEVICES_PER_USER),
   ]);
 
   return { id, rawToken };
@@ -352,14 +335,7 @@ export async function listTrustedDevices(
 ): Promise<TrustedDeviceItem[]> {
   const currentHash = currentToken ? base64url(await sha256(currentToken)) : null;
   const rows = await db
-    .prepare(
-      `SELECT id, token_hash, user_agent, ip_address, asn, as_organization, country, city,
-              created_ip, created_asn, created_as_organization, created_country, created_city,
-              created_at, last_used_at, expires_at
-       FROM trusted_device
-       WHERE user_id = ? AND expires_at > ?
-       ORDER BY last_used_at DESC, created_at DESC`,
-    )
+    .prepare(TRUSTED_DEVICE_LIST_ACTIVE)
     .bind(userId, now)
     .all<TrustedDeviceRow>();
 
@@ -389,7 +365,7 @@ export async function revokeTrustedDevice(
   deviceId: string,
 ): Promise<{ deleted: boolean; tokenHash: string | null }> {
   const row = await db
-    .prepare("DELETE FROM trusted_device WHERE id = ? AND user_id = ? RETURNING token_hash")
+    .prepare(TRUSTED_DEVICE_DELETE_OWN)
     .bind(deviceId, userId)
     .first<{ token_hash: string }>();
   return { deleted: Boolean(row), tokenHash: row?.token_hash ?? null };
@@ -422,29 +398,19 @@ async function prepareSignInTrustBridge(
 
   if (email && rawToken) {
     const tokenHash = base64url(await sha256(rawToken));
-    const match = await env.DB.prepare(
-      `SELECT td.id AS deviceId, td.last_used_at AS lastUsedAt, td.expires_at AS expiresAt,
-              td.user_agent AS userAgent, td.ip_address AS ipAddress, td.asn AS asn,
-              td.country AS country, td.created_country AS createdCountry,
-              u.id AS userId, u.twoFactorEnabled AS twoFactorEnabled, u.banned AS banned
-       FROM user u
-       JOIN trusted_device td ON td.user_id = u.id
-       WHERE u.email = ? COLLATE NOCASE AND td.token_hash = ? AND td.expires_at > ?`,
-    )
-      .bind(email, tokenHash, now)
-      .first<{
-        deviceId: string;
-        lastUsedAt: number;
-        expiresAt: number;
-        userAgent: string | null;
-        ipAddress: string | null;
-        asn: number | null;
-        country: string | null;
-        createdCountry: string | null;
-        userId: string;
-        twoFactorEnabled: number;
-        banned: number | null;
-      }>();
+    const match = await env.DB.prepare(TRUSTED_DEVICE_MATCH).bind(email, tokenHash, now).first<{
+      deviceId: string;
+      lastUsedAt: number;
+      expiresAt: number;
+      userAgent: string | null;
+      ipAddress: string | null;
+      asn: number | null;
+      country: string | null;
+      createdCountry: string | null;
+      userId: string;
+      twoFactorEnabled: number;
+      banned: number | null;
+    }>();
 
     if (match && match.twoFactorEnabled === 1 && !match.banned) {
       const refCountry = match.country ?? match.createdCountry;
@@ -473,10 +439,7 @@ async function prepareSignInTrustBridge(
         state.bridgeTrustId = trustId;
         const nowIso = new Date(now).toISOString();
         const expIso = new Date(now + BRIDGE_TRUST_TTL_MS).toISOString();
-        await env.DB.prepare(
-          `INSERT INTO verification (id, identifier, value, expiresAt, createdAt, updatedAt)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        )
+        await env.DB.prepare(VERIFICATION_INSERT)
           .bind(crypto.randomUUID(), trustId, match.userId, expIso, nowIso, nowIso)
           .run();
 
@@ -575,34 +538,19 @@ export function edgebaseSecurityPlugin(
             if (ctx.path === "/sign-in/email" && state.bridgeTrustId) {
               const newSess = ctx.context.returned instanceof Error ? null : ctx.context.newSession;
               if (!newSess) {
-                await env.DB.prepare("DELETE FROM verification WHERE identifier = ?")
-                  .bind(state.bridgeTrustId)
-                  .run();
+                await env.DB.prepare(VERIFICATION_DELETE).bind(state.bridgeTrustId).run();
                 return;
               }
               const matched = state.matchedDevice;
               const statements: D1PreparedStatement[] = [
-                env.DB.prepare(
-                  "DELETE FROM verification WHERE identifier GLOB 'trust-device-*' AND value = ?",
-                ).bind(newSess.user.id),
+                env.DB.prepare(VERIFICATION_DELETE_TRUST_BRIDGES).bind(newSess.user.id),
               ];
               let rotatedRawToken: string | null = null;
               if (matched && matched.userId === newSess.user.id) {
                 rotatedRawToken = base64url(crypto.getRandomValues(new Uint8Array(32)));
                 const rotatedHash = base64url(await sha256(rotatedRawToken));
                 statements.push(
-                  env.DB.prepare(
-                    `UPDATE trusted_device
-                     SET token_hash = ?,
-                         last_used_at = ?,
-                         user_agent = COALESCE(?, user_agent),
-                         ip_address = COALESCE(?, ip_address),
-                         asn = COALESCE(?, asn),
-                         as_organization = COALESCE(?, as_organization),
-                         country = COALESCE(?, country),
-                         city = COALESCE(?, city)
-                     WHERE id = ? AND token_hash = ?`,
-                  ).bind(
+                  env.DB.prepare(TRUSTED_DEVICE_ROTATE).bind(
                     rotatedHash,
                     now,
                     net.userAgent,
@@ -618,9 +566,7 @@ export function edgebaseSecurityPlugin(
               }
               const batchRes = await env.DB.batch(statements);
               if (matched && batchRes[1]?.meta.changes === 0) {
-                await env.DB.prepare("DELETE FROM session WHERE id = ?")
-                  .bind(newSess.session.id)
-                  .run();
+                await env.DB.prepare(SESSION_DELETE).bind(newSess.session.id).run();
                 ctx.responseHeaders?.append(
                   "set-cookie",
                   `${ctx.context.authCookies.sessionToken.name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
@@ -689,11 +635,7 @@ export function edgebaseSecurityPlugin(
                 ctx.path === "/two-factor/verify-totp" &&
                 !(newSess.user as { twoFactorEnabledAt?: string | null }).twoFactorEnabledAt;
               const enableStmt = needsEnabledAt
-                ? [
-                    env.DB.prepare(
-                      "UPDATE user SET twoFactorEnabledAt = ? WHERE id = ? AND twoFactorEnabledAt IS NULL",
-                    ).bind(nowIso, newSess.user.id),
-                  ]
+                ? [env.DB.prepare(USER_SET_TWO_FACTOR_ENABLED_AT).bind(nowIso, newSess.user.id)]
                 : [];
 
               if (state.hadTwoFactorCookie) {
@@ -740,7 +682,7 @@ export function edgebaseSecurityPlugin(
             if (ctx.path === "/two-factor/disable") {
               const active = ctx.context.newSession ?? ctx.context.session;
               if (!active) return;
-              await env.DB.prepare("DELETE FROM session WHERE userId = ? AND id <> ?")
+              await env.DB.prepare(SESSION_DELETE_OTHERS)
                 .bind(active.user.id, active.session.id)
                 .run();
               ctx.responseHeaders?.append("set-cookie", serializeTrustCookie(env.BASE_URL, "", 0));

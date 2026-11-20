@@ -3,6 +3,7 @@ import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { base64url, jsonError, parseBody, sha256 } from "../http";
 import { createAuth } from "./auth";
+import { VERIFICATION_INSERT, VERIFICATION_TAKE, VERIFICATION_TAKE_MATCHING } from "./queries";
 
 const HANDOFF_TTL_MS = 3 * 60_000;
 const FRESH_SESSION_MS = 5 * 60_000;
@@ -25,10 +26,7 @@ async function insertVerification(
 ): Promise<void> {
   const iso = new Date(now).toISOString();
   await db
-    .prepare(
-      `INSERT INTO verification (id, identifier, value, expiresAt, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
+    .prepare(VERIFICATION_INSERT)
     .bind(
       crypto.randomUUID(),
       identifier,
@@ -85,9 +83,7 @@ export async function appCallback(c: Context<AppEnv>): Promise<Response> {
   if (!session || now - session.session.createdAt.getTime() > FRESH_SESSION_MS) {
     return fail("unauthorized");
   }
-  const bound = await c.env.DB.prepare(
-    "DELETE FROM verification WHERE identifier = ? AND value = ? RETURNING expiresAt",
-  )
+  const bound = await c.env.DB.prepare(VERIFICATION_TAKE_MATCHING)
     .bind(callbackId(session.session.id), challenge.output)
     .first<{ expiresAt: string }>();
   if (!bound || bound.expiresAt < new Date(now).toISOString()) {
@@ -105,9 +101,7 @@ export async function appExchange(c: Context<AppEnv>): Promise<Response> {
   const rejected = () => jsonError(401, "unauthorized", "Hand-off token is invalid or expired");
 
   // Deleted on first use, right or wrong, so an intercepted token cannot be retried.
-  const row = await c.env.DB.prepare(
-    "DELETE FROM verification WHERE identifier = ? RETURNING value, expiresAt",
-  )
+  const row = await c.env.DB.prepare(VERIFICATION_TAKE)
     .bind(await handoffId(body.token))
     .first<{ value: string; expiresAt: string }>();
   if (!row || row.expiresAt < new Date().toISOString()) return rejected();

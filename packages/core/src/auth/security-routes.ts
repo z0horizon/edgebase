@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { base64url, jsonError, sha256 } from "../http";
+import { SESSION_DELETE_OTHERS, SESSION_DELETE_OWN, SESSION_LIST_ACTIVE } from "./queries";
 import {
   extractTrustDeviceToken,
   listTrustedDevices,
@@ -43,16 +44,7 @@ async function queryActiveSessions(
   nowIso: string,
 ): Promise<SessionListRow[]> {
   const rows = await db
-    .prepare(
-      `SELECT id, userId, ipAddress, userAgent, asn, asOrganization, country, city,
-              createdIp, createdAsn, createdAsOrganization, createdCountry, createdCity,
-              lastActiveAt, signInProvider, twoFactorMethod, twoFactorVerifiedAt,
-              createdAt, updatedAt, expiresAt
-       FROM session
-       WHERE userId = ? AND expiresAt > ?
-       ORDER BY COALESCE(lastActiveAt, updatedAt) DESC, createdAt DESC
-       LIMIT ?`,
-    )
+    .prepare(SESSION_LIST_ACTIVE)
     .bind(userId, nowIso, MAX_LISTED_SESSIONS)
     .all<SessionListRow>();
   return rows.results;
@@ -73,18 +65,14 @@ sessionSecurityRoutes.get("/", async (c) => {
 });
 
 sessionSecurityRoutes.post("/revoke-others", async (c) => {
-  await c.env.DB.prepare("DELETE FROM session WHERE userId = ? AND id <> ?")
-    .bind(c.get("user").id, c.get("session").id)
-    .run();
+  await c.env.DB.prepare(SESSION_DELETE_OTHERS).bind(c.get("user").id, c.get("session").id).run();
   return c.body(null, 204);
 });
 
 sessionSecurityRoutes.delete("/:id", async (c) => {
   const id = v.safeParse(IdParamSchema, c.req.param("id"));
   if (!id.success) return jsonError(400, "invalid_param", "Invalid session id");
-  const result = await c.env.DB.prepare("DELETE FROM session WHERE id = ? AND userId = ?")
-    .bind(id.output, c.get("user").id)
-    .run();
+  const result = await c.env.DB.prepare(SESSION_DELETE_OWN).bind(id.output, c.get("user").id).run();
   if (result.meta.changes === 0) return jsonError(404, "not_found", "Session not found");
   return c.body(null, 204);
 });
@@ -111,7 +99,7 @@ adminSessionRoutes.delete("/:userId/sessions/:sessionId", async (c) => {
   if (!userId.success || !sessionId.success) {
     return jsonError(400, "invalid_param", "Invalid user or session id");
   }
-  const result = await c.env.DB.prepare("DELETE FROM session WHERE id = ? AND userId = ?")
+  const result = await c.env.DB.prepare(SESSION_DELETE_OWN)
     .bind(sessionId.output, userId.output)
     .run();
   if (result.meta.changes === 0) return jsonError(404, "not_found", "Session not found");

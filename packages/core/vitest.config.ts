@@ -1,6 +1,10 @@
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
+// The config runs in Node; the package has no Node types, so its environment is read untyped.
+const nodeEnv =
+  (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
+
 export default defineConfig({
   plugins: [
     cloudflareTest(async () => ({
@@ -22,6 +26,8 @@ export default defineConfig({
           PUSH_API_KEY: "test-push-key",
           // Tests that need a real service account pass their own.
           FCM_SERVICE_ACCOUNT: "",
+          // SLOW_TESTS=1 pnpm test also runs the tests that take tens of seconds.
+          SLOW_TESTS: nodeEnv["SLOW_TESTS"] ?? "",
         },
       },
     })),

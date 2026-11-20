@@ -3,6 +3,7 @@ import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { jsonError, parseBody } from "../http";
 import { PLACEHOLDER } from "./limits";
+import { deleteTemplate, getTemplateStmt, listTemplates, putTemplate } from "./queries";
 import {
   type PushDispatch,
   PushDispatchSchema,
@@ -15,10 +16,7 @@ import {
 const MAX_TEMPLATES = 500;
 
 async function getTemplate(db: D1Database, name: string): Promise<Template | null> {
-  const content = await db
-    .prepare("SELECT content FROM push_template WHERE name = ?")
-    .bind(name)
-    .first<string>("content");
+  const content = await getTemplateStmt(db, name).first<string>("content");
   return content === null ? null : (JSON.parse(content) as Template);
 }
 
@@ -79,9 +77,11 @@ export async function resolvePush(
 export const templateRoutes = new Hono<AppEnv>()
   .get("/", async (c) => {
     // Bounded by MAX_TEMPLATES, so one page holds them all.
-    const rows = await c.env.DB.prepare(
-      "SELECT name, content, updated_at FROM push_template ORDER BY name",
-    ).all<{ name: string; content: string; updated_at: number }>();
+    const rows = await listTemplates(c.env.DB).all<{
+      name: string;
+      content: string;
+      updated_at: number;
+    }>();
     return c.json({
       templates: rows.results.map((r) => ({
         name: r.name,
@@ -98,14 +98,13 @@ export const templateRoutes = new Hono<AppEnv>()
     const body = await parseBody(c, TemplateSchema);
     if (body instanceof Response) return body;
     // An update always fits; a new name only while under the cap.
-    const result = await c.env.DB.prepare(
-      `INSERT INTO push_template (name, content, updated_at) SELECT ?1, ?2, ?3
-       WHERE (SELECT count(*) FROM push_template) < ?4
-          OR EXISTS (SELECT 1 FROM push_template WHERE name = ?1)
-       ON CONFLICT(name) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-    )
-      .bind(name, JSON.stringify(body), Date.now(), MAX_TEMPLATES)
-      .run();
+    const result = await putTemplate(
+      c.env.DB,
+      name,
+      JSON.stringify(body),
+      Date.now(),
+      MAX_TEMPLATES,
+    ).run();
     if (result.meta.changes === 0) {
       return jsonError(409, "limit_reached", `at most ${MAX_TEMPLATES} templates`);
     }
@@ -116,8 +115,6 @@ export const templateRoutes = new Hono<AppEnv>()
     return template ? c.json(template) : jsonError(404, "not_found", "No such template");
   })
   .delete("/:name", async (c) => {
-    await c.env.DB.prepare("DELETE FROM push_template WHERE name = ?")
-      .bind(c.req.param("name"))
-      .run();
+    await deleteTemplate(c.env.DB, c.req.param("name")).run();
     return c.body(null, 204);
   });

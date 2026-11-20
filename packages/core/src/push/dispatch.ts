@@ -1,4 +1,5 @@
 import { broadcastStatement, personalStatements, writeInboxOnce } from "../inbox/queries";
+import { recipients, setPushUsers } from "./queries";
 import type { PushDispatch, PushPayload, PushQueueMessage, Translations } from "./types";
 
 const USERS_PER_MESSAGE = 50;
@@ -18,14 +19,7 @@ async function eligibleUsers(
   marketing: boolean,
 ): Promise<Recipient[]> {
   // One JSON parameter keeps any number of ids under D1's 100 bound parameters.
-  const rows = await db
-    .prepare(
-      `SELECT id, locale FROM user WHERE id IN (SELECT value FROM json_each(?))${
-        marketing ? " AND marketingOptIn = 1" : ""
-      }`,
-    )
-    .bind(JSON.stringify(ids))
-    .all<Recipient>();
+  const rows = await recipients(db, ids, marketing).all<Recipient>();
   return rows.results;
 }
 
@@ -85,14 +79,22 @@ export async function preparePush(
     }
     return {
       users: 0,
-      messages: [{ body: { kind: "topic", topic: req.to.topic, payload, attempt: 0 } }],
+      messages: [
+        {
+          body: {
+            kind: "topic",
+            topic: req.to.topic,
+            payload,
+            attempt: 0,
+            ...(req.inbox && { inbox: true as const }),
+          },
+        },
+      ],
     };
   }
 
   const users = await eligibleUsers(env.DB, req.to.userIds, req.category === "marketing");
-  await env.DB.prepare("UPDATE push_stats SET users = ? WHERE id = ?")
-    .bind(users.length, pushId)
-    .run();
+  await setPushUsers(env.DB, pushId, users.length).run();
   if (users.length === 0) return { users: 0, messages: [] };
   const groups = [...groupByLocale(users, translations)].map(([locale, userIds]) => ({
     payload: payloadFor(locale),
@@ -111,7 +113,13 @@ export async function preparePush(
     users: users.length,
     messages: groups.flatMap(({ payload, userIds }) =>
       chunk(userIds, USERS_PER_MESSAGE).map((part) => ({
-        body: { kind: "users", userIds: part, payload, attempt: 0 } satisfies PushQueueMessage,
+        body: {
+          kind: "users",
+          userIds: part,
+          payload,
+          attempt: 0,
+          ...(req.inbox && { inbox: true as const }),
+        } satisfies PushQueueMessage,
       })),
     ),
   };
