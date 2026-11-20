@@ -3,6 +3,7 @@ import type { AppEnv } from "../app";
 import { jsonError, parseBody } from "../http";
 import { idempotencyKey, runOnce } from "../idempotency";
 import { CLAIM_MS, deliverStored } from "../jobs/scheduled";
+import { insertScheduledAfterStats } from "./queries";
 import { pushStatsInsert, statsRoutes } from "./stats";
 import { resolvePush } from "./templates";
 import { type PushRequest, PushRequestSchema } from "./types";
@@ -20,10 +21,7 @@ async function send(c: Context<AppEnv>, body: PushRequest, now: number): Promise
   const sendAtColumn = sendAt === undefined ? now + CLAIM_MS : at;
   const [stats, row] = await c.env.DB.batch<{ id: number }>([
     pushStatsInsert(c.env.DB, dispatch.category, at),
-    c.env.DB.prepare(
-      `INSERT INTO scheduled_push (send_at, request, push_id)
-       VALUES (?, ?, last_insert_rowid()) RETURNING id`,
-    ).bind(sendAtColumn, JSON.stringify(dispatch)),
+    insertScheduledAfterStats(c.env.DB, sendAtColumn, JSON.stringify(dispatch)),
   ]);
   const id = stats?.results[0]?.id;
   const rowId = row?.results[0]?.id;

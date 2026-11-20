@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { parseBody } from "../http";
+import { deleteOwnDevice, trimDevices, upsertDeviceStmt } from "./queries";
 import { type Platform, PlatformSchema } from "./types";
 
 const REFRESH_MS = 7 * 86_400_000;
@@ -16,25 +17,10 @@ export async function upsertDevice(
   d: { token: string; userId: string; platform: Platform },
   now: number,
 ): Promise<{ written: boolean }> {
-  const result = await db
-    .prepare(
-      `INSERT INTO device (token, user_id, platform, updated_at) VALUES (?1, ?2, ?3, ?4)
-       ON CONFLICT(token) DO UPDATE SET
-         user_id = excluded.user_id, platform = excluded.platform, updated_at = excluded.updated_at
-       WHERE device.user_id <> excluded.user_id OR device.platform <> excluded.platform
-          OR excluded.updated_at - device.updated_at >= ?5`,
-    )
-    .bind(d.token, d.userId, d.platform, now, REFRESH_MS)
-    .run();
+  const result = await upsertDeviceStmt(db, d, now, REFRESH_MS).run();
   const written = result.meta.changes > 0;
   if (written) {
-    await db
-      .prepare(
-        `DELETE FROM device WHERE user_id = ?1 AND token NOT IN
-           (SELECT token FROM device WHERE user_id = ?1 ORDER BY updated_at DESC LIMIT ?2)`,
-      )
-      .bind(d.userId, MAX_DEVICES)
-      .run();
+    await trimDevices(db, d.userId, MAX_DEVICES).run();
   }
   return { written };
 }
@@ -52,8 +38,6 @@ export const deviceRoutes = new Hono<AppEnv>()
     return c.body(null, 204);
   })
   .delete("/:token", async (c) => {
-    await c.env.DB.prepare("DELETE FROM device WHERE token = ? AND user_id = ?")
-      .bind(c.req.param("token"), c.get("user").id)
-      .run();
+    await deleteOwnDevice(c.env.DB, c.req.param("token"), c.get("user").id).run();
     return c.body(null, 204);
   });

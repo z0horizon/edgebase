@@ -3,6 +3,7 @@ import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { jsonError, parseBody } from "../http";
 import { getAccessToken } from "./fcm";
+import { deviceOwned } from "./queries";
 import { TopicSchema } from "./types";
 
 const IID_URL = "https://iid.googleapis.com/iid/v1";
@@ -52,9 +53,7 @@ const change = (subscribe: boolean) =>
       return jsonError(503, "not_configured", "Push is not configured");
     }
     // Only a token the caller registered, so nobody subscribes someone else's browser.
-    const owned = await c.env.DB.prepare("SELECT 1 FROM device WHERE token = ? AND user_id = ?")
-      .bind(body.token, c.get("user").id)
-      .first();
+    const owned = await deviceOwned(c.env.DB, body.token, c.get("user").id).first();
     if (!owned) return jsonError(404, "not_found", "No such device of yours");
     const error = await setTopic(
       c.env.FCM_SERVICE_ACCOUNT,

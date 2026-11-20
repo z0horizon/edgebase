@@ -1,4 +1,6 @@
+import { INBOX_EVENT, publishBestEffort } from "../realtime/publish";
 import { buildFcmMessage, type FcmAccess, getAccessToken, type SendResult, sendFcm } from "./fcm";
+import { deleteTokens, deviceTargets } from "./queries";
 import { recordDeliveries } from "./stats";
 import type { PushPayload, PushQueueMessage, PushTarget } from "./types";
 
@@ -31,28 +33,16 @@ async function mapLimit<T, R>(
  */
 async function targetsOf(db: D1Database, message: UserTargets): Promise<PushTarget[]> {
   const marketing = message.payload.category === "marketing";
-  const col = message.kind === "users" ? "d.user_id" : "d.token";
+  const byUser = message.kind === "users";
   const keys = message.kind === "users" ? message.userIds : message.targets.map((t) => t.token);
-  const join = marketing ? "JOIN user u ON u.id = d.user_id" : "";
-  const optIn = marketing ? "AND u.marketingOptIn = 1" : "";
-  const rows = await db
-    .prepare(
-      `SELECT d.token, d.user_id FROM device d ${join}
-       WHERE ${col} IN (SELECT value FROM json_each(?)) ${optIn}`,
-    )
-    .bind(JSON.stringify(keys))
-    .all<{ token: string; user_id: string }>();
+  const rows = await deviceTargets(db, keys, byUser, marketing).all<{
+    token: string;
+    user_id: string;
+  }>();
   if (message.kind === "users")
     return rows.results.map((r) => ({ token: r.token, userId: r.user_id }));
   const owner = new Map(rows.results.map((r) => [r.token, r.user_id]));
   return message.targets.filter((t) => owner.get(t.token) === t.userId);
-}
-
-async function deleteTokens(db: D1Database, tokens: string[]): Promise<void> {
-  await db
-    .prepare("DELETE FROM device WHERE token IN (SELECT value FROM json_each(?))")
-    .bind(JSON.stringify(tokens))
-    .run();
 }
 
 const retriesLeft = (message: PushQueueMessage) => message.attempt + 1 < MAX_ATTEMPTS;
@@ -87,6 +77,28 @@ function tally(results: SendResult[], message: PushQueueMessage) {
 const pushIdOf = (message: PushQueueMessage) => Number(message.payload.data?.["pushId"] ?? 0);
 
 type DeliveryDelta = { pushId: number; sent: number; failed: number };
+
+/**
+ * Tells open realtime sockets about the inbox items of a batch's first deliveries (preparePush
+ * stored them before queueing): one hub call per shard of the users, and one per shard for any
+ * broadcast. Retries were hinted on their first attempt.
+ */
+async function hintInbox(env: Env, messages: PushQueueMessage[], now: number): Promise<void> {
+  const userIds: string[] = [];
+  const broadcasts = new Set<boolean>();
+  for (const m of messages) {
+    if (m.kind === "tokens" || !m.inbox || m.attempt > 0) continue;
+    if (m.kind === "users") userIds.push(...m.userIds);
+    else broadcasts.add(m.payload.category === "marketing");
+  }
+  // A non-marketing broadcast reaches every socket, so it covers a marketing one too.
+  const broadcast = broadcasts.size === 0 ? null : !broadcasts.has(false);
+  await Promise.all([
+    publishBestEffort(env, { userIds }, INBOX_EVENT, now),
+    broadcast !== null &&
+      publishBestEffort(env, { everyone: true, marketingOnly: broadcast }, INBOX_EVENT, now),
+  ]);
+}
 
 async function handleMessage(
   env: Env,
@@ -129,7 +141,7 @@ async function handleMessage(
   // The sends already happened: a failure from here on must not make Queues redeliver the whole
   // message to devices that got it. A lost retry or a dead token left behind is the lesser harm.
   try {
-    if (dead.length > 0) await deleteTokens(env.DB, dead);
+    if (dead.length > 0) await deleteTokens(env.DB, dead).run();
     if (retry.length > 0) {
       await retryLater(
         env,
@@ -178,5 +190,12 @@ export async function handlePushBatch(
       message.retry();
     }
   }
-  await recordDeliveries(env.DB, totals);
+  await Promise.all([
+    recordDeliveries(env.DB, totals),
+    hintInbox(
+      env,
+      batch.messages.map((m) => m.body),
+      Date.now(),
+    ),
+  ]);
 }

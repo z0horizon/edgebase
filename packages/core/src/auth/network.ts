@@ -1,3 +1,5 @@
+import { SESSION_TOUCH_ACTIVITY } from "./queries";
+
 const ACTIVITY_TOUCH_MS = 6 * 60 * 60_000;
 // Phones hop between Wi-Fi and mobile carriers all day; one write per hop would dominate session writes.
 const ASN_TOUCH_MS = 60 * 60_000;
@@ -132,16 +134,7 @@ export function touchSessionActivity(
 
   ctx.waitUntil(
     db
-      .prepare(
-        `UPDATE session
-         SET lastActiveAt = ?,
-             ipAddress = COALESCE(?, ipAddress),
-             asn = COALESCE(?, asn),
-             asOrganization = COALESCE(?, asOrganization),
-             country = COALESCE(?, country),
-             city = COALESCE(?, city)
-         WHERE id = ?`,
-      )
+      .prepare(SESSION_TOUCH_ACTIVITY)
       .bind(
         new Date(now).toISOString(),
         net.ipAddress,

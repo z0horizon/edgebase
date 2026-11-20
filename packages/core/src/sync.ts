@@ -3,7 +3,7 @@ import * as v from "valibot";
 import type { AppEnv } from "./app";
 import { adminNeedsTwoFactor } from "./auth/auth";
 import { parseBody } from "./http";
-import { listInboxWithUnread, markAllRead, markRead } from "./inbox/queries";
+import { listInboxWithUnread, markAllReadStatement, markReadStatement } from "./inbox/queries";
 import { inboxQuery, personalId } from "./inbox/routes";
 import { DeviceSchema, upsertDevice } from "./push/devices";
 import { PushIdSchema, recordOpens } from "./push/stats";
@@ -45,20 +45,24 @@ export async function sync(c: Context<AppEnv>) {
   const userId = c.get("user").id;
   const now = Date.now();
   const read = (body.read ?? []).map(personalId).filter((id) => id !== null);
-  await Promise.all([
+  const inboxWrite = body.readAll
+    ? markAllReadStatement(c.env.INBOX_DB, userId, now)
+    : markReadStatement(c.env.INBOX_DB, userId, read, now);
+  const writes = inboxWrite ? [inboxWrite] : [];
+  // DB writes and the inbox run side by side; the inbox's write and read share one batch, write
+  // first, so the page already shows what this call marked read.
+  const [inbox] = await Promise.all([
+    body.inbox === false
+      ? writes.length > 0
+        ? c.env.INBOX_DB.batch(writes).then(() => undefined)
+        : undefined
+      : listInboxWithUnread(
+          c.env.INBOX_DB,
+          { ...inboxQuery(c), cursor: null, limit: body.inbox?.limit ?? 20 },
+          writes,
+        ),
     body.device && upsertDevice(c.env.DB, { ...body.device, userId }, now),
     recordOpens(c.env.DB, userId, body.opens ?? []),
-    body.readAll
-      ? markAllRead(c.env.INBOX_DB, userId, now)
-      : markRead(c.env.INBOX_DB, userId, read, now),
   ]);
-  const inbox =
-    body.inbox === false
-      ? undefined
-      : await listInboxWithUnread(c.env.INBOX_DB, {
-          ...inboxQuery(c),
-          cursor: null,
-          limit: body.inbox?.limit ?? 20,
-        });
   return c.json({ user: mePayload(c), ...(inbox && { inbox }) });
 }

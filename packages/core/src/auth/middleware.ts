@@ -6,7 +6,7 @@ import { normalizeRateLimitIp } from "./network";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-function isAllowedWebOrigin(env: Env, origin: string | undefined): boolean {
+export function isAllowedWebOrigin(env: Env, origin: string | undefined): boolean {
   if (!origin) return false;
   return origin === new URL(env.BASE_URL).origin || webTrustedOrigins(env).includes(origin);
 }
@@ -121,15 +121,14 @@ export const requireAdminConsole: MiddlewareHandler<AppEnv> = async (c, next) =>
 };
 
 /**
- * Server-to-server key for sending pushes; digests make the compare constant-time at equal length.
+ * Server-to-server key (PUSH_API_KEY); digests make the compare constant-time at equal length.
  * Without the header, a session of an admin from the Worker's own origin (the /admin page) is
- * accepted instead; the Origin check keeps other sites from riding that cookie.
+ * accepted instead; the Origin check keeps other sites from riding that cookie. An unset key
+ * answers 503.
  */
-export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
+export const requireServerKey: MiddlewareHandler<AppEnv> = async (c, next) => {
   const expected = c.env.PUSH_API_KEY?.trim();
-  if (!expected || !c.env.FCM_SERVICE_ACCOUNT?.trim()) {
-    return jsonError(503, "not_configured", "Push is not configured");
-  }
+  if (!expected) return jsonError(503, "not_configured", "The server API key is not set");
   if (c.req.header("x-api-key") === undefined && c.env.BETTER_AUTH_SECRET?.trim()) {
     // Browsers send Origin on every cross-origin fetch and on same-origin writes; only same-origin GETs may omit it.
     const origin = c.req.header("origin");
@@ -153,4 +152,12 @@ export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
     return jsonError(401, "unauthorized", "Invalid API key");
   }
   await next();
+};
+
+/** requireServerKey for sending pushes, which also need FCM_SERVICE_ACCOUNT. */
+export const requireApiKey: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!c.env.PUSH_API_KEY?.trim() || !c.env.FCM_SERVICE_ACCOUNT?.trim()) {
+    return jsonError(503, "not_configured", "Push is not configured");
+  }
+  return requireServerKey(c, next);
 };

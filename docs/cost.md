@@ -20,6 +20,7 @@ Daily limits, reset at 00:00 UTC; past them requests fail instead of costing mon
 | 100k D1 rows written | ~40k daily users without inbox items (~2.3 writes each: session, device); ~16k with one personal inbox item each (~6 writes) |
 | 5M D1 rows read | ~150k API calls of a few dozen rows |
 | 10k Queue operations | ~3,300 messages (24 h retention): thousands of broadcasts, or small `userIds` pushes keeping each consumer batch under Free's 50-subrequest per-invocation limit |
+| 100k Durable Object requests, 13k GB-s | ~100k `/v1/realtime` socket opens; idle sockets hibernate and cost no duration |
 | 500 MB per D1 database | ~1M inbox items, e.g. 10k users × 1 item a day × 30-day TTL ≈ 120 MB |
 
 So expect **up to about 10k daily users**, fewer if clients call the API more often. Requests run
@@ -36,6 +37,7 @@ or more headroom.
 | D1 rows written | 50M / month | $1.00 / M |
 | D1 storage | 5 GB | $0.75 / GB-month; 10 GB max per database |
 | Queues | 1M operations / month | $0.40 / M (a message is about 3 operations) |
+| Durable Objects (`/v1/realtime`, rooms) | 1M requests, 400k GB-s / month | $0.15 / M requests, $12.50 / M GB-s; a socket opened is 1 request, messages a client sends count 20 to 1, messages sent to it are free; a room is billed duration while it handles messages |
 | Email Sending | 3,000 outbound emails / month | $0.35 / 1,000 emails (verified destination addresses are free) |
 | Workers Logs | 20M log events / month | $0.60 / M (from Dec 1, 2026: shared Cloudflare Observability pricing — 50 GB ingestion + 10 GB-month storage included, then $0.25 / GB and $0.10 / GB-month) |
 
@@ -70,6 +72,9 @@ Without any push, a signed-in user costs:
 | Session refresh, at most once every `SESSION_REFRESH_DAYS` (default 1) | ~2 writes (row and `session_expires_at` index); with `SESSION_ACTIVITY=on` (default), `lastActiveAt` and the current network update in the background at once on a new country, at most hourly on a new ASN, else every 6 hours (1 unindexed row write); `off` writes none |
 | Each sign-in or sign-out | ~5 writes for the `session` row (row, key, token, user and expiry indexes), the same when it is deleted; a remembered 2FA device adds ~5 (`trusted_device`) |
 | Device refresh, at most once every 7 days per device | ~2 writes (row and `device_updated_at` index) |
+| An open `/v1/realtime` socket | 1 Worker and 1 Durable Object request to open; a `ping` a minute is at most 3 Durable Object requests an hour (20 to 1) and does not wake the hub, so no duration; each event (an inbox item, or your `publish`) is at most 16 hub calls in total, not per user, plus one D1 batch per hub checking the receiving sockets' sessions not checked in the last 30 s (rows read grow with those sockets: an event to everyone reads up to one row per open socket, at most twice a minute) |
+| An API call over `/v1/realtime` | 1/20 of a Durable Object request plus the hub's duration while the call runs (wall-clock, waiting on D1 included, shared with calls running at the same time) instead of 1 Worker request and its CPU: about $0.06 instead of $0.36 per million calls; the call's D1 reads and writes are unchanged |
+| A room message | 1/20 of a Durable Object request and a few ms of the room's duration; relaying it to the other members is free; plus whatever your `onMessage` writes (a D1 row is $1 a million) |
 
 Rows read are cheap: 25B a month cover ~800M reads of a few dozen rows. Requests and the daily
 session write are what grow with users, so the client's call pattern matters more than any
@@ -82,7 +87,10 @@ server setting.
   separate routes take three to five. Batch what happened since the last call into the next one.
 - Send other calls together with `POST /v1/batch` (up to 10 per request); it saves requests, not
   row reads or writes.
-- Fetch the inbox when the app comes to the foreground or a push arrives, not on a timer.
+- Fetch the inbox (and your own data) when the app comes to the foreground, a push arrives, or
+  `/v1/realtime` sends an event about it, not on a timer. A client that checked every minute while open spends 60 requests an
+  hour; with the socket it spends one to open it and one read per new item. Keep polling only as
+  the fallback while no socket can be opened, every few minutes.
 - Use the `unreadCount` that comes with every `GET /v1/inbox` page; call
   `GET /v1/inbox/unread-count` only to refresh a badge without the list.
 - Mark read with `POST /v1/inbox/read-all` (1 write) rather than many `read` calls.
@@ -285,8 +293,38 @@ Sources: [Workers](https://developers.cloudflare.com/workers/platform/pricing/),
 [DigitalOcean Droplets](https://www.digitalocean.com/pricing/droplets) and
 [managed databases](https://www.digitalocean.com/pricing/managed-databases).
 
+## Measuring D1 per statement
+
+A tenth of requests, queue batches and socket calls, and every cron run, log one line:
+
+```json
+{ "event": "d1", "via": "fetch", "path": "/v1/sync",
+  "queries": { "inbox.markRead": { "calls": 1, "rowsRead": 3, "rowsWritten": 1, "ms": 0.4 }, "…": {} } }
+```
+
+Names are those of `packages/core/src/**/queries.ts` (and yours, if you register them with
+`sql()`); Better Auth's are `other:<verb>.<table>`. Filter Workers Logs on `event = "d1"` and
+sum `rowsRead` and `rowsWritten` per name to see which statement costs the most. Work left to
+`waitUntil` after the response (session activity) is counted, the line logged once it settles;
+the session checks hubs and rooms run before sending come as `via: "hub"` and `via: "room"`.
+Logs are sampled again by
+`head_sampling_rate`, so the line adds about 1% to log events.
+
+What the common calls cost, in D1 statements and round trips (from the test suite):
+
+| Call | Statements | Round trips |
+|---|---|---|
+| `GET /v1/me`, any session check | 1 (session joined with user) | 1 |
+| `GET /v1/inbox` | 1 + 3 in one batch | 2 |
+| `POST /v1/sync` with device, read and opens | 1 + 4 in one inbox batch, device and opens beside it | 3–5 |
+| Sign-in with email and password | 4 | 4 |
+
 ## Write rules built into the code
 
+- Every statement's plan is checked by a test: none scans a whole table except where a bounded
+  scan is stated (`scanOk`), so rows read stay proportional to rows needed.
+- Better Auth does not introspect the schema at runtime, which would cost about 20 statements per
+  request, since an auth instance lives one request.
 - Every row written costs one extra write per index it touches; deletes count as writes.
 - `inbox_item` uses an integer rowid key (2 writes per insert); a TEXT key would add an
   automatic index (3 writes).

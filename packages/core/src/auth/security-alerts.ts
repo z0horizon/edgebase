@@ -1,6 +1,8 @@
-import { insertPersonal } from "../inbox/queries";
+import { INBOX_RECENT_SECURITY_ALERTS, insertPersonal } from "../inbox/queries";
 import { sendMail } from "../mail";
+import { INBOX_EVENT, publishBestEffort } from "../realtime/publish";
 import type { ClientNetwork } from "./network";
+import { USER_HAS_OTHER_SESSION_OR_DEVICE } from "./queries";
 
 const ALERT_WINDOW_MS = 3_600_000;
 const MAX_SECURITY_ALERTS_PER_HOUR = 3;
@@ -25,11 +27,7 @@ export function sanitizeUserAgentForAlert(userAgent: string | null): string {
 async function hasReachedAlertCap(db: D1Database, userId: string, now: number): Promise<boolean> {
   // Uses `inbox_item_user_created_at` so sign-in loops cannot bloat `INBOX_DB` or exhaust `MAIL`.
   const recent = await db
-    .prepare(
-      `SELECT count(*) AS n FROM inbox_item
-       WHERE user_id = ? AND created_at > ? AND category = 'transactional'
-         AND json_extract(data, '$.kind') = 'security_alert'`,
-    )
+    .prepare(INBOX_RECENT_SECURITY_ALERTS)
     .bind(userId, now - ALERT_WINDOW_MS)
     .first<number>("n");
   return (recent ?? 0) >= MAX_SECURITY_ALERTS_PER_HOUR;
@@ -55,7 +53,7 @@ async function dispatchSecurityAlert(
         data: { kind: "security_alert" },
       },
       now,
-    ),
+    ).then(() => publishBestEffort(env, { userIds: [user.id] }, INBOX_EVENT, now)),
     sendMail(env, { to: user.email, subject, text: summary }),
   ]);
 }
@@ -75,30 +73,7 @@ export async function notifyNewNetworkSignIn(
   const nowIso = new Date(now).toISOString();
 
   // Single short-circuiting EXISTS query on DB (1 round-trip, stops at first matching row).
-  const check = await env.DB.prepare(
-    `SELECT
-       EXISTS(
-         SELECT 1 FROM session WHERE userId = ?1 AND id <> ?2 AND expiresAt > ?3
-         UNION ALL
-         SELECT 1 FROM trusted_device
-         WHERE user_id = ?1 AND expires_at > ?4 AND (?7 IS NULL OR id <> ?7)
-       ) AS hasPrior,
-       EXISTS(
-         SELECT 1 FROM session
-         WHERE userId = ?1 AND id <> ?2 AND expiresAt > ?3
-           AND (
-             (COALESCE(asn, -1) = COALESCE(?5, -1) AND COALESCE(country, '') = COALESCE(?6, ''))
-             OR (COALESCE(createdAsn, -1) = COALESCE(?5, -1) AND COALESCE(createdCountry, '') = COALESCE(?6, ''))
-           )
-         UNION ALL
-         SELECT 1 FROM trusted_device
-         WHERE user_id = ?1 AND expires_at > ?4 AND (?7 IS NULL OR id <> ?7)
-           AND (
-             (COALESCE(asn, -1) = COALESCE(?5, -1) AND COALESCE(country, '') = COALESCE(?6, ''))
-             OR (COALESCE(created_asn, -1) = COALESCE(?5, -1) AND COALESCE(created_country, '') = COALESCE(?6, ''))
-           )
-       ) AS hasMatch`,
-  )
+  const check = await env.DB.prepare(USER_HAS_OTHER_SESSION_OR_DEVICE)
     .bind(user.id, sessionId, nowIso, now, net.asn, net.country, excludeTrustedDeviceId)
     .first<{ hasPrior: number; hasMatch: number }>();
 

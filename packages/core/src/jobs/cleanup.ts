@@ -1,7 +1,14 @@
 import { STATS_KEPT_DAYS } from "../push/limits";
+import {
+  CLEANUP_CHUNK as CHUNK,
+  CLEANUP,
+  CLEANUP_INBOX_ITEMS_OF_USERS,
+  CLEANUP_INBOX_STATE_OF_USERS,
+  CLEANUP_OPENS_OF_USERS,
+  CLEANUP_UNCOUNT_OPENS_OF_USERS,
+} from "./queries";
 import { CLAIM_MS } from "./scheduled";
 
-const CHUNK = 5000;
 const DAY_MS = 86_400_000;
 const DEVICE_STALE_DAYS = 60;
 const UNVERIFIED_SIGNUP_DAYS = 7;
@@ -12,7 +19,7 @@ const BUDGET_MS = 20_000;
 type ChunkResult = { deleted: number; sizeAfter: number; rowsRead: number; complete: boolean };
 
 /**
- * Runs `sql` (a DELETE limited to CHUNK rows by a sub-select, without RETURNING) until a run deletes fewer than CHUNK
+ * Runs `sql` (a DELETE limited to CHUNK rows by a sub-select, with RETURNING) until a run deletes fewer than CHUNK
  * rows or the deadline passes. Short chunks keep D1's single writer free for live traffic.
  */
 async function deleteInChunks<T = unknown>(
@@ -20,14 +27,13 @@ async function deleteInChunks<T = unknown>(
   sql: string,
   params: unknown[],
   deadline: number,
-  returning = "1",
   onChunk?: (rows: T[]) => Promise<void>,
 ): Promise<ChunkResult> {
   const out: ChunkResult = { deleted: 0, sizeAfter: 0, rowsRead: 0, complete: false };
   for (;;) {
     // Counted from RETURNING: D1's meta.changes also counts rows removed by ON DELETE CASCADE.
     const result = await db
-      .prepare(`${sql} RETURNING ${returning}`)
+      .prepare(sql)
       .bind(...params)
       .all<T>();
     if (result.results.length > 0 && onChunk) await onChunk(result.results);
@@ -63,22 +69,6 @@ type CleanupReport = {
   inboxBytes: number;
 };
 
-// Rowids grow with time, so everything below the first fresh rowid is expired. Capping the search
-// window to CHUNK + 1 rows turns multi-chunk backlog deletes from O(M^2 / CHUNK) into O(M) while
-// still stopping at the very first row when nothing has expired.
-const byRowid = (table: string) =>
-  `DELETE FROM ${table} WHERE id IN (
-     SELECT id FROM ${table}
-     WHERE id < COALESCE(
-       (SELECT id FROM (SELECT id, created_at FROM ${table} ORDER BY id LIMIT ${CHUNK + 1}) WHERE created_at >= ?1 LIMIT 1),
-       9223372036854775807
-     )
-       AND created_at < ?1
-     ORDER BY id LIMIT ${CHUNK})`;
-
-const expired = (table: string) =>
-  `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE expiresAt < ? LIMIT ${CHUNK})`;
-
 const lastSize = (steps: ChunkResult[]) => steps.findLast((r) => r.sizeAfter > 0)?.sizeAfter ?? 0;
 
 export async function runCleanup(
@@ -95,104 +85,54 @@ export async function runCleanup(
     db: D1Database,
     sql: string,
     params: unknown[],
-    returning?: string,
     onChunk?: (rows: T[]) => Promise<void>,
   ): Promise<ChunkResult> => {
     if (timedOut) return { deleted: 0, sizeAfter: 0, rowsRead: 0, complete: false };
-    const res = await deleteInChunks(db, sql, params, deadline, returning, onChunk);
+    const res = await deleteInChunks(db, sql, params, deadline, onChunk);
     if (!res.complete || Date.now() >= deadline) timedOut = true;
     return res;
   };
 
-  const inbox = await step(env.INBOX_DB, byRowid("inbox_item"), [inboxCutoff]);
-  const broadcast = await step(env.INBOX_DB, byRowid("broadcast"), [inboxCutoff]);
+  const inbox = await step(env.INBOX_DB, CLEANUP.inbox, [inboxCutoff]);
+  const broadcast = await step(env.INBOX_DB, CLEANUP.broadcast, [inboxCutoff]);
   // Push ids grow with time like rowids, and a push past the inbox TTL is never retried.
-  const inboxPush = await step(env.INBOX_DB, byRowid("inbox_push"), [inboxCutoff]);
-  const session = await step(env.DB, expired("session"), [iso(now)]);
-  const verification = await step(env.DB, expired("verification"), [iso(now)]);
-  const device = await step(
-    env.DB,
-    `DELETE FROM device WHERE token IN (SELECT token FROM device WHERE updated_at < ? LIMIT ${CHUNK})`,
-    [now - DEVICE_STALE_DAYS * DAY_MS],
-  );
-  const trustedDevice = await step(
-    env.DB,
-    `DELETE FROM trusted_device WHERE id IN (SELECT id FROM trusted_device WHERE expires_at < ? LIMIT ${CHUNK})`,
-    [now],
-  );
+  const inboxPush = await step(env.INBOX_DB, CLEANUP.inboxPush, [inboxCutoff]);
+  const session = await step(env.DB, CLEANUP.session, [iso(now)]);
+  const verification = await step(env.DB, CLEANUP.verification, [iso(now)]);
+  const device = await step(env.DB, CLEANUP.device, [now - DEVICE_STALE_DAYS * DAY_MS]);
+  const trustedDevice = await step(env.DB, CLEANUP.trustedDevice, [now]);
   // Email sign-ups never verified; users with any social account are kept, since a provider may
   // report its email unverified while the sign-in itself is real.
   const unverified = await step<{ id: string }>(
     env.DB,
-    `DELETE FROM user WHERE id IN (
-       SELECT u.id FROM user u WHERE u.emailVerified = 0 AND u.createdAt < ?
-         AND NOT EXISTS (SELECT 1 FROM account a WHERE a.userId = u.id AND a.providerId <> 'credential')
-       LIMIT ${CHUNK})`,
+    CLEANUP.unverified,
     [iso(now - UNVERIFIED_SIGNUP_DAYS * DAY_MS)],
-    "id",
     async (rows) => {
       const ids = JSON.stringify(rows.map((r) => r.id));
       await Promise.all([
         env.INBOX_DB.batch([
-          env.INBOX_DB.prepare(
-            "DELETE FROM inbox_item WHERE user_id IN (SELECT value FROM json_each(?))",
-          ).bind(ids),
-          env.INBOX_DB.prepare(
-            "DELETE FROM inbox_state WHERE user_id IN (SELECT value FROM json_each(?))",
-          ).bind(ids),
+          env.INBOX_DB.prepare(CLEANUP_INBOX_ITEMS_OF_USERS).bind(ids),
+          env.INBOX_DB.prepare(CLEANUP_INBOX_STATE_OF_USERS).bind(ids),
         ]),
         env.DB.batch([
-          env.DB.prepare(
-            `WITH dec(push_id, n) AS (
-               SELECT push_id, count(*) FROM push_open
-               WHERE user_id IN (SELECT value FROM json_each(?1))
-               GROUP BY push_id
-             )
-             UPDATE push_stats SET opened = MAX(0, opened - dec.n)
-             FROM dec WHERE push_stats.id = dec.push_id`,
-          ).bind(ids),
-          env.DB.prepare(
-            "DELETE FROM push_open WHERE user_id IN (SELECT value FROM json_each(?))",
-          ).bind(ids),
+          env.DB.prepare(CLEANUP_UNCOUNT_OPENS_OF_USERS).bind(ids),
+          env.DB.prepare(CLEANUP_OPENS_OF_USERS).bind(ids),
         ]),
       ]);
     },
   );
   // Poison rows keep advancing scheduled_push.send_at on retry (up to CLAIM_MS ahead of now);
   // bounding sp.send_at first lets SQLite skip future pushes via scheduled_push_send_at.
-  const scheduledPush = await step(
-    env.DB,
-    `DELETE FROM scheduled_push WHERE id IN (
-       SELECT sp.id FROM scheduled_push sp
-       LEFT JOIN push_stats ps ON ps.id = sp.push_id
-       WHERE sp.send_at <= ?1 AND COALESCE(ps.send_at, sp.send_at) < ?2
-       LIMIT ${CHUNK})`,
-    [now + CLAIM_MS, now - SCHEDULED_PUSH_TTL_MS],
-  );
-  const invitation = await step(env.DB, expired("invitation"), [iso(now)]);
-  const idempotency = await step(
-    env.DB,
-    `DELETE FROM push_idempotency WHERE key IN
-       (SELECT key FROM push_idempotency WHERE created_at < ? LIMIT ${CHUNK})`,
-    [now - IDEMPOTENCY_TTL_MS],
-  );
+  const scheduledPush = await step(env.DB, CLEANUP.scheduledPush, [
+    now + CLAIM_MS,
+    now - SCHEDULED_PUSH_TTL_MS,
+  ]);
+  const invitation = await step(env.DB, CLEANUP.invitation, [iso(now)]);
+  const idempotency = await step(env.DB, CLEANUP.idempotency, [now - IDEMPOTENCY_TTL_MS]);
   // Opens go first, and a stats row only once it has none left, so no open outlives its push.
   const statsCutoff = now - STATS_KEPT_DAYS * DAY_MS;
-  const pushOpen = await step(
-    env.DB,
-    `DELETE FROM push_open WHERE (push_id, user_id) IN (
-       SELECT push_id, user_id FROM push_open
-       WHERE push_id IN (SELECT id FROM push_stats WHERE send_at < ?) LIMIT ${CHUNK})`,
-    [statsCutoff],
-  );
-  const pushStats = await step(
-    env.DB,
-    `DELETE FROM push_stats WHERE id IN (
-       SELECT id FROM push_stats s WHERE send_at < ?
-         AND NOT EXISTS (SELECT 1 FROM push_open o WHERE o.push_id = s.id)
-       LIMIT ${CHUNK})`,
-    [statsCutoff],
-  );
+  const pushOpen = await step(env.DB, CLEANUP.pushOpen, [statsCutoff]);
+  const pushStats = await step(env.DB, CLEANUP.pushStats, [statsCutoff]);
 
   const inboxSteps = [inbox, broadcast, inboxPush];
   const dbSteps = [

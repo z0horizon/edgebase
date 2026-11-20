@@ -1,6 +1,15 @@
 import type { BetterAuthPlugin } from "better-auth";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import type { ClientNetwork } from "./network";
+import {
+  PASSKEY_COUNTS,
+  PASSKEY_DELETE,
+  PASSKEY_FACTOR_COUNT,
+  PASSKEY_FACTOR_STATE,
+  PASSKEY_HAS_FACTOR,
+  PASSKEY_TRIM,
+  SESSION_MARK_PASSKEY,
+} from "./queries";
 import { notifyPasskeyAdded } from "./security-alerts";
 import { headersWithBearerCookie, type RequestSecurityState } from "./trusted-devices";
 
@@ -121,13 +130,7 @@ export function passkeyPolicyPlugin(
 
             if (ctx.path === "/two-factor/enable" || ctx.path === "/two-factor/verify-totp") {
               if (unverifiedAdmin) {
-                const hasFactor = await env.DB.prepare(
-                  `SELECT EXISTS(
-                     SELECT 1 FROM passkey WHERE userId = ?1
-                     UNION ALL
-                     SELECT 1 FROM account WHERE userId = ?1 AND providerId <> 'credential'
-                   ) AS hasFactor`,
-                )
+                const hasFactor = await env.DB.prepare(PASSKEY_HAS_FACTOR)
                   .bind(current.user.id)
                   .first<number>("hasFactor");
                 if (hasFactor === 1) {
@@ -200,16 +203,7 @@ export function passkeyPolicyPlugin(
                   ctx.path === "/passkey/delete-passkey" && typeof body?.["id"] === "string"
                     ? body["id"]
                     : "";
-                const factorState = await env.DB.prepare(
-                  `SELECT
-                     (SELECT count(*) FROM passkey WHERE userId = ?1) AS passkeys,
-                     EXISTS(SELECT 1 FROM passkey WHERE id = ?3 AND userId = ?1) AS isPasskeyTarget,
-                     COALESCE(SUM(providerId <> 'credential'), 0) AS socialAccounts,
-                     COALESCE(MAX(providerId = 'credential'), 0) AS hasPassword,
-                     MAX(CASE WHEN id = ?2 THEN providerId END) AS targetProvider
-                   FROM account
-                   WHERE userId = ?1`,
-                )
+                const factorState = await env.DB.prepare(PASSKEY_FACTOR_STATE)
                   .bind(current.user.id, targetAccountId, targetPasskeyId)
                   .first<{
                     passkeys: number;
@@ -250,11 +244,7 @@ export function passkeyPolicyPlugin(
               return;
             }
 
-            const counts = await env.DB.prepare(
-              `SELECT
-                 (SELECT count(*) FROM passkey WHERE userId = ?1) AS passkeys,
-                 EXISTS(SELECT 1 FROM account WHERE userId = ?1 AND providerId <> 'credential') AS hasSocial`,
-            )
+            const counts = await env.DB.prepare(PASSKEY_COUNTS)
               .bind(current.user.id)
               .first<{ passkeys: number; hasSocial: number }>();
             const count = counts?.passkeys ?? 0;
@@ -315,41 +305,21 @@ export function passkeyPolicyPlugin(
               active.session.id === state.bootstrapAdminPasskeySessionId
             ) {
               const postFactors =
-                (await env.DB.prepare(
-                  `SELECT
-                     (SELECT count(*) FROM passkey WHERE userId = ?1)
-                       + (SELECT count(*) FROM account WHERE userId = ?1 AND providerId <> 'credential') AS n`,
-                )
+                (await env.DB.prepare(PASSKEY_FACTOR_COUNT)
                   .bind(active.user.id)
                   .first<number>("n")) ?? 0;
               if (postFactors > 1) {
                 if (typeof createdId === "string" && createdId) {
-                  await env.DB.prepare("DELETE FROM passkey WHERE id = ? AND userId = ?")
-                    .bind(createdId, active.user.id)
-                    .run();
+                  await env.DB.prepare(PASSKEY_DELETE).bind(createdId, active.user.id).run();
                 }
                 throw new APIError("FORBIDDEN", {
                   code: "TWO_FACTOR_REQUIRED",
                   message: "Sign in with an existing second factor first",
                 });
               }
-              await env.DB.prepare(
-                "UPDATE session SET signInProvider = 'passkey', twoFactorVerifiedAt = ? WHERE id = ?",
-              )
-                .bind(nowIso, active.session.id)
-                .run();
+              await env.DB.prepare(SESSION_MARK_PASSKEY).bind(nowIso, active.session.id).run();
             } else {
-              await env.DB.prepare(
-                `DELETE FROM passkey
-                 WHERE userId = ?1 AND id NOT IN (
-                   SELECT id FROM passkey
-                   WHERE userId = ?1
-                   ORDER BY createdAt DESC, rowid DESC
-                   LIMIT ?2
-                 )`,
-              )
-                .bind(active.user.id, MAX_PASSKEYS_PER_USER)
-                .run();
+              await env.DB.prepare(PASSKEY_TRIM).bind(active.user.id, MAX_PASSKEYS_PER_USER).run();
             }
 
             const body = ctx.body as { name?: unknown } | undefined;

@@ -9,9 +9,16 @@ import { deleteUserInbox } from "../inbox/queries";
 import { sendMail } from "../mail";
 import { deleteUserOpens } from "../push/stats";
 import { LocaleSchema } from "../push/types";
+import { disconnectUser } from "../realtime/publish";
 import { bindAppCallback } from "./app-callback";
 import { type ClientNetwork, extractClientNetwork } from "./network";
 import { passkeyPolicyPlugin } from "./passkey-policy";
+import {
+  TWO_FACTOR_DELETE_FOR_USER,
+  USER_CLEAR_TWO_FACTOR_ENABLED_AT,
+  USER_ROLE,
+  USER_SET_PASSWORD_CHANGED_AT,
+} from "./queries";
 import {
   edgebaseSecurityPlugin,
   type RequestSecurityState,
@@ -195,6 +202,11 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
     trustedOrigins: trustedOrigins(env),
     advanced: {
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
+      // Better Auth would introspect the schema (about 20 statements) once per instance, and an
+      // instance lives one request. The append-only migrations own the schema; a test runs the
+      // same comparison against them instead (test/auth-schema.test.ts).
+      // Joins read a session and its user in one statement instead of two in a row.
+      database: { validateSchema: false, joins: true },
     },
     emailAndPassword: {
       enabled: emailPasswordEnabled(env),
@@ -326,7 +338,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
           // email at sign-in: owning the inbox, or the password alone, must not reach admin features.
           before: async (account, hookCtx) => {
             if (account.providerId === "credential") return;
-            const role = await env.DB.prepare("SELECT role FROM user WHERE id = ?")
+            const role = await env.DB.prepare(USER_ROLE)
               .bind(account.userId)
               .first<string | null>("role");
             if (role !== "admin") return;
@@ -338,7 +350,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
           },
           after: async (account) => {
             if (account.providerId === "credential" && account.password) {
-              await env.DB.prepare("UPDATE user SET passwordChangedAt = ? WHERE id = ?")
+              await env.DB.prepare(USER_SET_PASSWORD_CHANGED_AT)
                 .bind(new Date().toISOString(), account.userId)
                 .run();
             }
@@ -359,10 +371,8 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
             const u = user as { banned?: boolean | null; twoFactorEnabled?: boolean | null };
             if (u.twoFactorEnabled === false) {
               await env.DB.batch([
-                env.DB.prepare("UPDATE user SET twoFactorEnabledAt = NULL WHERE id = ?").bind(
-                  user.id,
-                ),
-                env.DB.prepare("DELETE FROM twoFactor WHERE userId = ?").bind(user.id),
+                env.DB.prepare(USER_CLEAR_TWO_FACTOR_ENABLED_AT).bind(user.id),
+                env.DB.prepare(TWO_FACTOR_DELETE_FOR_USER).bind(user.id),
                 ...revokeAllTrustedDevicesStatements(env.DB, user.id),
               ]);
               return;
@@ -377,6 +387,7 @@ export function createAuth(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, r
             await Promise.all([
               deleteUserInbox(env.INBOX_DB, user.id),
               deleteUserOpens(env.DB, user.id),
+              disconnectUser(env, user.id),
             ]);
           },
         },

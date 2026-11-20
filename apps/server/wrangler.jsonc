@@ -57,6 +57,18 @@
     ]
   },
   "send_email": [{ "name": "MAIL" }],
+  // GET /v1/realtime sockets, spread over 16 hubs by user id, and one object per room; idle ones hibernate.
+  "durable_objects": {
+    "bindings": [
+      { "name": "REALTIME", "class_name": "RealtimeHub" },
+      { "name": "ROOMS", "class_name": "RealtimeRoom" }
+    ]
+  },
+  // Append-only, like database migrations: a deployed tag is never edited.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] },
+    { "tag": "v2", "new_sqlite_classes": ["RealtimeRoom"] }
+  ],
   // The /admin page; files here are served before the Worker runs.
   "assets": { "directory": "./public" },
   // Every minute: dispatch due scheduled pushes. Hourly: retention cleanup in small budgets.

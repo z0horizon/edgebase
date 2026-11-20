@@ -111,6 +111,7 @@ export type PushRequest = v.InferOutput<typeof PushRequestSchema>;
 export type PushTarget = { token: string; userId: string };
 
 export type PushQueueMessage =
-  | { kind: "users"; userIds: string[]; payload: PushPayload; attempt: number }
+  // `inbox`: the push stored inbox items, so the consumer tells open realtime sockets.
+  | { kind: "users"; userIds: string[]; payload: PushPayload; attempt: number; inbox?: true }
   | { kind: "tokens"; targets: PushTarget[]; payload: PushPayload; attempt: number }
-  | { kind: "topic"; topic: string; payload: PushPayload; attempt: number };
+  | { kind: "topic"; topic: string; payload: PushPayload; attempt: number; inbox?: true };

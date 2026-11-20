@@ -1,5 +1,12 @@
 import * as v from "valibot";
 import { preparePush } from "../push/dispatch";
+import {
+  claimScheduled,
+  deleteHeldScheduled,
+  deleteScheduled,
+  dueScheduled,
+  setScheduledPushIdAfterStats,
+} from "../push/queries";
 import { pushStatsInsert } from "../push/stats";
 import { type PushDispatch, PushDispatchSchema } from "../push/types";
 
@@ -31,10 +38,7 @@ async function claim(
 ): Promise<number | null> {
   // Wall clock bounded below by `now`, so real-time leases hold in production and synthetic clocks advance in tests.
   const until = Math.max(Math.max(now, Date.now()) + CLAIM_MS, from + 1);
-  const result = await db
-    .prepare("UPDATE scheduled_push SET send_at = ? WHERE id = ? AND send_at = ?")
-    .bind(until, id, from)
-    .run();
+  const result = await claimScheduled(db, id, from, until).run();
   return result.meta.changes > 0 ? until : null;
 }
 
@@ -59,26 +63,25 @@ export async function deliverStored(
       : await claim(env.DB, row.id, row.claimed, now);
   if (held === null) return null;
   if (messages.length > 0) await env.PUSH_QUEUE.sendBatch(messages);
-  await env.DB.prepare("DELETE FROM scheduled_push WHERE id = ? AND send_at = ?")
-    .bind(row.id, held)
-    .run();
+  await deleteHeldScheduled(env.DB, row.id, held).run();
   return { users };
 }
 
 /** Claims and sends `scheduled_push` rows that are due; returns how many were sent. */
 export async function enqueueDuePushes(env: Env, now: number): Promise<number> {
-  const due = await env.DB.prepare(
-    "SELECT id, request, push_id, send_at FROM scheduled_push WHERE send_at <= ? ORDER BY send_at LIMIT ?",
-  )
-    .bind(now, BATCH)
-    .all<{ id: number; request: string; push_id: number | null; send_at: number }>();
+  const due = await dueScheduled(env.DB, now, BATCH).all<{
+    id: number;
+    request: string;
+    push_id: number | null;
+    send_at: number;
+  }>();
 
   let dispatched = 0;
   for (const row of due.results) {
     const request = parseRequest(row.request);
     if (!request) {
       console.error({ event: "scheduled_push_invalid", id: row.id });
-      await env.DB.prepare("DELETE FROM scheduled_push WHERE id = ?").bind(row.id).run();
+      await deleteScheduled(env.DB, row.id).run();
       continue;
     }
     const claimed = await claim(env.DB, row.id, row.send_at, now);
@@ -89,9 +92,7 @@ export async function enqueueDuePushes(env: Env, now: number): Promise<number> {
       if (pushId === null) {
         const [stats] = await env.DB.batch<{ id: number }>([
           pushStatsInsert(env.DB, request.category, row.send_at),
-          env.DB.prepare(
-            "UPDATE scheduled_push SET push_id = last_insert_rowid() WHERE id = ?",
-          ).bind(row.id),
+          setScheduledPushIdAfterStats(env.DB, row.id),
         ]);
         const id = stats?.results[0]?.id;
         if (id === undefined) throw new Error("push_stats insert returned no id");

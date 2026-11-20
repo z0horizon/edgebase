@@ -39,12 +39,13 @@ export default worker;
 - `userRateLimit` (after `requireUser`): the same per-user budget as EdgeBase's own routes, 120
   calls and 60 writing calls a minute shared across all of them, `429 rate_limited` beyond. Your
   routes have no limit without it, so one account calling in a loop costs you requests and writes.
-- `requireApiKey`: your servers, with `X-API-Key: <PUSH_API_KEY>`, or an admin's session.
+- `requireServerKey`: your servers, with `X-API-Key: <PUSH_API_KEY>`, or an admin's session.
+  (`requireApiKey` is the same plus a set `FCM_SERVICE_ACCOUNT`, for push routes.)
 - `parseBody(c, schema)`: a valibot-checked JSON body, or the `400` response to return.
 - `jsonError(status, code, message)`: the one error shape.
 
 Keep away from the paths EdgeBase owns: `/api/auth/*`, `/v1/auth/*`, `/v1/me`, `/v1/sync`, `/v1/batch`, `/v1/devices`,
-`/v1/inbox`, `/v1/opens`, `/v1/topics`, `/v1/push`, `/v1/templates`, `/health` and `/admin/`.
+`/v1/inbox`, `/v1/opens`, `/v1/realtime` (and `/v1/realtime/*`), `/v1/topics`, `/v1/push`, `/v1/templates`, `/health` and `/admin/`.
 
 ## Fewer requests
 
@@ -54,8 +55,69 @@ Worker requests are the largest cost at small and medium scale, so plan for few 
   (see [api.md](api.md)). It needs no server code, and each call still passes your middleware.
   It is not a transaction and repeats its writes when retried, unless the client sends an
   `Idempotency-Key`; api.md lists what it is not for.
+- An app that keeps `/v1/realtime` open can send its calls, yours included, over that socket
+  (`{ "type": "request" }`, see [api.md](api.md)): each still passes your middleware, and is
+  billed as a twentieth of a Durable Object request instead of a Worker request. Put
+  `userRateLimit` on your signed-in routes: over the socket, calls of 1/16 of your users share
+  one Durable Object instead of spreading over Worker isolates.
 - For a screen that is opened often, one route that returns everything the screen shows is cheaper
   still: the session is read once and the queries share one `db.batch([...])` round trip.
+
+## Realtime events
+
+Tell signed-in users' open apps that something changed with `publish` from `@edgebase/core`; they
+get it on `GET /v1/realtime` (see [specs/realtime.md](specs/realtime.md)). Servers elsewhere use
+`POST /v1/realtime/publish` instead.
+
+```ts
+import { publish } from "@edgebase/core";
+
+// After the write that the event is about: an app that was offline reads it from your route.
+await publish(c.env, { userIds: [order.userId] }, { type: "order.shipped", data: { orderId: order.id } }, Date.now());
+```
+
+It throws if a hub cannot be reached; catch it when the event is a side effect of a write that
+already succeeded. Send what changed (an id, a status), not data the user could not read from
+your routes, and keep `data` under 8 KB. `{ room: "chat:42" }` sends to a room's members.
+
+### Rooms
+
+Rooms (`GET /v1/realtime/rooms/:room`) are off until you say who may join. Set the rules at the
+top of `apps/server/src/index.ts`, where both the Worker and the room objects read them:
+
+```ts
+import { configureRooms } from "@edgebase/core";
+
+configureRooms({
+  // Asked on every join, before a socket opens. Read your own tables; deny by default.
+  async canJoin(env, user, room) {
+    const [kind, id] = room.split(":");
+    if (kind !== "chat" || !id) return false;
+    const row = await env.DB.prepare("SELECT 1 AS x FROM chat_member WHERE chat_id = ? AND user_id = ?")
+      .bind(id, user.id)
+      .first("x");
+    return row === 1;
+  },
+  // Optional: runs in the room on each message before the others get it.
+  async onMessage(env, from, event, now) {
+    if (event.type !== "chat.message") return null; // drop what you do not expect
+    await env.DB.prepare("INSERT INTO chat_message (chat_id, user_id, body, created_at) VALUES (?, ?, ?, ?)")
+      .bind(from.room.split(":")[1], from.userId, JSON.stringify(event.data), now)
+      .run();
+    return undefined; // relay as sent; return an event to send that instead
+  },
+});
+```
+
+- Rooms store nothing. Keep history in your own table (with a TTL or cap, like every growing
+  table) and serve it from your own route, which clients read when they join or reconnect.
+- `canJoin` is asked only on joining. When you remove a member, change what it reads, then call
+  `removeFromRoom(env, room, userId)` to close their sockets.
+- `onMessage` runs for every message, one at a time so members see them in order: keep it fast
+  (a D1 write per chat message is $1 per million messages, and 10 ms caps a room near 100
+  messages a second). Return `null` for types the room does not take.
+- `presence: true` tells members who is in the room (`members`, then `joined` and `left`). It
+  shows every member's user id to the others, so it is off by default.
 
 ## Your own tables
 
@@ -71,6 +133,23 @@ Give them their own D1 database, so EdgeBase's migrations and yours never share 
 3. `pnpm db:migrate:local` migrates every database in `wrangler.jsonc`. `pnpm bootstrap` creates
    `<PROJECT_NAME>-app` in Cloudflare, stores its id as `APP_DB_ID` in `.env.production` and
    migrates it; `pnpm run deploy` and `pnpm db:migrate:remote` pick it up from there.
+
+Name your statements with `sql(name, db, text)` from `@edgebase/core` and keep them in one module,
+as core does: the D1 metrics log line (see [cost.md](cost.md)) then reports them by name instead
+of `other:<verb>.<table>`, and your own test can run `EXPLAIN QUERY PLAN` over
+`registeredQueries()` the way `packages/core/test/query-plans.test.ts` does, to catch a
+statement that scans a whole table before D1 bills it.
+
+```ts
+// apps/server/src/queries.ts
+import { sql } from "@edgebase/core";
+
+export const ORDERS_OF_USER = sql(
+  "app.orders.ofUser",
+  "DB",
+  "SELECT id, total FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+);
+```
 
 Your own dependencies go into `apps/server`, for example `pnpm --filter @edgebase/server add zod`.
 `hono` and `valibot` are there already, at the same versions as core; keep them equal, or Hono's

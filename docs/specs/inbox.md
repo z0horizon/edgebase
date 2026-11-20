@@ -37,3 +37,8 @@ items are one row per user; a broadcast is one row for everyone.
    and open reports, then answers the user and the first inbox page with `unreadCount`, so one
    request replaces the separate calls an app makes on start. Each part follows the rule of the
    route it stands for.
+10. After the inbox gains an item, open realtime sockets get `{"type":"inbox"}` (see
+    [realtime.md](realtime.md)): personal items of a push with `inbox: true` (from the queue
+    consumer, first attempt only), broadcasts (marketing ones to opted-in users), and security
+    alerts. The event is best effort and never fails the write: a socket that is reconnecting, or
+    a batch whose first attempt failed before hinting, misses it, so clients read on (re)connect.

@@ -2,15 +2,15 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import type { AppEnv } from "../app";
 import { jsonError, parseBody } from "../http";
-import { STATS_LISTED } from "./limits";
-import type { Category } from "./types";
+import {
+  addDeliveries,
+  deleteUserOpensStmts,
+  getPushStats,
+  listPushStats,
+  recordOpensStmt,
+} from "./queries";
 
-/** A new stats row for a push going out at `sendAt`; its id travels in the push as `data.pushId`. */
-export function pushStatsInsert(db: D1Database, category: Category, sendAt: number) {
-  return db
-    .prepare("INSERT INTO push_stats (category, send_at) VALUES (?, ?) RETURNING id")
-    .bind(category, sendAt);
-}
+export { pushStatsInsert } from "./queries";
 
 /**
  * Flushes aggregated FCM delivery counts for a consumer batch in one D1 call (one UPDATE per
@@ -23,11 +23,7 @@ export async function recordDeliveries(
   const statements: D1PreparedStatement[] = [];
   for (const [pushId, { sent, failed }] of totals) {
     if (!pushId || (sent === 0 && failed === 0)) continue;
-    statements.push(
-      db
-        .prepare("UPDATE push_stats SET sent = sent + ?, failed = failed + ? WHERE id = ?")
-        .bind(sent, failed, pushId),
-    );
+    statements.push(addDeliveries(db, pushId, sent, failed));
   }
   if (statements.length === 0) return;
   try {
@@ -43,31 +39,17 @@ export async function recordDeliveries(
 }
 
 export async function deleteUserOpens(db: D1Database, userId: string): Promise<void> {
-  await db.batch([
-    db
-      .prepare(
-        `UPDATE push_stats SET opened = MAX(0, opened - 1)
-         WHERE id IN (SELECT push_id FROM push_open WHERE user_id = ?)`,
-      )
-      .bind(userId),
-    db.prepare("DELETE FROM push_open WHERE user_id = ?").bind(userId),
-  ]);
+  await db.batch(deleteUserOpensStmts(db, userId));
 }
-
-const STATS_COLUMNS = "id, category, users, sent, failed, opened, send_at AS sendAt";
 
 /** Server routes under /v1/push (API key). */
 export const statsRoutes = new Hono<AppEnv>()
   .get("/", async (c) => {
-    const rows = await c.env.DB.prepare(
-      `SELECT ${STATS_COLUMNS} FROM push_stats ORDER BY id DESC LIMIT ${STATS_LISTED}`,
-    ).all();
+    const rows = await listPushStats(c.env.DB).all();
     return c.json({ pushes: rows.results });
   })
   .get("/:id{[0-9]+}", async (c) => {
-    const row = await c.env.DB.prepare(`SELECT ${STATS_COLUMNS} FROM push_stats WHERE id = ?`)
-      .bind(Number(c.req.param("id")))
-      .first();
+    const row = await getPushStats(c.env.DB, Number(c.req.param("id"))).first();
     return row ? c.json(row) : jsonError(404, "not_found", "No such push");
   });
 
@@ -77,13 +59,7 @@ const OpenSchema = v.object({ pushId: PushIdSchema });
 /** Counts `userId` once per push opened; ids of pruned or unknown pushes write nothing. */
 export async function recordOpens(db: D1Database, userId: string, pushIds: string[]) {
   if (pushIds.length === 0) return;
-  await db
-    .prepare(
-      `INSERT OR IGNORE INTO push_open (push_id, user_id)
-       SELECT id, ?2 FROM push_stats WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?1))`,
-    )
-    .bind(JSON.stringify(pushIds), userId)
-    .run();
+  await recordOpensStmt(db, userId, pushIds).run();
 }
 
 /** User route: the app reports that its user opened a push, passing the push's `data.pushId`. */

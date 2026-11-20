@@ -32,11 +32,13 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | 404 | `not_found` | unknown route or resource |
 | 409 | `idempotency_in_progress`, `limit_reached` | key still running; template cap reached |
 | 413 | `payload_too_large` | request body exceeds 64 KB |
+| 409 | `room_full` | a realtime room already holds 1,000 sockets |
+| 426 | `upgrade_required` | `GET /v1/realtime` without a WebSocket upgrade |
 | 422 | `idempotency_mismatch` | `Idempotency-Key` reused with another body |
 | 429 | `rate_limited` | auth rate limit (10 a minute per IP, 5 a minute per email address), or a signed-in non-admin user's 120 calls (60 writing calls) a minute; `Retry-After: 60` |
 | 500 | `internal` | unexpected error |
 | 502 | `upstream_error` | Google's Instance ID API refused a topic change |
-| 503 | `not_configured` | a required secret is missing |
+| 503 | `not_configured`, `realtime_full` | a required secret is missing; a realtime hub is at capacity |
 
 ## Route summary
 
@@ -63,6 +65,9 @@ Routes under `/api/auth/*` answer in Better Auth's own error format (`{ "code", 
 | POST | `/v1/inbox/read` | user | mark personal items read |
 | POST | `/v1/inbox/read-all` | user | mark everything read |
 | DELETE | `/v1/inbox/{id}` | user | delete a personal item |
+| GET | `/v1/realtime` | user | WebSocket of events for the user (inbox, the app's own), and API calls over it |
+| GET | `/v1/realtime/rooms/{room}` | user | WebSocket of a room: members message each other |
+| POST | `/v1/realtime/publish` | API key | send an event to users', everyone's or a room's sockets |
 | POST | `/v1/push` | API key | send or schedule a push |
 | GET | `/v1/push` | API key | stats of the last 50 pushes, newest first |
 | GET | `/v1/push/{id}` | API key | delivery and open stats of a push |
@@ -280,3 +285,99 @@ Body `{ "ids": string[] (≤ 100) }` → `204`. Only `p_` ids are applied.
 
 ### `DELETE /v1/inbox/{id}`
 → `204`, or `404` when it is not a personal item of the caller.
+
+## Realtime
+
+### `GET /v1/realtime`
+A WebSocket on which the server sends events to the signed-in user, instead of the app polling.
+Open it with the session like any other call: the `Authorization: Bearer` header from native
+apps, the session cookie from a web page (only from `BASE_URL` or a web `TRUSTED_ORIGINS` origin,
+else `403 forbidden_origin`). Without `Upgrade: websocket` it answers `426 upgrade_required`.
+Opening counts against the per-user limit like one call.
+
+Each server message is a JSON text `{ "type": string, "data"?: any }`:
+
+- `{"type":"inbox"}` (EdgeBase): the inbox gained an item (a push with `inbox: true`, a broadcast
+  the user may see, a security alert). Read it with `GET /v1/inbox` or `POST /v1/sync`.
+- Any other `type`: published by the app, from its own Worker code or `POST /v1/realtime/publish`.
+
+Clients send `ping` (answered `pong`) to keep the connection alive, every 30–60 s; a socket
+that sent nothing (no `ping`, no message) for 3 minutes is taken for dead and closed (`4001`).
+A socket may send 20 messages at once, then 4 a second (`rate_limited` beyond). Binary closes it
+(`4004`); any other text that is not a request (below) answers `invalid_message`. A full hub (about 32,000 sockets) answers `503 realtime_full`: poll until
+a reconnect gets through. Before an event the server checks the socket's session in D1 (a
+session found live is trusted for 30 s), so a signed-out or revoked session gets nothing more
+within half a minute and is closed (`4003`).
+
+**API calls over the socket.** Instead of an HTTP request, a client may send
+
+```json
+{ "type": "request", "data": { "id": "c1", "method": "POST", "path": "/v1/inbox/read", "body": { "ids": ["p_1"] }, "idempotencyKey": "optional" } }
+```
+
+and gets `{ "type": "response", "data": { "id": "c1", "status": 204, "body": null } }`: the same
+status and JSON body as over HTTP (headers are not returned). Each call runs through the app
+itself as the client that opened the socket (its auth, origin, IP and network, like
+`POST /v1/batch`), so it passes the same session check, validation, per-user rate limit and
+`Idempotency-Key` handling, and your own `/v1` routes work too. It costs a twentieth of a
+Durable Object request instead of a Worker request. Rules: `path` is a `/v1/` route other than
+`/v1/batch` and `/v1/realtime*` (else an `error` with `invalid_request` and the call's `id`), at
+most 10 calls running per socket and 200 per hub (`busy`), 64 KB of body (`too_large`). A `401`
+whose session is gone also closes the socket (`4003`); a route's own `401` (a wrong API key, a
+bad hand-off token) does not. The headers and network are those of the upgrade: of cookies only
+Better Auth's are kept, and the IP and `cf` network stay as they were when the socket opened
+(up to a day), so reconnect after a network change if your routes depend on it. Upgrades whose
+forwarded headers pass 12 KB answer `431 headers_too_large`. Answers can arrive in any order: match them by `id`. Calls from one
+hub share its Durable Object, so a busy hub answers events and calls more slowly.
+
+| Close code | Meaning | Client should |
+|---|---|---|
+| `4001` | session near its end or the socket is a day old | reconnect (a new session check) |
+| `4002` | a newer socket of the same user replaced it (more than 10 open) | not reconnect on its own |
+| `4003` | the session was signed out or revoked, or the account deleted | sign in again first |
+| `4004` | it sent binary | fix the client |
+| `4005` | the app removed the user from the room | not rejoin on its own |
+| other | network, deploy or idle drop | reconnect with backoff |
+
+Events are not stored: one sent while a socket is closed or reconnecting is missed. So on every
+(re)connect, and when the app comes to the foreground, read the state once (`POST /v1/sync`, and
+your own routes); while no socket can be opened, fall back to polling slowly (minutes, not seconds).
+
+### `GET /v1/realtime/rooms/{room}`
+A WebSocket in a room, such as a chat or a shared document. Off until the app sets its rules with
+`configureRooms` (see [extending.md](extending.md)), answering `404` until then. Same session,
+origin and upgrade checks as `/v1/realtime`; then `400 invalid_param` for a name that does not
+match `^[a-z0-9][a-z0-9_.:-]{0,127}$`, `403 forbidden` when the app's `canJoin` says no, and
+`409 room_full` past 1,000 sockets. A user keeps 5 sockets in one room; a newer one replaces
+the oldest (`4002`).
+
+Members send JSON text `{ "type", "data"? }` (same rules as events, at most 16 KB); the others
+get it as `{ "type", "data", "from": "<sender user id>" }`, after the app's `onMessage` hook,
+which may drop or rewrite it. The sender does not get its own message back, and members get
+messages, and events the server publishes to the room, in the order the room received them.
+Past 200 messages waiting in a room (a slow `onMessage`), senders get `busy`. Events the server publishes to the room have no
+`from`. `ping` is answered `pong`. Types `error`, `presence` and `inbox` are EdgeBase's: a
+member's message with one of them is refused (`invalid_message`).
+
+With presence on (`configureRooms({ presence: true, … })`), a member gets
+`{ "type": "presence", "data": { "members": [userId…] } }` on joining, then
+`{ "data": { "joined": userId } }` and `{ "data": { "left": userId } }` as users come and go:
+once per user, not per tab, and `left` also when a socket is closed for silence or a revoked
+session. With presence on, the room checks for silent members every 3 minutes while anyone is in it.
+
+A message that is not relayed answers the sender with `{ "type": "error", "data": { "code", "message" } }`:
+`invalid_message` (not `{ type, data? }`), `too_large`, `rate_limited` (more than 10 at once,
+then 2 a second), `busy` (the room's queue is full), `rejected` (the hook failed) or
+`unavailable` (the session check could not run; try again). Members' sessions are checked at most once a minute while the room is active;
+a signed-out session is closed with `4003`.
+
+### `POST /v1/realtime/publish`
+Server API key (`X-API-Key: <PUSH_API_KEY>`, or an admin's session as on `/v1/push`); `503` while
+`PUSH_API_KEY` is unset. FCM is not needed. Body:
+
+```json
+{ "to": { "userIds": ["u1", "u2"] } | { "everyone": true } | { "room": "chat:42" }, "type": "order.shipped", "data": { "orderId": "o1" } }
+```
+
+`userIds` 1–500; `type` matches `^[a-z][a-z0-9_.:-]{0,63}$`; `data` optional, any JSON up to 8 KB.
+→ `200 { "sockets": number }`, how many open sockets got it (users without one miss it).

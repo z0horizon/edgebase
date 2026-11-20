@@ -8,7 +8,7 @@ const MAX_REQUESTS = 10;
 // A replayed answer larger than this keeps each call's status but not its body.
 const MAX_STORED_CHARS = 64 * 1024;
 /** What a sub-request inherits from the batch: who is calling and from where, nothing else. */
-const FORWARDED_HEADERS = [
+export const FORWARDED_HEADERS = [
   "authorization",
   "cookie",
   "origin",
@@ -35,7 +35,7 @@ type BatchRequest = v.InferOutput<typeof BatchSchema>["requests"][number];
 type BatchAnswer = { responses: { status: number; body: unknown }[] };
 
 /** The URL of a sub-request, or null unless it stays on this origin under /v1/ and is not a batch. */
-function target(path: string, base: string): URL | null {
+export function target(path: string, base: string): URL | null {
   if (!path.startsWith("/v1/")) return null;
   const url = new URL(path, base);
   if (url.origin !== new URL(base).origin || !url.pathname.startsWith("/v1/")) return null;

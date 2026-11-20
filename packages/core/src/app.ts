@@ -16,6 +16,7 @@ import {
   requireAdminConsole,
   requireApiKey,
   requireAuthConfig,
+  requireServerKey,
   requireUser,
   topicRateLimit,
   userRateLimit,
@@ -35,6 +36,7 @@ import { pushRoutes } from "./push/routes";
 import { openRoutes } from "./push/stats";
 import { templateRoutes } from "./push/templates";
 import { topicRoutes } from "./push/topics";
+import { joinRoom, publishRoute, realtime } from "./realtime/routes";
 import { mePayload, sync } from "./sync";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -151,14 +153,16 @@ for (const path of [
   "/v1/me",
   "/v1/sync",
   "/v1/batch",
-  "/v1/sessions",
+  // "/x/*" also matches "/x" itself: listing both would check the session and count the
+  // per-user limit twice.
   "/v1/sessions/*",
-  "/v1/trusted-devices",
   "/v1/trusted-devices/*",
   "/v1/admin/*",
   "/v1/devices/*",
   "/v1/inbox/*",
   "/v1/opens",
+  "/v1/realtime",
+  "/v1/realtime/rooms/*",
   "/v1/topics/*",
 ]) {
   app.use(path, requireAuthConfig, requireUser);
@@ -169,6 +173,7 @@ app.use("/v1/admin/*", requireAdminConsole);
 // Each topic change is one Instance ID request against the project's quota.
 app.use("/v1/topics/*", topicRateLimit);
 for (const path of ["/v1/push/*", "/v1/templates/*"]) app.use(path, requireApiKey);
+app.use("/v1/realtime/publish", requireServerKey);
 app.route("/v1/push", pushRoutes);
 app.route("/v1/templates", templateRoutes);
 app.route("/v1/opens", openRoutes);
@@ -202,6 +207,10 @@ app.route("/v1/trusted-devices", trustedDeviceRoutes);
 app.route("/v1/admin/users", adminSessionRoutes);
 app.route("/v1/devices", deviceRoutes);
 app.route("/v1/inbox", inboxRoutes);
+// A WebSocket of events for the signed-in user (the inbox, the app's own), instead of polling.
+app.get("/v1/realtime", realtime);
+app.get("/v1/realtime/rooms/:room", joinRoom);
+app.post("/v1/realtime/publish", publishRoute);
 
 app.notFound(() => jsonError(404, "not_found", "Route not found"));
 

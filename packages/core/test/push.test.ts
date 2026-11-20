@@ -65,7 +65,13 @@ describe("POST /v1/push", () => {
     expect(await inboxCount("ghost")).toBe(0);
     expect(sent).toEqual([
       {
-        body: { kind: "users", userIds: [u], payload: withPushId(base, id), attempt: 0 },
+        body: {
+          kind: "users",
+          userIds: [u],
+          payload: withPushId(base, id),
+          attempt: 0,
+          inbox: true,
+        },
         delaySeconds: undefined,
       },
     ]);
@@ -104,7 +110,13 @@ describe("POST /v1/push", () => {
     );
     expect(sent).toEqual([
       {
-        body: { kind: "topic", topic: "all", payload: withPushId(base, id), attempt: 0 },
+        body: {
+          kind: "topic",
+          topic: "all",
+          payload: withPushId(base, id),
+          attempt: 0,
+          inbox: true,
+        },
         delaySeconds: undefined,
       },
     ]);
